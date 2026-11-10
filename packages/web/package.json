@@ -8,8 +8,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "test": "vitest run --passWithNoTests",
+    "icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
     "@hearth/shared": "workspace:*",
