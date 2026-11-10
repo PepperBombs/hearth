@@ -8,14 +8,14 @@ export type EmptyStateProps = {
   children?: ReactNode;
   /** A button or link offering the next step. */
   action?: ReactNode;
-  /** Heading level of the title. */
-  level?: 2 | 3;
+  /** Heading level of the title. Use 1 only when the empty state is the whole screen. */
+  level?: 1 | 2 | 3;
   className?: string;
 };
 
 /** What a screen shows when it has nothing to list: what belongs here, and why it is empty. */
 export function EmptyState({ icon, title, children, action, level = 2, className }: EmptyStateProps) {
-  const Heading = level === 2 ? "h2" : "h3";
+  const Heading = (["h1", "h2", "h3"] as const)[level - 1] ?? "h2";
   return (
     <div className={cx("mx-auto flex max-w-[420px] flex-col items-center gap-2 px-2 py-8 text-center", className)}>
       {icon ? (

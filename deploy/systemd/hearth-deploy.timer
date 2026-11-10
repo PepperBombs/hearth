@@ -1,0 +1,13 @@
+# Runs the deployment check every minute.
+# Install to /etc/systemd/system/hearth-deploy.timer, then:
+#   systemctl enable --now hearth-deploy.timer
+[Unit]
+Description=Check for new Hearth commits every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

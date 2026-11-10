@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MouseEvent, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type MouseEvent, type ReactNode } from "react";
 import { cx } from "../../lib/cx";
 
 export type DialogProps = {
@@ -26,7 +26,9 @@ const DEFAULT_LAYOUT = "m-auto max-h-[calc(100dvh-32px)] w-[calc(100%-32px)] max
 export function Dialog({ open, onClose, label, children, layoutClassName = DEFAULT_LAYOUT }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
 
-  useEffect(() => {
+  // A layout effect, so the dialog is already open when the content's own effects run
+  // and they can move focus to the control they want (the browser picks the first one otherwise).
+  useLayoutEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
     if (open && !dialog.open) dialog.showModal();

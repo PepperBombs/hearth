@@ -1,0 +1,15 @@
+# One deployment check: fetch, and build and switch over only if main changed.
+# Install to /etc/systemd/system/hearth-deploy.service.
+[Unit]
+Description=Hearth pull-based deployment
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=hearth
+Group=hearth
+ExecStart=/usr/local/bin/hearth-deploy /etc/hearth/deploy.conf
+# A build can take a few minutes; the timer never starts a second run meanwhile.
+TimeoutStartSec=20min
+Nice=10

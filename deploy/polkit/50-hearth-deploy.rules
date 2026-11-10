@@ -1,0 +1,12 @@
+// Lets the "hearth" user restart hearth.service, and nothing else, so the
+// deploy script needs no root access.
+// Install to /etc/polkit-1/rules.d/50-hearth-deploy.rules.
+polkit.addRule(function (action, subject) {
+  if (
+    action.id === "org.freedesktop.systemd1.manage-units" &&
+    action.lookup("unit") === "hearth.service" &&
+    subject.user === "hearth"
+  ) {
+    return polkit.Result.YES;
+  }
+});

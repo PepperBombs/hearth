@@ -56,9 +56,9 @@ export function NotMemberScreen({ onRetry, retrying }: { onRetry: () => void; re
   return (
     <Screen title={t("notMember.title")}>
       <EmptyState
-        level={2}
+        level={1}
         icon={<UserRoundX size={20} />}
-        title={<span role="heading" aria-level={1}>{t("notMember.title")}</span>}
+        title={t("notMember.title")}
         action={
           <div className="flex flex-wrap justify-center gap-2">
             <Button variant="primary" onClick={onRetry} disabled={retrying}>
@@ -89,8 +89,9 @@ export function ErrorScreen({ code, onRetry, retrying }: { code: FailureCode; on
   return (
     <Screen title={t("error.title")}>
       <EmptyState
+        level={1}
         icon={<CircleAlert size={20} />}
-        title={<span role="heading" aria-level={1}>{t("error.title")}</span>}
+        title={t("error.title")}
         action={
           <div className="flex flex-wrap justify-center gap-2">
             <Button variant="primary" onClick={onRetry} disabled={retrying}>
