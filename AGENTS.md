@@ -64,16 +64,17 @@ The database file and secrets live in none of them.
 
 Items 2 to 4 follow `docs/mini-app-contract.md`: the agreed design (section
 A), the owner's decisions at its top, and fifteen build steps (section B),
-each marked there once built. Built so far: step 1, the SDK package skeleton,
-and step 2, the UI kit in the SDK.
+each marked there once built. Built so far: step 1, the SDK package skeleton;
+step 2, the UI kit in the SDK; and step 3, the shared contract and the
+database tables for apps in spaces.
 
 ## Layout and commands
 
 | Folder | Holds |
 |---|---|
-| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. |
+| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. It already holds the requests and answers of routes that are not built yet (groups, members, apps in a space, app settings, queries and mutations). |
 | `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too. `@hearth/sdk/manifest-schema` is the run-time check of a manifest, for the framework only. Imports no other Hearth package. |
-| `packages/server` | Hono server: config, SQLite and migrations, identity, membership, `/api` routes, static files. |
+| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. Migration 2 holds the tables for apps in spaces; no code writes to them yet. |
 | `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card and the avatar in `src/components` are the shell's own. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
@@ -107,7 +108,27 @@ Things that bite:
   migration must therefore work on a copy of the real data in the trial start.
 - Mini-apps do not exist yet. The session lists no apps; pages show empty
   states. Nothing reads a manifest yet either: the shell uses the SDK only for
-  its icon and colour names and its UI kit.
+  its icon and colour names and its UI kit. Groups cannot be created yet, so
+  `canCreateGroups` and `canInvitePeople` in the session are always `false`.
+- A space may have several owners and must keep one. Triggers on
+  `space_members` enforce it: insert the owner of a new space before anyone
+  else, and expect `SQLITE_CONSTRAINT_TRIGGER` when the last owner is removed
+  or demoted.
+- Every table with `space_id` and `app_id` columns needs the composite
+  foreign key to `space_apps` with `ON UPDATE CASCADE` (a test in
+  `packages/server/src/db/apps-schema.test.ts` fails without it): moving an
+  app is one `UPDATE` of `space_apps.space_id`. `app_rows` and `app_settings`
+  are `ON DELETE RESTRICT` on purpose.
+- Request schemas in `packages/shared` refuse unknown properties
+  (`z.strictObject`); answers such as the session do not, so that a browser
+  holding an older web app survives a newer server.
+- A new required field in the session must also go into the sessions written
+  by hand in `e2e/fixtures.ts`, `packages/web/src/session/api.test.ts` and
+  `packages/web/src/components/switcher/quick-switcher.test.tsx`.
+- The card sizes are listed in `@hearth/sdk` and again in `@hearth/shared`:
+  the SDK imports no other Hearth package, and the API contract does not
+  depend on the SDK. `packages/web/tests/contract.test.ts` fails when the
+  lists differ.
 - `SDK_VERSION` in `packages/sdk/src/index.ts` must equal `version` in
   `packages/sdk/package.json`; a unit test fails otherwise. Below 1.0, a
   breaking change to the SDK's types or to the manifest schema raises the

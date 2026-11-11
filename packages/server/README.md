@@ -5,7 +5,8 @@ answers the JSON API under `/api` and serves the built web app for every other
 path. It keeps its data in one SQLite file.
 
 At this step it is the app shell only. There are no mini-apps yet, so the
-session always lists `apps: []`.
+session always lists `apps: []`. The tables that mini-apps, groups and access
+will use exist (see "Database"), but no route reads or writes them.
 
 ## Run it in development
 
@@ -133,14 +134,16 @@ app.
 | Route | Sign-in | Answer |
 |---|---|---|
 | `GET /api/health` | no | `{ ok: true, version }` |
-| `GET /api/session` | yes | The user, their spaces with their role in each, `apps: []`, and the version. |
+| `GET /api/session` | yes | The user; their spaces, each with their role, whether they may add apps, and its members (ID, name and role, no email address); `apps: []`; `canCreateGroups` and `canInvitePeople`, both `false` until groups are built; and the version. |
 | `PATCH /api/me` | yes | Takes any of `name`, `locale`, `theme`; answers with the updated user. |
 
 Every failure has the shape `{ error: { code, message } }`. The message is
 English text for logs and network traces; the web app chooses what to show
 from the code. Unknown routes under `/api` answer `404` with `not_found`. An
 unexpected failure answers `500` with `internal` and no detail; the detail goes
-to the server's log.
+to the server's log. The contract also names `forbidden` (403) and `conflict`
+(409) and the requests of the routes for groups, members and apps
+(`docs/mini-app-contract.md`, section A8); nothing answers with them yet.
 
 ## Web app files
 
@@ -194,9 +197,26 @@ start-up, each in its own transaction. Add a new migration with the next
 number; never change one that has shipped. The server refuses to start on a
 database that a newer build has migrated.
 
-Tables so far: `users`, `spaces`, `space_members`, `invitations`. Back the
-database up with SQLite's own backup command, not by copying the file while
-the server runs.
+Tables so far, from migration 1: `users`, `spaces`, `space_members`,
+`invitations`. Migration 2 adds the tables of the mini-app contract, which
+nothing writes to yet: `space_apps` (an app added to a space), `app_rows`
+(every mini-app's data), `app_settings`, `app_access`, `app_prefs` and
+`space_invitations`, plus the column `space_members.can_add_apps`.
+
+Rules the database keeps by itself, tested as SQL in
+`src/db/apps-schema.test.ts`:
+
+- Every table with a `space_id` and an `app_id` refers to `space_apps` with
+  `ON UPDATE CASCADE`, so an app moves to another space with one `UPDATE`. A
+  new table of that kind needs the same key; a test fails without it.
+- `app_rows` and `app_settings` use `ON DELETE RESTRICT`: delete them first,
+  on purpose, then the `space_apps` row.
+- A space keeps at least one owner. Three triggers on `space_members` refuse
+  a first member who is not an owner, and refuse to remove or demote the last
+  owner. They fail with `SQLITE_CONSTRAINT_TRIGGER`.
+
+Back the database up with SQLite's own backup command, not by copying the
+file while the server runs.
 
 The file holds everyone's data. When the server creates it, the file is
 readable and writable by the server's account only (mode 600), in a folder

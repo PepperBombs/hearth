@@ -24,13 +24,41 @@ built to, and how far the build has come, is in
 Every piece of data belongs to exactly one space and records who created it.
 
 - Each person has one **personal** space, which only they can see.
-- A **group** space is a family or team. Its owner decides which members can
-  see or edit each app in it, and who may add apps to it.
+- A **group** space is a family or team. It may have several owners and
+  always keeps at least one. The owners decide which members can see or edit
+  each app in it, and who may add apps to it.
 - An app is added to a space. Moving an app between a personal and a group
   space moves its data with it.
 
 Today only personal spaces are created. Group spaces, invitations from the
-interface and per-app access arrive with the mini-app contract.
+interface and per-app access arrive with the mini-app contract. The database
+tables for them exist already, and so do the shapes of the requests in
+`packages/shared`; no route uses either yet.
+
+## Where an app's data will live
+
+The database has no table per mini-app. `space_apps` says which app is in
+which space; every other table about apps refers to it by space and app
+together:
+
+| Table | Holds |
+|---|---|
+| `space_apps` | An app added to a space, what its members get by default, and when it was removed. Removing keeps the data. |
+| `app_rows` | Every mini-app's data, one JSON document per row. |
+| `app_settings` | Settings values: one JSON object for the space and one per person. |
+| `app_access` | An owner's exception for one member. |
+| `app_prefs` | Each person's own switch and pin. |
+| `space_invitations` | People added to a group before they first arrived. |
+
+The database itself keeps three rules, so that no code path can break them:
+
+- A row for an app the space does not have is refused.
+- Moving an app is one change of `space_apps.space_id`, which every table
+  above follows. Rows about a person (access, switch, own settings) cannot
+  arrive in a space that person is not in, and go when the person leaves.
+- An app's entry cannot be deleted while it has rows or settings, and a space
+  cannot be deleted while it has apps. Data goes only when it is deleted on
+  purpose.
 
 ## Who is this request from?
 
