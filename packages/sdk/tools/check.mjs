@@ -3,7 +3,8 @@
  * mini-apps before it is merged.
  *
  * It runs sync (sync.mjs), which already refuses a wrong SDK version, a
- * declared dependency and a foreign import, and then, for the same folders:
+ * declared dependency, a widget, page or server file without its default
+ * export and a foreign import, and then, for the same folders:
  *
  *  1. every app has the files an app must have;
  *  2. every manifest and server file is valid: the very check the server

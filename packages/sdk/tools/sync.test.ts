@@ -202,7 +202,7 @@ describe("the handshake", () => {
 
   it("ends with the general status when something else is wrong as well", () => {
     const behind = makeRepo({ sdk: "^9.4.0", files: appFiles("notes") });
-    const broken = makeRepo({ files: { ...appFiles("diary"), "diary/widget.tsx": 'import "left-pad";\n' } });
+    const broken = makeRepo({ files: { ...appFiles("diary"), "diary/widget.tsx": 'import "left-pad";\nexport default () => null;\n' } });
     const error = failure([behind, broken]);
     expect(error.exitCode).toBe(EXIT_PROBLEMS);
     expect(error.problems).toHaveLength(2);
@@ -318,6 +318,35 @@ describe("what sync refuses in an app", () => {
     expect(failure([repo]).problems).toEqual([expect.stringContaining("notes: has no widget.tsx.")]);
   });
 
+  it("a widget, a page or a server file without the default export the build imports, naming the file", () => {
+    const repo = makeRepo({ fixtures: ["checklist"], files: appFiles("notes") });
+    write(repo, {
+      "notes/widget.tsx": "export function Widget() {\n  return null;\n}\n",
+      "notes/page.tsx": "export default interface Page {\n  title: string;\n}\nexport type { Page as Other };\n",
+      "checklist/server.ts": fs.readFileSync(path.join(repo, "checklist/server.ts"), "utf8").replace("export default app.routes(", "export const routes = app.routes("),
+    });
+    const where = path.basename(repo);
+    expect(failure([repo]).problems).toEqual([
+      expect.stringMatching(new RegExp(`^${where}/checklist/server\\.ts has no default export\\. The build imports it as what defineServer`)),
+      expect.stringMatching(new RegExp(`^${where}/notes/widget\\.tsx has no default export\\. The build imports it as the body of the app's card`)),
+      expect.stringMatching(new RegExp(`^${where}/notes/page\\.tsx has no default export\\. The build imports it as the app's page`)),
+    ]);
+  });
+
+  it("a default export in any of the forms that survive compiling", () => {
+    const repo = makeRepo({ files: { ...appFiles("notes"), ...appFiles("diary"), ...appFiles("tasks"), ...appFiles("quotes") } });
+    write(repo, {
+      "notes/widget.tsx": "function Widget() {\n  return null;\n}\nexport { Widget as default };\n",
+      "notes/page.tsx": "export default class Page {}\n",
+      "diary/widget.tsx": 'export { default } from "./card";\n',
+      "diary/card.tsx": "export default () => null;\n",
+      "tasks/widget.tsx": "const Widget = () => null;\nexport default Widget;\n",
+      "quotes/widget.tsx": 'export * as default from "./card";\n',
+      "quotes/card.tsx": "export const x = 1;\n",
+    });
+    expect(synced([repo]).apps.map((app) => app.id)).toEqual(["diary", "notes", "quotes", "tasks"]);
+  });
+
   it("everything at once, and writes nothing", () => {
     const out = tempDir();
     const before = synced([FIXTURES], out);
@@ -336,7 +365,8 @@ describe("what sync refuses in an app", () => {
       error = caught;
     }
     expect(error).toBeInstanceOf(AppsError);
-    expect((error as AppsError).problems).toHaveLength(3);
+    // A dependency, the foreign import, the widget without a default export and the folder name.
+    expect((error as AppsError).problems).toHaveLength(4);
     expect(fs.readFileSync(before.files.server, "utf8")).toBe(before.server);
     expect(fs.readFileSync(before.files.web, "utf8")).toBe(before.web);
     expect(fs.readFileSync(before.files.css, "utf8")).toBe(before.css);

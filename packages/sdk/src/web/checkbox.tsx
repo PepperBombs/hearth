@@ -18,7 +18,8 @@ export type CheckboxProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type" |
  * its look is replaced. On phones the row grows to a 44px touch target.
  *
  * When disabled the box is dimmed and the text is not: a list that someone
- * may only look at stays easy to read.
+ * may only look at stays easy to read. The text wraps, a long word or a
+ * pasted link included, so that it stays inside its card.
  */
 export function Checkbox({ checked, onChange, children, label, className, ...rest }: CheckboxProps) {
   return (
@@ -54,7 +55,7 @@ export function Checkbox({ checked, onChange, children, label, className, ...res
           className="pointer-events-none absolute inset-0 m-auto stroke-[2.5] text-on-accent opacity-0 peer-checked:opacity-100"
         />
       </span>
-      {children != null && children !== false ? <span className="min-w-0">{children}</span> : null}
+      {children != null && children !== false ? <span className="min-w-0 wrap-anywhere">{children}</span> : null}
     </label>
   );
 }

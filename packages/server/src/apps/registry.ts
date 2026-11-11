@@ -22,9 +22,10 @@ export type BundledApp = {
   /** Whether the app has a `page.tsx`, and so a page of its own besides its dashboard card. */
   hasPage: boolean;
   /**
-   * The default export of the app's `server.ts`, when it has one. Untyped
-   * here, because it comes from code outside the framework: createRegistry
-   * checks it.
+   * The default export of the app's `server.ts`. Present exactly when the
+   * app has that file, so `undefined` here means a server file without a
+   * default export, which createRegistry refuses. Untyped, because it comes
+   * from code outside the framework: createRegistry checks it.
    */
   server?: unknown;
 };
@@ -95,8 +96,11 @@ export function createRegistry(apps: readonly BundledApp[]): Registry {
       return;
     }
     const registered: RegisteredApp = { id: app.id, manifest, hasPage: app.hasPage };
-    if (app.server !== undefined) {
-      const faults = checkServer(app.server, manifest);
+    if ("server" in app) {
+      const faults =
+        app.server === undefined
+          ? ["server.ts has no default export. It must export what defineServer(manifest, collections).routes({ ... }) returns: export default app.routes({ ... })."]
+          : checkServer(app.server, manifest);
       if (faults.length > 0) {
         problems.push(...faults.map((fault) => `App ${label}: ${fault}`));
         return;

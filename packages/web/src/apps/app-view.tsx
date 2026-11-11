@@ -131,6 +131,17 @@ function ReloadToUpdate() {
   );
 }
 
+/**
+ * What the notice under an app says about a change that failed. Trying again
+ * helps when the server could not be reached or failed itself; it does not
+ * when the server turned the change down, so that is not offered then.
+ */
+function changeFailedMessage(code: FailureCode): "appView.viewOnly" | "appView.changeRefused" | "appView.changeFailed" {
+  if (code === "forbidden") return "appView.viewOnly";
+  if (code === "invalid_request" || code === "not_found" || code === "conflict") return "appView.changeRefused";
+  return "appView.changeFailed";
+}
+
 /** A change the person made did not reach the server, or was refused. */
 function ChangeFailed({ code }: { code: FailureCode | null }) {
   const { t } = useI18n();
@@ -139,7 +150,7 @@ function ChangeFailed({ code }: { code: FailureCode | null }) {
       {code === null ? null : (
         <p className="mt-2.5 flex items-start gap-2 rounded-ctl bg-warn px-2.5 py-1.5 text-xs text-warn-fg">
           <TriangleAlert size={14} aria-hidden="true" className="mt-[3px]" />
-          <span className="min-w-0">{t(code === "forbidden" ? "appView.viewOnly" : "appView.changeFailed")}</span>
+          <span className="min-w-0">{t(changeFailedMessage(code))}</span>
         </p>
       )}
     </div>

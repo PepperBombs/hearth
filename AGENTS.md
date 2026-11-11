@@ -81,7 +81,7 @@ cards and the app page.
 | Folder | Holds |
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. It already holds the requests and answers of routes that are not built yet (groups, members, access, moving an app). |
-| `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too, and `appHooks` (`src/web/hooks.ts`), the hooks a widget or page is written with. `@hearth/sdk/web/scope` is the React context those hooks read, which the shell fills; for the framework only. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer`, `AppError`, `z` and the types of `ctx`; it holds no logic. `@hearth/sdk/manifest-schema` is the run-time check of a manifest and of a setting's value (`settingValueProblems`), for the framework only. `bin/hearth-apps.mjs` and `tools` are the `hearth-apps` command, plain JavaScript: `sync.mjs` (finds the apps, the version handshake, writes the generated lists), `import-scan.mjs` (what a file of an app may import), `check.mjs`, `eslint-boundary.mjs`. `@hearth/sdk/eslint` (`eslint.js`) and `tsconfig.app.json` are the ESLint and TypeScript configuration of a mini-apps repository. Imports no other Hearth package. |
+| `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too, and `appHooks` (`src/web/hooks.ts`), the hooks a widget or page is written with. `@hearth/sdk/web/scope` is the React context those hooks read, which the shell fills; for the framework only. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer`, `AppError`, `z` and the types of `ctx`; it holds no logic. `@hearth/sdk/manifest-schema` is the run-time check of a manifest and of a setting's value (`settingValueProblems`), for the framework only. `bin/hearth-apps.mjs` and `tools` are the `hearth-apps` command, plain JavaScript: `sync.mjs` (finds the apps, the version handshake, writes the generated lists), `import-scan.mjs` (what a file of an app may import), `default-export.mjs` (whether `widget.tsx`, `page.tsx` and `server.ts` have the default export the generated lists import), `check.mjs`, `eslint-boundary.mjs`. `@hearth/sdk/eslint` (`eslint.js`) and `tsconfig.app.json` are the ESLint and TypeScript configuration of a mini-apps repository. Imports no other Hearth package. |
 | `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file), `installs.ts` (who may use which app where; add, remove, bring back, delete data), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db`, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds), `routes.ts`, `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports) and `check-bundle.ts` (run by `hearth-apps check`, not by the server). `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file, a widget and a page; `feed` a manifest and a widget, no server file. |
 | `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card and the avatar in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes and settings), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`) and `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"). |
@@ -143,9 +143,10 @@ Things that bite:
   are always `false`; tests that need a group insert it with SQL
   (`src/apps/test-world.ts`).
 - An app's `useQuery` suspends and is read again after any mutation of the
-  same app in the same space, on window focus and every 15 seconds while
-  the window is visible (`REFRESH_EVERY_MS` in
-  `packages/web/src/apps/scope.tsx`); settings likewise. Any `not_found`
+  same app in the same space that the server answered, saved or turned
+  down, on window focus and every 15 seconds while the window is visible
+  (`REFRESH_EVERY_MS` in `packages/web/src/apps/scope.tsx`); settings
+  likewise. Any `not_found`
   from an app's routes reloads the session. Everything cached for one
   install starts with `installQueryKey`, so invalidating that key refreshes
   the whole app.
@@ -247,9 +248,11 @@ Things that bite:
   settings, switches and pins stay; bringing it back resets access
   (`member_access` as asked, exceptions deleted) and nothing else.
 - `createApp` throws `AppRegistryError` for a bad manifest, an entry whose
-  `id` differs from its manifest's, or an ID that comes twice. `main.ts`
-  makes the same check before it opens the database and exits with status 1,
-  which is what fails the deploy's trial start.
+  `id` differs from its manifest's, an ID that comes twice, or an entry
+  that names `server` with nothing in it (a `server.ts` without a default
+  export; the generated list names `server` exactly when the file exists).
+  `main.ts` makes the same check before it opens the database and exits
+  with status 1, which is what fails the deploy's trial start.
 - A mini-app folder under `packages/fixture-apps` is held to the rules of
   every mini-app by `pnpm lint` (`miniAppBoundary` in
   `packages/sdk/tools/eslint-boundary.mjs`): the imports the scan allows,

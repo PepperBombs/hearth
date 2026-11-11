@@ -185,8 +185,8 @@ test.describe("shell on a desktop", () => {
       await expect(title).toBeVisible();
       expect(await title.evaluate(whole), `the card title is cut short at ${width}px`).toBe(true);
 
-      // The tag is still there, cut short, and stays inside the card.
-      const tag = card.getByText(longName);
+      // The tag is still there, cut short, and stays inside the card. (The link's hidden text names the group too.)
+      const tag = card.getByText(longName, { exact: true });
       await expect(tag).toBeVisible();
       const cardBox = (await card.boundingBox())!;
       const tagBox = (await tag.boundingBox())!;

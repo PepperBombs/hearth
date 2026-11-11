@@ -72,6 +72,13 @@ describe("createRegistry", () => {
     expect(problems.join("\n")).toContain(where);
   });
 
+  it("refuses a server file without a default export instead of taking the app for one without a server file", () => {
+    // The generated list names `server` for every app with a server.ts; a
+    // file without a default export hands over undefined there.
+    const problems = problemsOf([{ ...bundled(notes), server: undefined }]);
+    expect(problems).toEqual([expect.stringMatching(/^App "notes": server\.ts has no default export\./)]);
+  });
+
   it("refuses an app that has no manifest", () => {
     const problems = problemsOf([{ id: "ghost", manifest: undefined as unknown as Manifest, hasPage: false }]);
     expect(problems[0]).toContain('App "ghost"');

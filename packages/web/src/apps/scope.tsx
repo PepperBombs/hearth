@@ -11,8 +11,10 @@
  *  - `useQuery(name, input)`: POST .../q/:name. The component suspends until
  *    the first answer; `<AppView>` (./app-view.tsx) shows the skeleton and
  *    the failed state.
- *  - `useMutation(name)`: POST .../m/:name. A mutation that succeeded reads
- *    every query of this app in this space again, the settings included.
+ *  - `useMutation(name)`: POST .../m/:name. Once the server has answered,
+ *    whether it saved the change or turned it down, every query of this app
+ *    in this space is read again, the settings included: a change that was
+ *    turned down was often about something another person changed first.
  *
  * Queries and settings are also read again when the window gets the focus
  * back and every 15 seconds while it is visible. That is how people in a
@@ -105,7 +107,14 @@ function useAppMutation(name: string): MutationHandle {
     onMutate: () => reportFailure(null),
     // Waited for, so that `run` resolves when the screen shows the change. A failed re-read does not fail the change.
     onSuccess: () => client.invalidateQueries({ queryKey: installQueryKey({ spaceId, appId }) }),
-    onError: (failure) => reportFailure(failureCode(failure)),
+    // A change the server turned down (the item is gone, a conflict) leaves the screen showing what the server
+    // no longer holds: read it again, and settle `run` once it shows what is saved. Without an answer there is
+    // nothing new to read.
+    onError: (failure) => {
+      const code = failureCode(failure);
+      reportFailure(code);
+      return code === "network" ? undefined : client.invalidateQueries({ queryKey: installQueryKey({ spaceId, appId }) });
+    },
     retry: false,
   });
   return useMemo(

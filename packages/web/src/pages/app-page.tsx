@@ -1,3 +1,4 @@
+import { Tag } from "@hearth/sdk/web";
 import { useParams } from "react-router";
 import { AppView } from "../apps/app-view";
 import { Page } from "../components/shell/page";
@@ -9,7 +10,9 @@ import { NotFound } from "./not-found";
 
 /**
  * An app's own page, at /apps/:spaceId/:appId. The shell draws the top bar,
- * with the app's name and, for an app in a group, the group's; the app's
+ * with the app's name and, for an app in a group, the group's as a tag, on
+ * phones too, so that the same app in two spaces is never two pages that
+ * look alike; the app's
  * `page.tsx` is everything inside the panel below it.
  *
  * Whatever follows the app's ID in the address is left to the app, for the
@@ -25,7 +28,7 @@ export function AppPage() {
   const space = session.spaces.find((candidate) => candidate.id === app.spaceId);
 
   return (
-    <Page title={pickLocalized(app.name, locale)} note={space?.kind === "group" ? space.name : undefined}>
+    <Page title={pickLocalized(app.name, locale)} tag={space?.kind === "group" ? <Tag>{space.name}</Tag> : undefined}>
       <Card className="min-h-[200px] max-w-[760px]" data-app-page={app.id}>
         <AppView app={app} part="page" />
       </Card>

@@ -27,6 +27,7 @@ export const zh: Dictionary = {
   "dashboard.title": "仪表盘",
   "dashboard.emptyTitle": "还没有小组件",
   "dashboard.emptyBody": "添加应用后，小组件会显示在这里。每个应用都可以在这个页面上显示一小块摘要，比如一份清单或今天的数字。",
+  "dashboard.appInSpace": "{space}的{app}",
   "dashboard.open": "打开",
 
   "apps.title": "应用",
@@ -47,6 +48,7 @@ export const zh: Dictionary = {
   "appView.outdated": "自你打开此页面以来，Hearth 已更新。",
   "appView.reload": "刷新以更新",
   "appView.changeFailed": "这项更改未能保存，请重试。",
+  "appView.changeRefused": "这项更改没有生效。应用现在显示的是已保存的内容。",
   "appView.viewOnly": "你可以查看这个应用，但不能更改其中的内容。",
 
   "settings.title": "设置",

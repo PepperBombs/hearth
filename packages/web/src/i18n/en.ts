@@ -30,6 +30,7 @@ export const en = {
   "dashboard.emptyTitle": "No widgets yet",
   "dashboard.emptyBody":
     "Widgets appear here when apps are added. Each app can show a small summary on this page, such as a list or today's numbers.",
+  "dashboard.appInSpace": "{app} in {space}",
   "dashboard.open": "Open",
 
   "apps.title": "Apps",
@@ -51,6 +52,7 @@ export const en = {
   "appView.outdated": "Hearth has been updated since you opened this page.",
   "appView.reload": "Reload to update",
   "appView.changeFailed": "That change could not be saved. Try again.",
+  "appView.changeRefused": "That change was not made. The app now shows what is saved.",
   "appView.viewOnly": "You can look at this app, but not change anything in it.",
 
   "settings.title": "Settings",

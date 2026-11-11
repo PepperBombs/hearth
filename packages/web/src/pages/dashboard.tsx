@@ -64,18 +64,25 @@ export function Dashboard() {
 /**
  * One app's card. The shell draws the frame: icon, name, the space's tag
  * and the link to the app's page. What is inside is the app's own widget.
+ *
+ * The same app can be on the dashboard twice, in the personal space and in
+ * a group. The tag tells the two apart on screen; for a screen reader the
+ * card and its link are named with the group too, so that a list of links
+ * or of regions does not hold the same name twice for different places.
  */
 function AppCard({ app }: { app: AppSummary }) {
   const session = useSession();
   const { locale, t } = useI18n();
   const space = session.spaces.find((candidate) => candidate.id === app.spaceId);
   const name = pickLocalized(app.name, locale);
+  const group = space?.kind === "group" ? space.name : null;
+  const fullName = group === null ? name : t("dashboard.appInSpace", { app: name, space: group });
   return (
-    <Card className={SIZE[app.widgetSize]} data-widget={app.id}>
+    <Card className={SIZE[app.widgetSize]} data-widget={app.id} aria-label={fullName}>
       <CardHeader
         icon={<AppIcon icon={app.icon} color={app.color} />}
         title={name}
-        tag={space?.kind === "group" ? <Tag>{space.name}</Tag> : undefined}
+        tag={group === null ? undefined : <Tag>{group}</Tag>}
       />
       <AppView app={app} part="widget" />
       {app.hasPage ? (
@@ -83,7 +90,7 @@ function AppCard({ app }: { app: AppSummary }) {
           <Link to={appPath(app)} className="inline-flex items-center gap-1 font-medium text-accent hover:underline">
             <span>
               {t("dashboard.open")}
-              <span className="sr-only"> {name}</span>
+              <span className="sr-only"> {fullName}</span>
             </span>
             <ArrowRight size={16} aria-hidden="true" />
           </Link>

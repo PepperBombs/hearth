@@ -94,8 +94,11 @@ export type MutationResult<S, K> = {
    * Calls the mutation. When the promise resolves, the change is saved and
    * what the app's queries return is up to date, so the screen already
    * shows it. It rejects when the server refused the change or could not
-   * be reached; `error` then says why. There is no need to catch it: the
-   * shell tells the person, and a promise nobody waits for is not reported.
+   * be reached; `error` then says why. When the server refused it, the
+   * app's queries are read again before the promise rejects, since the
+   * refusal is often about something another person changed first. There
+   * is no need to catch it: the shell tells the person, and a promise
+   * nobody waits for is not reported.
    */
   run(...input: InputArgs<S, K>): Promise<Output<S, K>>;
   /** True from the call until the promise settles: disable the control that started it. */
@@ -112,7 +115,7 @@ export type AppHooks<S> = {
    * The answer of one of the app's queries. The component waits (suspends)
    * until it is there, and the shell shows the loading and the failed state,
    * so the app has neither. The answer is read again after any mutation of
-   * this app here, when the window is looked at again, and every 15 seconds
+   * this app here that the server answered, saved or not, when the window is looked at again, and every 15 seconds
    * while it is visible, which is how people see each other's changes.
    */
   useQuery<K extends QueryName<S>>(name: K, ...input: InputArgs<S, K>): Output<S, K>;

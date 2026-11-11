@@ -5,8 +5,8 @@ nothing else: no framework internals, no other mini-app.
 
 It is being built in steps; the design is
 [docs/mini-app-contract.md](../../docs/mini-app-contract.md). So far it holds
-the manifest, the UI kit, what an app's server file is written with, and the
-`hearth-apps` command that builds mini-apps into the framework and checks
+the manifest, the UI kit, the hooks a widget and a page are written with,
+what an app's server file is written with, and the `hearth-apps` command that builds mini-apps into the framework and checks
 them.
 
 ## What is here
@@ -14,15 +14,15 @@ them.
 | Import | Holds | For |
 |---|---|---|
 | `@hearth/sdk` | `defineApp`, the manifest types (`Manifest`, `Setting`, `Localized`), `SettingsOf`, the message types (`MessageKey`, `PlaceholderArgs`, `Translate`), the lists `APP_ICONS` and `APP_COLORS`, `APP_ID_PATTERN`, `SDK_VERSION`. Imports nothing. | Mini-apps and the framework. |
-| `@hearth/sdk/web` | The UI kit: `Button`, `IconButton`, `Input`, `Field`, `Switch`, `Checkbox`, `Chip`, `Tag`, `Segmented`, `Rows`, `Row`, `EmptyState`, `Dialog`, `DialogBody`, `Icon`, and the class helpers `buttonClass` and `chipClass`. | A mini-app's widget and page, and the shell. |
+| `@hearth/sdk/web` | `appHooks`, which gives a widget or page `useApp`, `useQuery` and `useMutation`, and their types (`AppHooks`, `AppContext`, `MutationResult`, `QueryName`, `MutationName`, `InputArgs`, `Output`, `AppLike`). The UI kit: `Button`, `IconButton`, `Input`, `Field`, `Switch`, `Checkbox`, `Chip`, `Tag`, `Segmented`, `Rows`, `Row`, `EmptyState`, `Dialog`, `DialogBody`, `Icon`, and the class helpers `buttonClass` and `chipClass`. | A mini-app's widget and page; the kit also the shell. |
 | `@hearth/sdk/server` | `defineServer`, `AppError`, `z` (the one zod that mini-apps use), and the types of a handler's context and of rows and collections (`QueryCtx`, `MutationCtx`, `Row`, `ReadCollection`, `Collection`, `Json`, `InputOf`, `OutputOf`). | A mini-app's `server.ts`. |
 | `@hearth/sdk/manifest-schema` | `manifestSchema`, a zod schema that checks a manifest at run time, and `settingValueProblems`, which says whether a value fits a setting. | The framework only. |
 | `@hearth/sdk/eslint` | The ESLint configuration of a mini-apps repository, and `miniAppBoundary`, the part of it that holds an app to the SDK. | A mini-apps repository's `eslint.config.js`. |
 | `@hearth/sdk/tsconfig.app.json` | The compiler settings mini-apps are checked with. | A mini-apps repository's `tsconfig.json`. |
 | `hearth-apps` (`bin/hearth-apps.mjs`, `tools/`) | The command: `sync` and `check`. | The framework's build, and a mini-apps repository checking itself. |
 
-Still to come: the hooks in `@hearth/sdk/web`, `@hearth/sdk/testing`, and
-the commands `hearth-apps dev`, `test` and `new`.
+Still to come: `@hearth/sdk/testing`, and the commands `hearth-apps dev`,
+`test` and `new`.
 
 ## A manifest
 
@@ -165,7 +165,74 @@ export default app.routes({
   need not repeat the collection's rules.
 - `typeof server` (the default export) stands for the app in `SettingsOf`,
   `MessageKey` and `Translate`, and carries each route's input and output
-  types (`InputOf`, `OutputOf`) for the hooks that will call them.
+  types (`InputOf`, `OutputOf`) for the hooks that call them.
+
+## A widget and a page
+
+```tsx
+// widget.tsx
+import { Checkbox, EmptyState, Row, Rows, appHooks } from "@hearth/sdk/web";
+import type server from "./server";
+
+const { useApp, useQuery, useMutation } = appHooks<typeof server>();
+
+export default function Widget() {
+  const { t, canEdit } = useApp();
+  const open = useQuery("list").filter((item) => !item.done);
+  const tick = useMutation("tick");
+  if (open.length === 0) return <EmptyState title={t("empty")} />;
+  return (
+    <Rows>
+      {open.slice(0, 6).map((item) => (
+        <Row key={item.id}>
+          <Checkbox checked={false} disabled={!canEdit || tick.pending} onChange={() => tick.run({ id: item.id, done: true })}>
+            {item.name}
+          </Checkbox>
+        </Row>
+      ))}
+    </Rows>
+  );
+}
+```
+
+- **`widget.tsx`** is the body of the app's card on the dashboard and
+  **`page.tsx`**, when there is one, the app's own page. Each has a default
+  export, a React component that takes no props; `hearth-apps sync` refuses
+  the file without one. The shell draws everything around them: the card's
+  icon, name, the group's tag and the "Open" link, the page's top bar, a
+  skeleton while the app loads, "This app could not be loaded" with a way to
+  try again, and a notice under the app when a change was not saved. An app
+  has no loading or error code of its own.
+- **`appHooks<S>()`** is called once, at the top of the file, so that the
+  hooks are plain names that begin with `use`. `S` is `typeof server`,
+  imported with `import type` so that none of the server's code reaches the
+  browser. An app without a server file passes `typeof manifest`; it then
+  has no queries or mutations to name. From `S` follow the routes' names,
+  what each takes and answers, the keys of `t` and the type of `settings`.
+- **`useApp()`** gives `t` (the app's own strings in the reader's
+  language, placeholders typed as in the manifest), `locale`, `user`
+  (`id`, `name`), `space` (`kind`, `name`, and `members` with `id` and
+  `name`; a personal space has an empty name), `access`, `canEdit`,
+  `settings` (every setting by name: the space's value, the reader's own,
+  or the default) and `pagePath`, the address of the app's page for a plain
+  `<a href={pagePath}>`, or null without `page.tsx`. There is no space ID:
+  the shell knows which app in which space it draws, and builds every
+  address itself.
+- **`useQuery(name, input)`** gives a query's answer. The component waits
+  (suspends) until it is there. The answer is read again after every change
+  this app makes here, whether the server saved it or turned it down, when
+  the window is looked at again, and every 15 seconds while it is visible:
+  that is how people in a space see each other's changes. Leave `input` out
+  for a route that takes none, or whose schema accepts `undefined`.
+- **`useMutation(name)`** gives `run(input)`, `pending` and `error`
+  (`{ code }` or null). `run` resolves once the change is saved and the
+  app's queries have been read again, so the screen already shows it. It
+  rejects when the change was not made; the shell tells the person, so a
+  caller that does not wait for it need not catch it. Disable what calls a
+  mutation when `canEdit` is false: the server refuses it then.
+- When any call answers that the app is not there (it was removed, or the
+  person's access was taken away), the shell loads the session again and
+  the card or page goes with the app.
 
 ## The UI kit
 
@@ -196,6 +263,8 @@ import { Checkbox, EmptyState, Icon, Row, Rows } from "@hearth/sdk/web";
   it is hidden from screen readers.
 - `Checkbox` wraps its text, so a press on the text ticks the box. It reports
   the new state and shows only the state it is given.
+- Text in a `Checkbox` or a `Row` wraps, a long word or a pasted link
+  included, so that what people type stays inside its card.
 - Components take `className` to be placed in a layout; changing their look
   is the theme's job.
 
@@ -256,7 +325,8 @@ hearth-apps check    # sync, then check every app
   separated like `PATH`; a relative one is read from the root of the
   `hearth` checkout). It checks the SDK version the folder declares, that
   the folder's `@hearth/sdk` is a link to this checkout, that no app ID
-  comes twice, that no app declares a dependency, and every import; then it
+  comes twice, that `widget.tsx`, `page.tsx` and `server.ts` have their
+  default export, that no app declares a dependency, and every import; then it
   writes the lists the framework's server and web app are built from. The
   framework runs it before every build and before `pnpm dev`. Without the
   variable there are no apps.

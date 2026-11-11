@@ -19,6 +19,8 @@
  *    folder's @hearth/sdk is a link to this checkout. A version that does not
  *    fit ends with exit status 3, everything else with status 1;
  *  - app IDs (folder names) are well-formed and unique across all folders;
+ *  - every app has a widget.tsx, and its widget.tsx, page.tsx and server.ts
+ *    have the default export the generated lists import (default-export.mjs);
  *  - no app declares a dependency of its own;
  *  - every file of every app imports only what a mini-app may (import-scan.mjs).
  *
@@ -30,6 +32,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_EXPORTS, hasDefaultExport } from "./default-export.mjs";
 import { scanApp } from "./import-scan.mjs";
 
 /** Exit status for anything wrong with the apps or their folder. */
@@ -227,6 +230,17 @@ function appProblems(/** @type {FoundApp} */ app) {
 
   if (!fs.statSync(path.join(app.dir, "widget.tsx"), { throwIfNoEntry: false })?.isFile()) {
     problems.push(`${where}: has no widget.tsx. Every mini-app needs one: its default export is the body of the app's card on the dashboard.`);
+  }
+  for (const [file, what] of Object.entries(DEFAULT_EXPORTS)) {
+    let text;
+    try {
+      text = fs.readFileSync(path.join(app.dir, file), "utf8");
+    } catch {
+      continue;
+    }
+    if (!hasDefaultExport(file, text)) {
+      problems.push(`${where}/${file} has no default export. The build imports it as ${what}.`);
+    }
   }
 
   const packageFile = path.join(app.dir, "package.json");

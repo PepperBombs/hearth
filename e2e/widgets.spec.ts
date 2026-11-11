@@ -5,7 +5,7 @@
  * server says and when.
  */
 import type { Page } from "@playwright/test";
-import { FAMILY_SPACE, PHONE, expect, sessionWithApps, sessionWithSampleApps, test } from "./fixtures.ts";
+import { FAMILY_SPACE, PERSONAL_SPACE, PHONE, expect, sessionWithApps, sessionWithSampleApps, test } from "./fixtures.ts";
 
 const card = (page: Page, name: string) =>
   page.getByTestId("widget-grid").locator("section", { has: page.getByRole("heading", { level: 2, name, exact: true }) });
@@ -20,7 +20,7 @@ test.describe("widgets on the dashboard", () => {
     const feed = card(page, "Feed");
     // The frame is there at once; the inside waits for the app's code and its first answers.
     await expect(checklist.getByText("Family", { exact: true })).toBeVisible();
-    await expect(checklist.getByRole("link", { name: "Open Checklist" })).toBeVisible();
+    await expect(checklist.getByRole("link", { name: "Open Checklist in Family" })).toBeVisible();
     await expect(checklist.getByTestId("app-skeleton")).toBeVisible();
     await expect(feed.getByTestId("app-skeleton")).toBeVisible();
     await expect(checklist.getByRole("checkbox")).toHaveCount(0);
@@ -69,7 +69,7 @@ test.describe("widgets on the dashboard", () => {
     expect(api.items.find((item) => item.name === "Water the plants")?.done).toBe(true);
     expect(api.appRequests).toContain(`POST /api/spaces/${FAMILY_SPACE}/apps/checklist/m/tick`);
 
-    await checklist.getByRole("link", { name: "Open Checklist" }).click();
+    await checklist.getByRole("link", { name: "Open Checklist in Family" }).click();
     await expect(page).toHaveURL(new RegExp(`/apps/${FAMILY_SPACE}/checklist$`));
     await expect(page.getByRole("heading", { level: 1, name: "Checklist" })).toBeVisible();
     const main = page.getByRole("main");
@@ -111,7 +111,7 @@ test.describe("widgets on the dashboard", () => {
     api.appSettings.feed = { space: {}, user: { topics: ["food", "sport"], period: "week" } };
     await page.goto("/");
     await expect(card(page, "清单").getByText("还剩 2 项")).toBeVisible();
-    await expect(card(page, "清单").getByRole("link", { name: "打开 清单" })).toBeVisible();
+    await expect(card(page, "清单").getByRole("link", { name: "打开 Family的清单" })).toBeVisible();
     await expect(card(page, "动态").getByText("关注了 2 个主题")).toBeVisible();
   });
 
@@ -155,7 +155,7 @@ test.describe("widgets on the dashboard", () => {
     await page.goto("/");
     const checklist = card(page, "Checklist");
     await expect(checklist.getByRole("alert")).toHaveText(/This app could not be loaded\./);
-    await expect(checklist.getByRole("link", { name: "Open Checklist" })).toBeVisible();
+    await expect(checklist.getByRole("link", { name: "Open Checklist in Family" })).toBeVisible();
     await expect(card(page, "Feed").getByRole("alert")).toBeVisible();
 
     api.appFailure = null;
@@ -183,6 +183,57 @@ test.describe("widgets on the dashboard", () => {
     await checklist.getByRole("checkbox", { name: "Water the plants" }).click();
     await expect(checklist.getByRole("checkbox")).toHaveCount(1);
     await expect(checklist.getByText("That change could not be saved. Try again.")).toHaveCount(0);
+  });
+
+  test("a change the server turns down reads the app again, and does not ask to try again", async ({ page, api }) => {
+    api.setSession(sessionWithSampleApps());
+    await page.goto("/");
+    const checklist = card(page, "Checklist");
+    await expect(checklist.getByRole("checkbox")).toHaveCount(2);
+    const reads = api.appRequestCount("/q/list");
+
+    // Someone else cleared the item a moment ago: ticking it finds nothing.
+    api.items = api.items.filter((item) => item.name !== "Water the plants");
+    await checklist.getByRole("checkbox", { name: "Water the plants" }).click();
+    await expect(checklist.getByText("That change was not made. The app now shows what is saved.")).toBeVisible();
+    await expect(checklist.getByRole("checkbox")).toHaveCount(1);
+    await expect(checklist.getByText("1 left")).toBeVisible();
+    expect(api.appRequestCount("/q/list")).toBe(reads + 1);
+    await expect(checklist.getByText(/Try again/)).toHaveCount(0);
+  });
+
+  test("a long word or link in an item wraps inside its card", async ({ page, api }) => {
+    api.setSession(sessionWithSampleApps());
+    const link = `https://example.com/shopping/list/${"a".repeat(60)}`;
+    api.items = [{ ...api.items[0]!, name: link }];
+    await page.goto("/");
+    const checklist = card(page, "Checklist");
+    const label = checklist.getByText(link);
+    await expect(label).toBeVisible();
+    const inside = (await checklist.boundingBox())!;
+    const text = (await label.boundingBox())!;
+    expect(text.x + text.width).toBeLessThanOrEqual(inside.x + inside.width);
+    expect(await checklist.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+
+    await page.goto(`/apps/${FAMILY_SPACE}/checklist`);
+    const main = page.getByRole("main");
+    await expect(main.getByText(link)).toBeVisible();
+    expect(await main.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  });
+
+  test("the same app in two spaces gets cards and links a screen reader can tell apart", async ({ page, api }) => {
+    const session = sessionWithSampleApps();
+    const family = session.apps.find((app) => app.id === "checklist")!;
+    api.setSession({ ...session, apps: [...session.apps, { ...family, spaceId: PERSONAL_SPACE }] });
+    await page.goto("/");
+    const grid = page.getByTestId("widget-grid");
+    await expect(grid.getByRole("region", { name: "Checklist", exact: true })).toBeVisible();
+    await expect(grid.getByRole("region", { name: "Checklist in Family", exact: true })).toBeVisible();
+    await expect(grid.getByRole("link", { name: "Open Checklist", exact: true })).toHaveAttribute("href", `/apps/${PERSONAL_SPACE}/checklist`);
+    await expect(grid.getByRole("link", { name: "Open Checklist in Family", exact: true })).toHaveAttribute(
+      "href",
+      `/apps/${FAMILY_SPACE}/checklist`,
+    );
   });
 
   test("an app that was taken away disappears: a not_found from its routes loads the session again", async ({ page, api }) => {
@@ -246,5 +297,13 @@ test.describe("widgets on a phone", () => {
     expect(row.height).toBeGreaterThanOrEqual(44);
     await checklist.getByText("Book the dentist").tap();
     await expect(checklist.getByRole("checkbox")).toHaveCount(1);
+  });
+
+  test("an app's page in a group names the group in the top bar", async ({ page, api }) => {
+    api.setSession(sessionWithSampleApps());
+    await page.goto(`/apps/${FAMILY_SPACE}/checklist`);
+    const bar = page.locator("header");
+    await expect(bar.getByRole("heading", { level: 1, name: "Checklist" })).toBeVisible();
+    await expect(bar.getByText("Family", { exact: true })).toBeVisible();
   });
 });

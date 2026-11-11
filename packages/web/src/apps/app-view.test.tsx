@@ -255,6 +255,22 @@ describe("a widget on the dashboard", () => {
     expect((screen.getByRole("checkbox", { name: "Book the dentist" }) as HTMLInputElement).checked).toBe(false);
   });
 
+  it("names the card and its link with the group, so that the same app in two spaces can be told apart", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([checklistApp(), checklistApp({ spaceId: FAMILY })]);
+    start(server);
+    const own = await screen.findByRole("region", { name: "Checklist" });
+    const family = screen.getByRole("region", { name: "Checklist in Family" });
+    // The test's reading of names drops the space between "Open" and the hidden rest; a browser keeps it.
+    expect(within(own).getByRole("link", { name: /^Open ?Checklist$/ }).getAttribute("href")).toBe(`/apps/${PERSONAL}/checklist`);
+    expect(within(family).getByRole("link", { name: /^Open ?Checklist in Family$/ }).getAttribute("href")).toBe(`/apps/${FAMILY}/checklist`);
+
+    // The page of the one in the group names the group beside the title.
+    fireEvent.click(within(family).getByRole("link", { name: /^Open ?Checklist in Family$/ }));
+    const title = await screen.findByRole("heading", { level: 1, name: "Checklist" });
+    expect(within(title.closest("header") as HTMLElement).getByText("Family")).toBeTruthy();
+  });
+
   it("lets someone with view access look and not tick", async () => {
     const server = new FakeServer();
     server.session = sessionWith([checklistApp({ access: "view" })]);
@@ -284,6 +300,32 @@ describe("a widget on the dashboard", () => {
     fireEvent.click(await box());
     await waitFor(() => expect(within(checklist).queryByRole("checkbox", { name: "Water the plants" })).toBeNull());
     expect(within(checklist).queryByText(/could not be saved|but not change/)).toBeNull();
+  });
+
+  it("reads the app again when the server turns a change down, and does not ask to try again", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([checklistApp()]);
+    start(server);
+    const checklist = await card("Checklist");
+    const box = await within(checklist).findByRole("checkbox", { name: "Water the plants" });
+    expect(server.count("/checklist/q/list")).toBe(1);
+
+    // Someone else cleared the item a moment ago; ticking it now finds nothing.
+    server.items = server.items.filter((item) => item.id !== "i1");
+    fireEvent.click(box);
+    expect(await within(checklist).findByText("That change was not made. The app now shows what is saved.")).toBeTruthy();
+    // Read again at once, not at the next poll: the item that is gone has gone from the screen too.
+    expect(within(checklist).queryByRole("checkbox", { name: "Water the plants" })).toBeNull();
+    expect(within(checklist).getByText("1 left")).toBeTruthy();
+    expect(server.count("/checklist/q/list")).toBe(2);
+
+    for (const code of ["conflict", "invalid_request"]) {
+      server.refuse = { ending: "/m/tick", with: { status: code === "conflict" ? 409 : 400, code } };
+      fireEvent.click(await within(checklist).findByRole("checkbox", { name: "Book the dentist" }));
+      await waitFor(() => expect(server.count("/checklist/q/list")).toBe(code === "conflict" ? 3 : 4));
+      expect(within(checklist).getByText("That change was not made. The app now shows what is saved.")).toBeTruthy();
+      expect(within(checklist).queryByText(/Try again/)).toBeNull();
+    }
   });
 
   it("shows a failed state in the card when the app cannot be loaded, and loads it on another try", async () => {
