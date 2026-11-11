@@ -6,7 +6,7 @@ HEARTH_BASE=/opt/hearth
 
 # Clones the script fetches from. It never writes to them.
 FRAMEWORK_REPO=/opt/hearth/repos/hearth
-APPS_REPO=/opt/hearth/repos/hearth-apps
+APPS_REPO=/opt/hearth/repos/hearth-stones
 
 REMOTE=origin
 BRANCH=main

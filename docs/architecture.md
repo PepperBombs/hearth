@@ -48,7 +48,7 @@ with an invitation; everyone else gets "not a member".
 
 ## Three repositories
 
-`hearth` (this one, public), `hearth-apps` (public, one folder per mini-app)
+`hearth` (this one, public), `hearth-stones` (public, one folder per mini-app)
 and `hearth-data` (private, the owner's content) are checked out side by side
 on the server. The database file and secrets live in none of them.
 

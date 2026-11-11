@@ -50,7 +50,7 @@ is missing or wrong, the server prints what and exits before listening.
 | `HOST` | `127.0.0.1` | Address to listen on. Leave it on loopback unless something on another machine must connect. |
 | `PORT` | `4310` | Port to listen on. |
 | `HEARTH_DB` | `./data/hearth.db` | Path of the SQLite file. Its folder is created if needed. |
-| `HEARTH_APPS_DIR` | none | Folder of the `hearth-apps` checkout. Stored for a later step; not used yet. |
+| `HEARTH_APPS_DIR` | none | Folder of the `hearth-stones` checkout. Stored for a later step; not used yet. |
 | `HEARTH_DATA_DIR` | none | Folder of the `hearth-data` checkout. Stored for a later step; not used yet. |
 | `HEARTH_WEB_DIST` | `../web/dist`, from this package | Folder holding the built web app. |
 | `HEARTH_AUTH` | `cloudflare-access` | How requests are identified: `cloudflare-access` or `dev`. |

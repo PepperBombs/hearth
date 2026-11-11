@@ -29,7 +29,7 @@ sudo chown -R hearth:hearth /opt/hearth /var/lib/hearth
 
 ```sh
 sudo -u hearth git clone https://github.com/YOUR-ORG/hearth.git /opt/hearth/repos/hearth
-sudo -u hearth git clone https://github.com/YOUR-ORG/hearth-apps.git /opt/hearth/repos/hearth-apps
+sudo -u hearth git clone https://github.com/YOUR-ORG/hearth-stones.git /opt/hearth/repos/hearth-stones
 ```
 
 `hearth-data` is private and is only needed once notes exist; it will need a

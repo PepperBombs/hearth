@@ -18,10 +18,10 @@
 #
 # Layout under HEARTH_BASE (default /opt/hearth):
 #
-#   repos/hearth, repos/hearth-apps   clones; this script only fetches them
+#   repos/hearth, repos/hearth-stones   clones; this script only fetches them
 #   releases/20260101T120000Z/        one folder per release
 #       hearth/                       the framework at one commit, built
-#       hearth-apps/                  the mini-apps at one commit
+#       hearth-stones/                  the mini-apps at one commit
 #       RELEASE                       which commits, and when
 #       release.env                   HEARTH_VERSION for the service
 #   current -> releases/...           the release the service runs
@@ -428,7 +428,7 @@ export_commit "$FRAMEWORK_REPO" "$framework_commit" "$new_release/hearth" >>"$bu
 if [[ -n $APPS_REPO ]]; then
   # Mini-apps are only copied for now. The step that adds the mini-app
   # contract decides how they are built.
-  export_commit "$APPS_REPO" "$apps_commit" "$new_release/hearth-apps" >>"$build_log" 2>&1 ||
+  export_commit "$APPS_REPO" "$apps_commit" "$new_release/hearth-stones" >>"$build_log" 2>&1 ||
     die "Could not copy the mini-apps' files into the release."
 fi
 

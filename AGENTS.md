@@ -15,7 +15,7 @@ server:
 | Repository | Visibility | Holds |
 |---|---|---|
 | `hearth` (this one) | public | framework and SDK |
-| `hearth-apps` | public | mini-apps, one folder each |
+| `hearth-stones` | public | mini-apps, one folder each |
 | `hearth-data` | private | the owner's content (notes as Markdown, later) |
 
 The database file and secrets live in none of them.
@@ -50,7 +50,7 @@ The database file and secrets live in none of them.
 - Adding an app that already exists on the server to a space is a saved
   setting and needs no redeploy. A redeploy happens only when code changes.
 - Deployment is pull-based: a timer on the server checks `main` in `hearth`
-  and `hearth-apps`, builds, and switches over only if the build succeeds. No
+  and `hearth-stones`, builds, and switches over only if the build succeeds. No
   self-hosted GitHub Actions runner, because the repositories are public.
 - On phones the tab bar is Home, Apps, Search, Me.
 

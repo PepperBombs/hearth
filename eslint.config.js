@@ -67,7 +67,7 @@ const tseslint = await loadTypescriptEslint();
  *    MINI_APP_ROOTS (for example the template app). Nothing is there today,
  *    so the rule matches no file. Change MINI_APP_ROOTS when the real
  *    location is decided.
- *  - The hearth-apps repository lints itself. Its eslint.config.js imports
+ *  - The hearth-stones repository lints itself. Its eslint.config.js imports
  *    `miniAppBoundary` from this file (the two repositories are checked out
  *    side by side) and calls it with the folder that holds its apps:
  *
@@ -75,7 +75,7 @@ const tseslint = await loadTypescriptEslint();
  *        export default [...miniAppBoundary({ roots: ["."] })];
  *
  *    Once the SDK is a package, this block should move into it so that
- *    hearth-apps imports it from "@hearth/sdk" instead of by path.
+ *    hearth-stones imports it from "@hearth/sdk" instead of by path.
  *
  * Inside a mini-app (one folder directly inside a root) an import may name:
  *  - a file inside the same mini-app folder, by relative path;
