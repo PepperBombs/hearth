@@ -9,9 +9,9 @@ that exist today (the app shell) and the rules later steps build on.
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web. This is the contract between them: change it first, then both sides. |
 | `packages/sdk` | `@hearth/sdk`, the only thing a mini-app imports. So far: `defineApp`, the manifest types, the run-time check of a manifest, the UI kit and the hooks of a widget or page (`@hearth/sdk/web`), and `defineServer` for an app's queries and mutations (`@hearth/sdk/server`). It also holds the `hearth-apps` command, which builds mini-apps into the framework and checks them, and the ESLint and TypeScript configuration of a mini-apps repository. It imports no other Hearth package. |
-| `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. `src/apps` holds the mini-apps this build was given, decides who may use which app in which space, runs an app's queries and mutations against its own rows, and reads and saves its settings. |
+| `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. `src/apps` holds the mini-apps this build was given, decides who may use which app in which space, runs an app's queries and mutations against its own rows, and reads and saves its settings. `src/groups` creates groups and manages the people in them. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, which its tests run against: `checklist`, which keeps rows and has a page, and `feed`, which has a widget and no server file. |
-| `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings, quick switcher, themes, English and Chinese. It is built from the SDK's UI kit, as mini-apps are, and draws each app's widget on the dashboard and its page at `/apps/:spaceId/:appId`. |
+| `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings (with a card for each group), quick switcher, themes, English and Chinese. It is built from the SDK's UI kit, as mini-apps are, and draws each app's widget on the dashboard and its page at `/apps/:spaceId/:appId`. |
 | `e2e` | Playwright end-to-end tests. |
 | `deploy` | The pull-based deploy script and service files. |
 
@@ -24,9 +24,11 @@ mini-apps get into a build"), and the web app draws their widgets and pages
 (see "How the shell draws an app"). On the Apps page a person adds an app
 to a space, switches it on or off and pins it for themselves, and an owner
 removes it; a dialog drawn from the manifest changes an app's settings (see
-"The Apps page and the settings dialog"). Groups cannot be created from the
-interface yet. The deploy does not tell its build about any folder yet, so
-a deployed server holds no apps. The scheduler does not exist.
+"The Apps page and the settings dialog"). In Settings the server's owner
+creates groups, and the owners of a group add and invite people and decide
+who can use each app (see "Groups, people and access"). Moving an app to
+another space is not built yet. The deploy does not tell its build about any
+folder yet, so a deployed server holds no apps. The scheduler does not exist.
 The design, and how far the build has come, is in
 [mini-app-contract.md](mini-app-contract.md).
 
@@ -41,12 +43,8 @@ Every piece of data belongs to exactly one space and records who created it.
 - An app is added to a space. Moving an app between a personal and a group
   space moves its data with it.
 
-Today only personal spaces are created. Group spaces, invitations from the
-interface and changing who can use an app arrive with the mini-app contract.
-The database tables for them exist already, and so do the shapes of the
-requests in `packages/shared`. The rules for who may use an app in a group
-are built and tested (with groups written straight into a test database);
-the routes that create a group or change access are not.
+Groups are created in Settings; see "Groups, people and access" below.
+Moving an app from one space to another is not built yet.
 
 ## How mini-apps get into a build
 
@@ -289,6 +287,50 @@ holds the reader's own. Saving sends only the values that were changed, and
 the app's queries are read again afterwards, since a route may read its
 settings.
 
+## Groups, people and access
+
+Who may create a group, and who may invite someone who is not on the server
+yet, is decided by one function on the server, `groupRights`
+(`packages/server/src/groups/policy.ts`), from one setting,
+`HEARTH_GROUP_POLICY`: the server's owner alone (`owner`, the default), or
+everyone on the server (`everyone`). The session tells the web app what it
+says, and the routes ask it again.
+
+| Action | Route | Who |
+|---|---|---|
+| Create a group | `POST /api/spaces` | Whoever `groupRights` allows. They become its owner. |
+| Rename it | `PATCH /api/spaces/:spaceId` | Its owners. |
+| Add someone | `POST /api/spaces/:spaceId/members` | Its owners. Someone on the server becomes a member at once; anyone else is invited, if `groupRights` allows, and joins when they first open Hearth. |
+| Change a member | `PATCH /api/spaces/:spaceId/members/:userId` | Its owners: the member's role, and whether they may add apps. |
+| Remove a member, or leave | `DELETE /api/spaces/:spaceId/members/:userId` | Its owners, or the member themselves. |
+| Take an invitation back | `DELETE /api/spaces/:spaceId/invitations` | Its owners. |
+| See who can use what | `GET /api/spaces/:spaceId/apps` | Its owners: every app with what members get and the exceptions, every person with their address, the invitations. |
+| Change who can use an app | `PUT /api/spaces/:spaceId/apps/:appId/access` | Its owners: what every member gets, and exceptions for single members. |
+
+- A group may have several owners and always keeps one: the database
+  refuses to remove or demote the last, and the server answers `409`.
+- An invitation is two rows: one in `invitations`, which lets the person
+  onto the server, and one in `space_invitations`, which says what they
+  become in the group. When they first arrive, both are used up in the
+  transaction that creates them. Taking back an address's last invitation
+  to a group takes back its invitation to the server too.
+- A new member gets what every member gets of each app. Exceptions for one
+  member stay when they become an owner, who can use every app anyway, and
+  count again if they stop being one.
+- Someone who leaves loses their exceptions, switches, pins and own
+  settings in the group; the rows they wrote stay with the group.
+- A personal space has no members to manage: nobody joins, leaves or
+  renames it.
+
+Changing access never touches the code that decides it: `resolveInstall`
+reads the same rows the owners' list reports.
+
+In the web app (`packages/web/src/groups`), Settings has a card for each
+group the person is in. Everyone sees its people and can leave it; its
+owners also rename it, add and invite people, manage each person in a
+dialog, take invitations back, and choose access in a table with one row
+per app and a column for every member, "Everyone" first.
+
 ## Where an app's data lives
 
 The database has no table per mini-app. `space_apps` says which app is in
@@ -302,7 +344,7 @@ together:
 | `app_settings` | Settings values: one JSON object for the space and one per person. |
 | `app_access` | An owner's exception for one member. |
 | `app_prefs` | Each person's own switch and pin. |
-| `space_invitations` | People added to a group before they first arrived. |
+| `space_invitations` | People added to a group before they first arrived, with what they become there. |
 
 The database itself keeps three rules, so that no code path can break them:
 
@@ -383,7 +425,11 @@ The end-to-end tests build with the fixture apps, so the whole path is
 tried: from an app's folder to a server that answers for it and a web app
 that draws its widget and page with their styles. One of them ticks an
 item in a widget against the real server, sees it ticked on the app's page
-and checks that the Content-Security-Policy refused nothing.
+and checks that the Content-Security-Policy refused nothing. Two copies of
+the real server share one database file, one signed in as the owner and one
+as a member of the owner's family, so that one test can be two people: the
+owner invites the member, chooses what she may do with an app, and lets her
+add one.
 `pnpm test` also runs `deploy/tests/deploy.test.sh`, which drives the real
 deploy script through a failed trial, a failed switch with the database put
 back, and a restart that cannot be confirmed, using stand-ins for git, pnpm

@@ -93,8 +93,12 @@ Do these in this order, so the site is never reachable without sign-in.
    `http://127.0.0.1:4310`.
 
 To let a family member in later, they need both an entry in the Access policy
-and an invitation in Hearth. Inviting from the interface does not exist yet;
-it arrives with a later step.
+and an invitation in Hearth. For the invitation, create a group in Hearth's
+Settings (for example "Family") and add their email address to it: they are
+listed as invited until they first open Hearth, and join the group then.
+Only you, the server's owner, can create groups and invite people who are
+not on the server yet; `HEARTH_GROUP_POLICY=everyone` in `hearth.env` would
+open both to everyone on the server.
 
 ## 7. First deployment
 

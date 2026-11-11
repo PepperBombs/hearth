@@ -11,6 +11,14 @@ import { normaliseEmail } from "./email";
 export const AUTH_MODES = ["cloudflare-access", "dev"] as const;
 export type AuthMode = (typeof AUTH_MODES)[number];
 
+/**
+ * Who may create groups and invite people who are not on this server yet
+ * (owner's decision 4): the server's owner alone, or everyone on the server.
+ * `groupRights` in src/groups/policy.ts is the one place that reads it.
+ */
+export const GROUP_POLICIES = ["owner", "everyone"] as const;
+export type GroupPolicy = (typeof GROUP_POLICIES)[number];
+
 export type AuthConfig =
   | { mode: "cloudflare-access"; teamDomain: string; audience: string }
   | { mode: "dev"; devUser: string };
@@ -28,6 +36,7 @@ export type Config = {
   auth: AuthConfig;
   /** As normaliseEmail leaves it. */
   ownerEmail: string;
+  groupPolicy: GroupPolicy;
   version: string;
 };
 
@@ -59,6 +68,7 @@ const SETTING_NAMES = [
   "HEARTH_CF_AUDIENCE",
   "HEARTH_OWNER_EMAIL",
   "HEARTH_DEV_USER",
+  "HEARTH_GROUP_POLICY",
   "HEARTH_VERSION",
 ] as const;
 type SettingName = (typeof SETTING_NAMES)[number];
@@ -97,6 +107,9 @@ const settingsSchema = z.object({
   HEARTH_CF_AUDIENCE: z.string().optional(),
   HEARTH_OWNER_EMAIL: email.optional(),
   HEARTH_DEV_USER: email.optional(),
+  HEARTH_GROUP_POLICY: z
+    .enum(GROUP_POLICIES, { error: 'must be "owner" or "everyone"' })
+    .default("owner"),
   HEARTH_VERSION: z
     .string()
     .max(64, { error: "must be at most 64 characters" })
@@ -262,6 +275,7 @@ export function loadConfig(
       : resolve(packageRoot(), "../web/dist"),
     auth,
     ownerEmail: settings.HEARTH_OWNER_EMAIL,
+    groupPolicy: settings.HEARTH_GROUP_POLICY,
     version: settings.HEARTH_VERSION,
   };
 }

@@ -7,23 +7,35 @@
  * framework's two sample apps (packages/fixture-apps), which the tested
  * build holds: the checklist's routes, from a list kept here, both apps'
  * settings, adding either to a space, removing an app, and each person's
- * switch and pin. All names and addresses are made up.
+ * switch and pin. And it keeps groups: creating one, renaming it, adding,
+ * changing and removing people, invitations, the owners' list of a group
+ * and who can use each app (`groups`, `people`). All names and addresses
+ * are made up.
  */
 import { expect, test as base, type Page, type Route } from "@playwright/test";
 import {
   addAppRequestSchema,
+  addMemberRequestSchema,
+  appAccessRequestSchema,
   appCallRequestSchema,
   appCallResponseSchema,
   appPrefsPatchSchema,
   appSettingsPatchSchema,
   appSettingsSchema,
+  createSpaceRequestSchema,
+  memberPatchSchema,
   preferencesPatchSchema,
   sessionSchema,
+  spaceAppsSchema,
+  spacePatchSchema,
+  withdrawInvitationRequestSchema,
   type ApiErrorCode,
   type AppSettings,
   type AppSummary,
   type PreferencesPatch,
   type Session,
+  type SpaceApps,
+  type SpaceMember,
 } from "../packages/shared/src/index.ts";
 
 export const PERSONAL_SPACE = "space-personal";
@@ -170,6 +182,9 @@ function item(id: string, name: string, done = false, section = ""): ChecklistIt
 
 type Failure = { status: number; code: ApiErrorCode; message: string };
 
+/** Someone the stand-in server knows by address: adding them to a group adds them at once. */
+export type KnownPerson = { id: string; name: string; email: string };
+
 export class FakeApi {
   /** What GET /api/session returns. Checked against the contract when set. */
   private current: Session = sessionSchema.parse(emptySession());
@@ -193,6 +208,15 @@ export class FakeApi {
   readonly appRequests: string[] = [];
   /** Every change asked of the routes for apps in a space (add, remove, switch and pin, settings), as "METHOD path body". */
   readonly appChanges: string[] = [];
+  /**
+   * The owners' list of each group the session's person owns, by space ID,
+   * and the people on the server besides them. Groups and their members are
+   * the session's; this holds what only owners see.
+   */
+  groups: Record<string, SpaceApps> = {};
+  people: KnownPerson[] = [];
+  /** Every change asked of the routes for groups and access, as "METHOD path body". */
+  readonly groupChanges: string[] = [];
   private held: Promise<void> | null = null;
 
   /** Keeps the answers to requests for apps back until the returned function is called. */
@@ -251,6 +275,12 @@ export class FakeApi {
       return route.fulfill({ json: this.current.user });
     }
 
+    const forGroups = this.answerForGroups(path, request.method(), request.postDataJSON() as unknown);
+    if (forGroups) {
+      if ("status" in forGroups) return fail(forGroups);
+      return forGroups.json === undefined ? route.fulfill({ status: 204 }) : route.fulfill({ status: forGroups.created ? 201 : 200, json: forGroups.json });
+    }
+
     const install = /^\/api\/spaces\/([^/]+)\/apps\/([^/]+)$/.exec(path);
     if (install) {
       const [, spaceId = "", appId = ""] = install;
@@ -260,16 +290,23 @@ export class FakeApi {
       if (this.appFailure) return fail(this.appFailure);
       const space = this.current.spaces.find((candidate) => candidate.id === spaceId);
       const listed = this.current.apps.find((candidate) => candidate.spaceId === spaceId && candidate.id === appId);
+      // The owners' list of a group follows: an app added there is in it, a removed one is marked so.
+      const owners = this.groups[spaceId];
       if (method === "PUT") {
-        if (!addAppRequestSchema.safeParse(body).success) return fail({ status: 400, code: "invalid_request", message: "Sample failure" });
+        const parsed = addAppRequestSchema.safeParse(body);
+        if (!parsed.success) return fail({ status: 400, code: "invalid_request", message: "Sample failure" });
         if (!space || (appId !== "checklist" && appId !== "feed")) return fail({ status: 404, code: "not_found", message: "No such app" });
         if (!space.canAddApps) return fail({ status: 403, code: "forbidden", message: "Sample failure" });
         if (!listed) this.setSession({ ...this.current, apps: [...this.current.apps, sampleApp(appId, spaceId)] });
+        if (owners && !owners.apps.some((entry) => entry.id === appId)) {
+          owners.apps.push({ id: appId, hasCode: true, removedAt: null, rowCount: 0, memberAccess: parsed.data.memberAccess ?? "none", members: {} });
+        }
         return route.fulfill({ status: 204 });
       }
       if (method === "DELETE" && listed) {
         if (space?.role !== "owner") return fail({ status: 403, code: "forbidden", message: "Sample failure" });
         this.setSession({ ...this.current, apps: this.current.apps.filter((candidate) => candidate !== listed) });
+        for (const entry of owners?.apps ?? []) if (entry.id === appId) entry.removedAt = "2026-11-10T08:00:00.000Z";
         return route.fulfill({ status: 204 });
       }
       return fail({ status: 404, code: "not_found", message: "No such app" });
@@ -302,6 +339,132 @@ export class FakeApi {
     }
 
     return fail({ status: 404, code: "not_found", message: "No such route" });
+  }
+
+  /**
+   * What the routes for groups and access answer, as the server would for
+   * the session's person; undefined for any other address. Requests are
+   * checked against the shared contract, and so is the owners' list.
+   */
+  private answerForGroups(path: string, method: string, body: unknown): { json?: unknown; created?: boolean } | Failure | undefined {
+    const refuse = (status: number, code: ApiErrorCode): Failure => ({ status, code, message: "Sample failure" });
+    const me = this.current.user;
+    const record = () => this.groupChanges.push(`${method} ${path} ${JSON.stringify(body ?? null)}`);
+
+    if (path === "/api/spaces" && method === "POST") {
+      record();
+      const parsed = createSpaceRequestSchema.safeParse(body);
+      if (!parsed.success) return refuse(400, "invalid_request");
+      if (!this.current.canCreateGroups) return refuse(403, "forbidden");
+      const space = {
+        id: `space-${parsed.data.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${this.current.spaces.length}`,
+        kind: "group" as const,
+        name: parsed.data.name,
+        role: "owner" as const,
+        canAddApps: true,
+        members: [{ id: me.id, name: me.name, role: "owner" as const }],
+      };
+      this.setSession({ ...this.current, spaces: [...this.current.spaces, space] });
+      this.groups[space.id] = { apps: [], members: [{ ...space.members[0]!, email: me.email, canAddApps: false }], invitations: [] };
+      return { json: space, created: true };
+    }
+
+    const match = /^\/api\/spaces\/([^/]+)(?:\/(members|invitations|apps)(?:\/([^/]+)(?:\/(access))?)?)?$/.exec(path);
+    if (!match) return undefined;
+    const [, spaceId = "", part, id, access] = match;
+    if (part === "apps" && id && !access) return undefined;
+    if (part === "apps" && !id && method !== "GET") return undefined;
+    if (method !== "GET") record();
+    const space = this.current.spaces.find((candidate) => candidate.id === spaceId);
+    const details = this.groups[spaceId];
+    if (!space || space.kind !== "group") return refuse(404, "not_found");
+    const owner = space.role === "owner";
+    const changeSpace = (change: (members: SpaceMember[]) => SpaceMember[], name = space.name) => {
+      const members = change(space.members);
+      const stillIn = members.some((member) => member.id === me.id);
+      this.setSession({
+        ...this.current,
+        spaces: stillIn
+          ? this.current.spaces.map((candidate) =>
+              candidate.id === spaceId ? { ...candidate, name, members, role: members.find((member) => member.id === me.id)!.role } : candidate,
+            )
+          : this.current.spaces.filter((candidate) => candidate.id !== spaceId),
+        apps: stillIn ? this.current.apps : this.current.apps.filter((app) => app.spaceId !== spaceId),
+      });
+    };
+
+    if (!part && method === "PATCH") {
+      const parsed = spacePatchSchema.safeParse(body);
+      if (!parsed.success) return refuse(400, "invalid_request");
+      if (!owner) return refuse(403, "forbidden");
+      changeSpace((members) => members, parsed.data.name ?? space.name);
+      return {};
+    }
+    if (part === "apps" && method === "GET") {
+      if (!owner || !details) return refuse(403, "forbidden");
+      return { json: spaceAppsSchema.parse(details) };
+    }
+    if (!owner && !(part === "members" && method === "DELETE" && id === me.id)) return refuse(403, "forbidden");
+    if (!details) return refuse(404, "not_found");
+    if (part === "members" && !id && method === "POST") {
+      const parsed = addMemberRequestSchema.safeParse(body);
+      if (!parsed.success) return refuse(400, "invalid_request");
+      const email = parsed.data.email.toLowerCase();
+      if (!email.includes("@")) return refuse(400, "invalid_request");
+      const role = parsed.data.role ?? "member";
+      const canAddApps = parsed.data.canAddApps === true;
+      const known = this.people.find((person) => person.email === email);
+      if (known) {
+        if (space.members.some((member) => member.id === known.id)) return refuse(409, "conflict");
+        changeSpace((members) => [...members, { id: known.id, name: known.name, role }]);
+        details.members.push({ ...known, role, canAddApps });
+        return { json: { outcome: "added" } };
+      }
+      if (!this.current.canInvitePeople) return refuse(403, "forbidden");
+      if (details.invitations.some((invitation) => invitation.email === email)) return refuse(409, "conflict");
+      details.invitations.push({ email, role, canAddApps });
+      return { json: { outcome: "invited" } };
+    }
+    if (part === "invitations" && !id && method === "DELETE") {
+      const parsed = withdrawInvitationRequestSchema.safeParse(body);
+      if (!parsed.success) return refuse(400, "invalid_request");
+      const before = details.invitations.length;
+      details.invitations = details.invitations.filter((invitation) => invitation.email !== parsed.data.email);
+      return details.invitations.length === before ? refuse(404, "not_found") : {};
+    }
+    // Who is in the group is the session's; the owners' list follows it.
+    const target = space.members.find((member) => member.id === id);
+    const lastOwner = target?.role === "owner" && space.members.filter((member) => member.role === "owner").length === 1;
+    if (part === "members" && id && method === "PATCH") {
+      const parsed = memberPatchSchema.safeParse(body);
+      if (!parsed.success) return refuse(400, "invalid_request");
+      if (!target) return refuse(404, "not_found");
+      if (lastOwner && parsed.data.role === "member") return refuse(409, "conflict");
+      const role = parsed.data.role ?? target.role;
+      for (const member of details.members) if (member.id === target.id) Object.assign(member, parsed.data);
+      changeSpace((members) => members.map((member) => (member.id === target.id ? { ...member, role } : member)));
+      return {};
+    }
+    if (part === "members" && id && method === "DELETE") {
+      if (!target) return refuse(404, "not_found");
+      if (lastOwner) return refuse(409, "conflict");
+      details.members = details.members.filter((member) => member.id !== target.id);
+      changeSpace((members) => members.filter((member) => member.id !== target.id));
+      return {};
+    }
+    if (part === "apps" && id && access && method === "PUT") {
+      const parsed = appAccessRequestSchema.safeParse(body);
+      if (!parsed.success) return refuse(400, "invalid_request");
+      const app = details.apps.find((candidate) => candidate.id === id);
+      if (!app) return refuse(404, "not_found");
+      if (parsed.data.memberAccess) app.memberAccess = parsed.data.memberAccess;
+      for (const [memberId, level] of Object.entries(parsed.data.members ?? {})) {
+        if (level === null) delete app.members[memberId];
+        else app.members[memberId] = level;
+      }
+      return {};
+    }
+    return refuse(404, "not_found");
   }
 
   /** What the sample apps answer, checked against the shared contract. Undefined: nothing at this address. */
@@ -343,6 +506,52 @@ export class FakeApi {
     }
     return undefined;
   }
+}
+
+/** Two people on the stand-in server besides the signed-in one: the family's other members. */
+export const LIN: KnownPerson = { id: "user-2", name: "Lin Example", email: "lin@example.com" };
+export const KIM: KnownPerson = { id: "user-3", name: "Kim Example", email: "kim@example.com" };
+
+/**
+ * The signed-in person as the server's owner, who owns the family: Lin is a
+ * member, Kim a member who may add apps, and Pat is invited and has not
+ * arrived. The family has the checklist, which every member may view and
+ * Kim may change.
+ */
+export function ownAFamily(api: FakeApi, user: Partial<Session["user"]> = {}): void {
+  const session = emptySession(user);
+  const me = { id: session.user.id, name: session.user.name, email: session.user.email };
+  api.people = [LIN, KIM];
+  api.setSession({
+    ...session,
+    canCreateGroups: true,
+    canInvitePeople: true,
+    spaces: [
+      ...session.spaces,
+      {
+        id: FAMILY_SPACE,
+        kind: "group",
+        name: "Family",
+        role: "owner",
+        canAddApps: true,
+        members: [
+          { id: me.id, name: me.name, role: "owner" },
+          { id: LIN.id, name: LIN.name, role: "member" },
+          { id: KIM.id, name: KIM.name, role: "member" },
+        ],
+      },
+    ],
+    apps: [sampleApp("checklist", FAMILY_SPACE)],
+  });
+  api.groups[FAMILY_SPACE] = {
+    apps: [{ id: "checklist", hasCode: true, removedAt: null, rowCount: 3, memberAccess: "view", members: { [KIM.id]: "edit" } }],
+    members: [
+      { ...me, role: "owner", canAddApps: false },
+      { ...LIN, role: "member", canAddApps: false },
+      { ...KIM, role: "member", canAddApps: true },
+    ],
+    invitations: [{ email: "pat@example.com", role: "member", canAddApps: false }],
+  };
 }
 
 export const test = base.extend<{ api: FakeApi }>({

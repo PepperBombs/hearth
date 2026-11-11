@@ -33,6 +33,8 @@ describe("loadConfig", () => {
       dataDir: null,
       auth: { mode: "cloudflare-access", teamDomain: "team.example.com", audience: "aud-tag" },
       ownerEmail: "owner@example.com",
+      // Owner's decision 4: groups and new people are the server's owner's alone until opened up.
+      groupPolicy: "owner",
       version: "dev",
     });
     expect(config.webDist).toBe(resolve(import.meta.dirname, "../../web/dist"));
@@ -46,6 +48,7 @@ describe("loadConfig", () => {
       HEARTH_DB: "/var/lib/hearth/hearth.db",
       HEARTH_DATA_DIR: "/srv/hearth-data",
       HEARTH_WEB_DIST: "web",
+      HEARTH_GROUP_POLICY: "everyone",
       HEARTH_VERSION: "abc1234",
     });
     expect(config).toMatchObject({
@@ -54,6 +57,7 @@ describe("loadConfig", () => {
       dbPath: "/var/lib/hearth/hearth.db",
       dataDir: "/srv/hearth-data",
       webDist: "/srv/hearth/web",
+      groupPolicy: "everyone",
       version: "abc1234",
     });
   });
@@ -93,6 +97,9 @@ describe("loadConfig", () => {
     );
     expect(problemsOf({ ...cloudflare, HEARTH_CF_TEAM_DOMAIN: "team/path" })).toContain(
       "HEARTH_CF_TEAM_DOMAIN must be a host name",
+    );
+    expect(problemsOf({ ...cloudflare, HEARTH_GROUP_POLICY: "members" })).toContain(
+      'HEARTH_GROUP_POLICY must be "owner" or "everyone"',
     );
   });
 

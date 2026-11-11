@@ -3,11 +3,12 @@
  * Everything else in this folder answers /api itself; these few tests check that
  * the two halves really fit: the session, saving preferences, the security
  * headers the server sends, the routes for apps as the built server answers
- * them, the sample apps the build was given (packages/fixture-apps), and the
- * screen for someone who was not invited.
+ * them, the sample apps the build was given (packages/fixture-apps), the
+ * screen for someone who was not invited, and a family of two people: the
+ * owner and Lin, each with a copy of the server of their own over one database.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { GUEST_URL, OWNER_EMAIL, SERVER_VERSION } from "./servers.ts";
+import { GUEST_URL, MEMBER_EMAIL, MEMBER_URL, OWNER_EMAIL, SERVER_VERSION } from "./servers.ts";
 
 // The tests share one person's saved preferences, so they run in order.
 test.describe.configure({ mode: "serial" });
@@ -296,6 +297,122 @@ test("the web app carries each sample app's widget and page, and fetches them on
   const fetched = await page.evaluate(() => performance.getEntriesByType("resource").map((entry) => entry.name));
   expect(fetched.filter((url) => /\/assets\/(widget|page)-/.test(url))).toEqual([]);
   expect(problems).toEqual([]);
+});
+
+test("two people share a family: the owner invites Lin, decides what she may do with each app, and lets her add one", async ({
+  page,
+  request,
+  browser,
+  playwright,
+}) => {
+  type Listed = { id: string; spaceId: string; access: string };
+  type Session = { spaces: { id: string; kind: string; name: string; role: string }[]; apps: Listed[] };
+  const ownerSession = async () => (await (await request.get("/api/session")).json()) as Session;
+  // A name of its own, so that a group an earlier run left on a reused server is not taken for this one.
+  const groupName = `Family ${Date.now().toString(36)}`;
+  const item = `Buy bread ${Date.now()}`;
+  const problems = watchForProblems(page);
+  const card = (on: Page, name: string) => on.getByRole("main").getByRole("region", { name });
+  const linContext = await browser.newContext({ baseURL: MEMBER_URL });
+  const linPage = await linContext.newPage();
+  const linProblems = watchForProblems(linPage);
+  const linApi = await playwright.request.newContext({ baseURL: MEMBER_URL });
+  let groupId = "";
+
+  try {
+    // The server's owner creates the group in Settings.
+    await page.goto("/settings");
+    await card(page, "Groups").getByRole("button", { name: "Create a group" }).click();
+    const create = page.getByRole("dialog", { name: "Create a group" });
+    await create.getByLabel("Name").fill(groupName);
+    await create.getByRole("button", { name: "Create" }).click();
+    await expect(card(page, groupName).getByText("You are an owner")).toBeVisible();
+    groupId = (await ownerSession()).spaces.find((space) => space.name === groupName)?.id ?? "";
+    expect(groupId).not.toBe("");
+
+    // The checklist goes into the group for everyone to view, with an item in it.
+    await page.goto("/apps");
+    await card(page, groupName).getByRole("button", { name: "Add an app" }).click();
+    const addApp = page.getByRole("dialog", { name: `Add an app to ${groupName}` });
+    await addApp.getByRole("radio", { name: /Checklist/ }).check();
+    await addApp.getByRole("radio", { name: "Everyone can view" }).check();
+    await addApp.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(addApp).toBeHidden();
+    const checklist = `/api/spaces/${groupId}/apps/checklist`;
+    expect((await request.post(`${checklist}/m/add`, { data: { input: { name: item } } })).status()).toBe(200);
+
+    // Lin is not on the server yet: she is invited, and joins when she first opens Hearth.
+    await page.goto("/settings");
+    await card(page, groupName).getByRole("button", { name: "Add a person" }).click();
+    const add = page.getByRole("dialog", { name: `Add a person to ${groupName}` });
+    await add.getByLabel("Email address").fill(MEMBER_EMAIL);
+    await add.getByRole("button", { name: "Add", exact: true }).click();
+    // On a server an earlier run already introduced Lin to, she is added at once.
+    await expect(card(page, groupName).getByText(new RegExp(`${MEMBER_EMAIL} (is invited|was added)`))).toBeVisible();
+
+    // Lin arrives, and finds the group with what every member gets: the checklist, to view.
+    await linPage.goto("/");
+    const linCard = linPage.getByTestId("widget-grid").locator("section", { has: linPage.getByRole("heading", { level: 2, name: "Checklist" }) });
+    await expect(linCard.getByRole("checkbox", { name: item })).toBeDisabled();
+    const linSession = (await (await linApi.get("/api/session")).json()) as Session;
+    expect(linSession.spaces.find((space) => space.id === groupId)).toMatchObject({ name: groupName, role: "member" });
+    expect(linSession.apps).toContainEqual(expect.objectContaining({ id: "checklist", spaceId: groupId, access: "view" }));
+    const items = (await (await linApi.post(`${checklist}/q/list`, { data: {} })).json()) as { output: { id: string }[] };
+    const tick = await linApi.post(`${checklist}/m/tick`, { data: { input: { id: items.output[0]?.id, done: true } } });
+    expect(tick.status()).toBe(403);
+
+    // The owner lets Lin edit the checklist; her widget lets her tick it, and the owner sees it ticked.
+    await page.reload();
+    const table = card(page, groupName).getByRole("table", { name: "Who can use each app" });
+    await table.getByRole("combobox", { name: "lin's access to Checklist" }).selectOption({ label: "Can edit" });
+    await expect(table.getByRole("combobox", { name: "lin's access to Checklist" })).toHaveValue("edit");
+    await linPage.reload();
+    await linCard.getByRole("checkbox", { name: item }).click();
+    await expect(linCard.getByText("Nothing to do.")).toBeVisible();
+    const seenByOwner = (await (await request.post(`${checklist}/q/list`, { data: {} })).json()) as { output: { name: string; done: boolean }[] };
+    expect(seenByOwner.output).toEqual([expect.objectContaining({ name: item, done: true })]);
+    expect(linProblems).toEqual([]);
+
+    // With no access, the app is gone for Lin: not in her session, and nothing of it answers her.
+    await table.getByRole("combobox", { name: "lin's access to Checklist" }).selectOption({ label: "No access" });
+    await expect(table.getByRole("combobox", { name: "lin's access to Checklist" })).toHaveValue("none");
+    await linPage.reload();
+    await expect(linPage.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(linCard).toHaveCount(0);
+    expect(((await (await linApi.get("/api/session")).json()) as Session).apps.filter((app) => app.spaceId === groupId)).toEqual([]);
+    expect((await linApi.post(`${checklist}/q/list`, { data: {} })).status()).toBe(404);
+
+    // Allowed to add apps, Lin adds the feed to the group herself, and may change it.
+    await card(page, groupName).getByRole("button", { name: "Manage lin" }).click();
+    const manage = page.getByRole("dialog", { name: `lin in ${groupName}` });
+    await manage.getByRole("switch", { name: "Can add apps" }).click();
+    await expect(manage.getByRole("switch", { name: "Can add apps" })).toHaveAttribute("aria-checked", "true");
+    await manage.getByRole("button", { name: "Close" }).click();
+    await linPage.goto("/apps");
+    await card(linPage, groupName).getByRole("button", { name: "Add an app" }).click();
+    const linAdd = linPage.getByRole("dialog", { name: `Add an app to ${groupName}` });
+    await linAdd.getByRole("radio", { name: /Feed/ }).check();
+    await linAdd.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(card(linPage, groupName).getByRole("switch", { name: `Show Feed in ${groupName}` })).toBeChecked();
+    expect(((await (await linApi.get("/api/session")).json()) as Session).apps).toContainEqual(
+      expect.objectContaining({ id: "feed", spaceId: groupId, access: "edit" }),
+    );
+    // Everyone else gets what the member who added it chose: "only me for now".
+    expect((await ownerSession()).apps).toContainEqual(expect.objectContaining({ id: "feed", spaceId: groupId, access: "edit" }));
+    expect(problems).toEqual([]);
+  } finally {
+    // The group stays (nothing deletes a space); its apps and its member go, so the owner's
+    // dashboard is empty again for whatever runs next against the same server.
+    if (groupId) {
+      await request.delete(`/api/spaces/${groupId}/apps/checklist`);
+      await request.delete(`/api/spaces/${groupId}/apps/feed`);
+      const lin = ((await (await linApi.get("/api/session")).json()) as { user?: { id: string } }).user;
+      if (lin) await request.delete(`/api/spaces/${groupId}/members/${lin.id}`);
+    }
+    await linApi.dispose();
+    await linContext.close();
+  }
+  expect((await ownerSession()).apps).toEqual([]);
 });
 
 test.describe("installed", () => {

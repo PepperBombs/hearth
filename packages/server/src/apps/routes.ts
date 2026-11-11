@@ -1,26 +1,29 @@
 /**
- * The routes for one app in one space (docs/mini-app-contract.md, section
- * A8). So far: add or bring back, remove, delete the data, each person's
+ * The routes for apps in a space (docs/mini-app-contract.md, section A8):
+ * the owners' list of a space's apps and who can use them, and for one app
+ * add or bring back, remove, delete the data, who can use it, each person's
  * own switch and pin, the app's settings, and the app's own queries and
- * mutations. The request shapes are
- * in `@hearth/shared`. The settings routes and a query or mutation answer
- * with a body; after the others the web app reloads the session to see what
- * changed.
+ * mutations. Moving an app to another space is not built yet. The request
+ * shapes are in `@hearth/shared`. The owners' list, the settings routes and
+ * a query or mutation answer with a body; after the others the web app
+ * reloads the session to see what changed.
  */
 import {
   addAppRequestSchema,
+  appAccessRequestSchema,
   appCallRequestSchema,
   appPrefsPatchSchema,
   appSettingsPatchSchema,
   deleteAppDataRequestSchema,
   type AppSettings,
+  type SpaceApps,
 } from "@hearth/shared";
 import type { Hono } from "hono";
 import type { Db } from "../db/database";
 import { readBody } from "../http/body";
 import type { Env, RequireMember } from "../http/env";
 import { callApp } from "./calls";
-import { addApp, deleteAppData, removeApp, setAppPrefs } from "./installs";
+import { addApp, deleteAppData, listSpaceApps, removeApp, setAppAccess, setAppPrefs } from "./installs";
 import type { Registry } from "./registry";
 import { changeAppSettings, readAppSettings } from "./settings";
 
@@ -29,6 +32,13 @@ export type AppRoutesOptions = { db: Db; registry: Registry; requireMember: Requ
 /** Adds the routes to the application. Call it before the catch-all for unknown `/api` paths. */
 export function registerAppRoutes(app: Hono<Env>, options: AppRoutesOptions): void {
   const { db, registry, requireMember } = options;
+
+  // Every app the space has, removed ones and those without code included, with who can use
+  // each, and everyone in the space: what its owners manage access with.
+  app.get("/api/spaces/:spaceId/apps", requireMember, (c) => {
+    const apps: SpaceApps = listSpaceApps(db, registry, { userId: c.get("user").id, spaceId: c.req.param("spaceId") });
+    return c.json(apps);
+  });
 
   // Add an app to a space, or bring a removed one back with its data.
   app.put("/api/spaces/:spaceId/apps/:appId", requireMember, async (c) => {
@@ -50,6 +60,14 @@ export function registerAppRoutes(app: Hono<Env>, options: AppRoutesOptions): vo
     const { confirm } = await readBody(c, deleteAppDataRequestSchema);
     const { spaceId, appId } = c.req.param();
     deleteAppData(db, registry, { userId: c.get("user").id, spaceId, appId, confirm });
+    return c.body(null, 204);
+  });
+
+  // Who can use the app: what every member gets, and exceptions for single members.
+  app.put("/api/spaces/:spaceId/apps/:appId/access", requireMember, async (c) => {
+    const change = await readBody(c, appAccessRequestSchema);
+    const { spaceId, appId } = c.req.param();
+    setAppAccess(db, registry, { userId: c.get("user").id, spaceId, appId, change });
     return c.body(null, 204);
   });
 

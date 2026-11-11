@@ -34,6 +34,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
       audience: "test-audience",
     },
     ownerEmail: OWNER_EMAIL,
+    groupPolicy: "owner",
     version: "test",
     ...overrides,
   };

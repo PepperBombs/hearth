@@ -4,13 +4,15 @@ The Hearth server: a small [Hono](https://hono.dev) application on Node that
 answers the JSON API under `/api` and serves the built web app for every other
 path. It keeps its data in one SQLite file.
 
-It is the app shell plus the first parts of mini-apps: the server is built
-with a list of apps; an app can be added to a space, removed, brought back
-and its data deleted; and an app's own queries and mutations run against
-rows that belong to one app in one space (see "Mini-apps"). Which apps a
-server holds is decided when it is built (`HEARTH_APPS_DIR`, read by
-`pnpm build` and `pnpm dev`, not by the running server); built without it,
-a server holds none and its session lists `apps: []`.
+It is the app shell plus most of mini-apps: the server is built with a
+list of apps; an app can be added to a space, removed, brought back and its
+data deleted; an app's own queries and mutations run against rows that
+belong to one app in one space (see "Mini-apps"); and groups can be created,
+people added to them or invited, and their owners decide who can use each
+app (see "Groups and members"). Which apps a server holds is decided when it
+is built (`HEARTH_APPS_DIR`, read by `pnpm build` and `pnpm dev`, not by the
+running server); built without it, a server holds none and its session lists
+`apps: []`.
 
 ## Run it in development
 
@@ -73,6 +75,7 @@ config file that still has it is accepted, and the value ignored.
 | `HEARTH_CF_AUDIENCE` | none | Required for `cloudflare-access`. The Application Audience (AUD) tag of the Access application. |
 | `HEARTH_OWNER_EMAIL` | none | Required. The owner's email address. This person is let in without an invitation. |
 | `HEARTH_DEV_USER` | the owner | The email address every request is treated as when `HEARTH_AUTH=dev`. |
+| `HEARTH_GROUP_POLICY` | `owner` | Who may create groups and invite people who are not on the server yet: `owner`, the server's owner alone, or `everyone` on the server. Adding someone who is already on the server to a group is for that group's owners either way. |
 | `HEARTH_VERSION` | `dev` | Shown as the running version; the deploy sets it to the short commit hash. |
 
 Relative paths are resolved against the working directory, except the default
@@ -121,12 +124,15 @@ Then, for the verified address:
 - A known user is let in.
 - The owner is created on first sight, with a personal space.
 - Someone with a row in the `invitations` table is created on first sight, with
-  their own personal space, and the row is removed.
+  their own personal space, and the row is removed. In the same transaction
+  they join every group that invited them (`space_invitations`), with the
+  role and the right to add apps each invitation names.
 - Anyone else gets `403` with the code `not_a_member`.
 
 A request with no valid identity gets `401` with the code `unauthenticated`.
-There is no screen or route for inviting people yet; `addInvitation` in
-`src/db/people.ts` is what a later step will call.
+People are invited by adding their address to a group (see "Groups and
+members"), which writes both rows. A row in `space_invitations` alone lets
+nobody in.
 
 A new user's language comes from the `Accept-Language` header (Chinese if it
 ranks Chinese above English, otherwise English), their theme is `system`, and
@@ -141,8 +147,16 @@ app.
 | Route | Sign-in | Answer |
 |---|---|---|
 | `GET /api/health` | no | `{ ok: true, version }` |
-| `GET /api/session` | yes | The user; their spaces, each with their role, whether they may add apps, and its members (ID, name and role, no email address); `apps`, every app they can use in every space they are in; `canCreateGroups` and `canInvitePeople`, both `false` until groups are built; and the version. |
+| `GET /api/session` | yes | The user; their spaces, each with their role, whether they may add apps, and its members (ID, name and role, no email address); `apps`, every app they can use in every space they are in; `canCreateGroups` and `canInvitePeople`, from `groupRights` (see "Groups and members"); and the version. |
 | `PATCH /api/me` | yes | Takes any of `name`, `locale`, `theme`; answers with the updated user. |
+| `POST /api/spaces` | yes | Creates a group with the caller as its owner. Takes `{ name }`; answers `201` with the space as the session lists it. |
+| `PATCH /api/spaces/:spaceId` | yes | Renames a group: `{ name? }`. Owners only. Answers `204`. |
+| `POST /api/spaces/:spaceId/members` | yes | Adds someone by address: `{ email, role?, canAddApps? }`. Answers `{ outcome: "added" }` for someone on the server, `{ outcome: "invited" }` for anyone else. Owners only. |
+| `PATCH /api/spaces/:spaceId/members/:userId` | yes | A member's `role` or `canAddApps`. Owners only. Answers `204`. |
+| `DELETE /api/spaces/:spaceId/members/:userId` | yes | Removes a member: an owner removing anyone, or anyone leaving. Answers `204`. |
+| `DELETE /api/spaces/:spaceId/invitations` | yes | Takes back an invitation: `{ email }`. Owners only. Answers `204`. |
+| `GET /api/spaces/:spaceId/apps` | yes | The owners' list: every app the space has (removed ones and those without code included) with its row count, what members get and the exceptions; everyone in the space with their address and right to add apps; the invitations. Owners only. |
+| `PUT /api/spaces/:spaceId/apps/:appId/access` | yes | Who can use the app: `{ memberAccess?, members? }`, exceptions by user ID, `null` removing one. Owners only. Answers `204`. |
 | `PUT /api/spaces/:spaceId/apps/:appId` | yes | Adds the app to the space, or brings a removed one back with its data. Takes `{ memberAccess? }`. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/apps/:appId` | yes | Removes the app from the space and keeps its data. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/apps/:appId/data` | yes | Deletes the data of a removed app for good. Takes `{ confirm }`, the app's ID. Answers `204`. |
@@ -158,9 +172,8 @@ from the code. Unknown routes under `/api` answer `404` with `not_found`. An
 unexpected failure answers `500` with `internal` and no detail; the detail goes
 to the server's log. `forbidden` (403) is for a member who may not do this,
 and `conflict` (409) for a request that cannot be carried out as things
-stand. The contract also holds the requests of routes that are not built yet:
-groups, members, access and moving an app (`docs/mini-app-contract.md`,
-section A8).
+stand. The contract also holds the request of the one route of section A8
+that is not built yet, moving an app (`docs/mini-app-contract.md`).
 
 ## Mini-apps
 
@@ -322,6 +335,53 @@ person in that space.
 - There is no way to put a setting back to "not saved". A value equal to
   the default is stored like any other, and stays when the default changes.
 
+## Groups and members
+
+The code is in `src/groups`; the access route and the owners' list are in
+`src/apps` with the rest about apps.
+
+**Who may create a group, and who may invite** someone who is not on the
+server yet, is `groupRights` in `src/groups/policy.ts`: the server's owner
+alone, unless `HEARTH_GROUP_POLICY=everyone` opens both to everyone on the
+server. The session says what it answers, and the routes ask it again. A
+refusal is `403`.
+
+**Managing a group** (`src/groups/members.ts`) is for its owners, and a
+group may have several. Any owner may rename it, add people, change their
+role or right to add apps, remove them (other owners too) and take
+invitations back. Anyone may leave. Each check and its change are one
+immediate transaction.
+
+- `404` for someone who is not in the space, `403` for a plain member,
+  `409` for a personal space, which nobody joins, leaves or renames.
+- Adding an address: someone on the server becomes a member at once;
+  anyone else is invited (a row in `invitations` and one in
+  `space_invitations`), if `groupRights` allows, and joins when they first
+  arrive. `409` for someone already in the group or already invited, `400`
+  for an address Hearth does not accept. Addresses go through
+  `normaliseEmail`.
+- A group keeps at least one owner: the database refuses to remove or
+  demote the last one, and that is answered with `409`.
+- Removing someone deletes their exceptions, switches, pins and own
+  settings in the group's apps (the database cascades). The rows they
+  wrote stay: they belong to the group.
+- Taking back an address's last invitation to a group also takes back its
+  invitation to the server.
+
+**Who can use an app** is decided by the space's owners
+(`PUT .../apps/:appId/access`, `setAppAccess` in `src/apps/installs.ts`):
+what every member gets (`member_access`), and exceptions for single members
+(`app_access`). `404` when `resolveInstall` gives `null` for the person
+asking, `403` for a member, `400` for an exception for someone not in the
+space; the request is saved as a whole or not at all. An owner can use
+every app whatever their exception says; exceptions stay when a member
+becomes an owner and count again if they stop being one. New members get
+what every member gets.
+
+**The owners' list** (`GET /api/spaces/:spaceId/apps`, `listSpaceApps`)
+reports these decisions with the space's people and invitations. It decides
+nothing: `resolveInstall` stays the one answer to what a person may do.
+
 ## Web app files
 
 Every `GET` outside `/api` is answered from `HEARTH_WEB_DIST`:
@@ -378,12 +438,13 @@ Tables so far, from migration 1: `users`, `spaces`, `space_members`,
 `invitations`. Migration 2 adds the tables of the mini-app contract:
 `space_apps` (an app added to a space), `app_rows` (every mini-app's data),
 `app_settings`, `app_access`, `app_prefs` and `space_invitations`, plus the
-column `space_members.can_add_apps`. The server writes `space_apps` and, for
-a member who adds an app, `app_access`; an app's mutations write `app_rows`
-through the store, and the settings route writes `app_settings`; all of
-them are deleted from when an app's data is deleted. Nothing writes
-switches or invitations yet. SQL for `app_rows` and `app_settings` lives in
-`src/apps/store.ts` only.
+column `space_members.can_add_apps`. The server writes `space_apps`; the
+access route, and adding an app as a member, write `app_access`; an app's
+mutations write `app_rows` through the store, the settings route writes
+`app_settings` and the switch-and-pin route `app_prefs`; all of them are
+deleted from when an app's data is deleted. The routes for groups write
+`spaces`, `space_members`, `invitations` and `space_invitations`. SQL for
+`app_rows` and `app_settings` lives in `src/apps/store.ts` only.
 
 Rules the database keeps by itself, tested as SQL in
 `src/db/apps-schema.test.ts`:

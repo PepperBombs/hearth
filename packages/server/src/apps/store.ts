@@ -14,6 +14,7 @@
  * - `readSettingsData` and `writeSettingsData` read and replace what was
  *   saved for an app's settings in one space: one JSON object for the space
  *   and one for each person. What the values mean is settings.ts's business.
+ * - `countRows` says how many rows an app holds in a space, for its owners.
  * - `deleteAllData` deletes everything an app has in a space.
  *
  * Design: docs/mini-app-contract.md, sections A3 and A6.
@@ -478,6 +479,17 @@ export function writeSettingsData(
     `INSERT INTO app_settings (space_id, app_id, user_id, data, created_by, updated_by, updated_at)
      VALUES (@spaceId, @appId, ${person}, @data, @userId, @userId, @at)`,
   ).run(bindings);
+}
+
+/**
+ * How many rows one app holds in one space, in all its collections. The
+ * caller has checked that the person asking may know.
+ */
+export function countRows(db: Db, spaceId: string, appId: string): number {
+  const row = db
+    .prepare("SELECT count(*) AS n FROM app_rows WHERE space_id = ? AND app_id = ?")
+    .get(spaceId, appId) as { n: number };
+  return row.n;
 }
 
 /**

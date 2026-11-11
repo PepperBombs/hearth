@@ -14,6 +14,8 @@ import { identifyFromConfig, type Identify } from "./auth";
 import type { Config } from "./config";
 import type { Db } from "./db/database";
 import { listSpacesForUser, updatePreferences } from "./db/people";
+import { groupRights } from "./groups/policy";
+import { registerGroupRoutes } from "./groups/routes";
 import { readBody } from "./http/body";
 import type { Env, RequireMember } from "./http/env";
 import { apiError, NOTHING_HERE, Refusal } from "./http/errors";
@@ -92,10 +94,8 @@ export function createApp(options: AppOptions): Hono<Env> {
       user,
       spaces: listSpacesForUser(db, user.id),
       apps: listAppsForUser(db, registry, user.id),
-      // Groups cannot be created or added to yet. Who may is decided in one
-      // place when they can (step 10): for now, the server's owner alone.
-      canCreateGroups: false,
-      canInvitePeople: false,
+      // The same answer the routes that create a group or invite someone ask for.
+      ...groupRights(config, user),
       version: config.version,
     };
     return c.json(body);
@@ -108,6 +108,7 @@ export function createApp(options: AppOptions): Hono<Env> {
     return c.json(user satisfies User);
   });
 
+  registerGroupRoutes(app, { db, config, requireMember });
   registerAppRoutes(app, { db, registry, requireMember });
 
   app.all("/api", (c) => apiError(c, 404, "not_found", NOTHING_HERE));

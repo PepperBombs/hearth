@@ -3,7 +3,16 @@
  * request is from and which spaces they may see. Data rows added by later
  * steps are scoped to one of these spaces.
  */
-import type { Locale, PreferencesPatch, Space, SpaceMember, Theme, User } from "@hearth/shared";
+import type {
+  Locale,
+  PreferencesPatch,
+  Space,
+  SpaceKind,
+  SpaceMember,
+  SpaceRole,
+  Theme,
+  User,
+} from "@hearth/shared";
 import { normaliseEmail } from "../email";
 import type { Db } from "./database";
 import { newId } from "./ids";
@@ -105,6 +114,22 @@ export function listSpacesForUser(db: Db, userId: string): Space[] {
   }));
 }
 
+/** A person's place in one space, and what kind of space it is. */
+export type Membership = { role: SpaceRole; canAddApps: 0 | 1; kind: SpaceKind };
+
+/** The person's place in a space, or null when they are not in it or it does not exist. */
+export function membershipOf(db: Db, userId: string, spaceId: string): Membership | null {
+  const row = db
+    .prepare(
+      `SELECT m.role, m.can_add_apps AS canAddApps, s.kind
+         FROM space_members m
+         JOIN spaces s ON s.id = m.space_id
+        WHERE m.space_id = ? AND m.user_id = ?`,
+    )
+    .get(spaceId, userId) as Membership | undefined;
+  return row ?? null;
+}
+
 /** Changes the given preferences and returns the user as they now are. */
 export function updatePreferences(db: Db, userId: string, patch: PreferencesPatch): User | null {
   db.prepare(
@@ -138,4 +163,22 @@ export function hasInvitation(db: Db, email: string): boolean {
 export function deleteInvitation(db: Db, email: string): void {
   const normalised = normaliseEmail(email);
   if (normalised) db.prepare("DELETE FROM invitations WHERE email = ?").run(normalised);
+}
+
+/**
+ * Makes someone who has just arrived a member of every group they were
+ * invited to before, with the role and the right to add apps each
+ * invitation carries, and uses those invitations up. Call it in the
+ * transaction that creates the user, so that nobody sees them half joined.
+ */
+export function joinInvitedSpaces(db: Db, user: Pick<User, "id" | "email">): void {
+  const email = acceptedEmail(user.email);
+  db.prepare(
+    `INSERT INTO space_members (space_id, user_id, role, can_add_apps, created_at)
+     SELECT space_id, @userId, role, can_add_apps, @now
+       FROM space_invitations
+      WHERE email = @email
+         ON CONFLICT (space_id, user_id) DO NOTHING`,
+  ).run({ userId: user.id, email, now: new Date().toISOString() });
+  db.prepare("DELETE FROM space_invitations WHERE email = ?").run(email);
 }

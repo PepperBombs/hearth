@@ -148,11 +148,29 @@ describe("GET /api/session", () => {
         },
       ],
       apps: [],
-      // Nobody can yet: the routes for groups do not exist.
-      canCreateGroups: false,
-      canInvitePeople: false,
+      // The server's owner may create groups and invite people (owner's decision 4).
+      canCreateGroups: true,
+      canInvitePeople: true,
       version: "test",
     });
+  });
+
+  it("tells everyone else they may neither create groups nor invite people, unless the server opens both", async () => {
+    const sessionOf = async (app: ReturnType<typeof testApp>["app"], email: string) =>
+      sessionSchema.parse(await (await app.request(`${BASE}/api/session`, { headers: as(email) })).json());
+    const rightsOf = (session: { canCreateGroups: boolean; canInvitePeople: boolean }) => [
+      session.canCreateGroups,
+      session.canInvitePeople,
+    ];
+
+    const { app, db } = testApp();
+    const owner = await sessionOf(app, OWNER_EMAIL);
+    addInvitation(db, { email: "lin@example.com", invitedBy: owner.user.id });
+    expect(rightsOf(await sessionOf(app, "lin@example.com"))).toEqual([false, false]);
+
+    const open = testApp({ db, config: testConfig({ groupPolicy: "everyone" }) }).app;
+    expect(rightsOf(await sessionOf(open, "lin@example.com"))).toEqual([true, true]);
+    expect(rightsOf(await sessionOf(open, OWNER_EMAIL))).toEqual([true, true]);
   });
 });
 

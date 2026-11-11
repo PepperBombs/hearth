@@ -114,9 +114,10 @@ export const sessionSchema = z.object({
   apps: z.array(appSummarySchema),
   /**
    * Whether this person may create a group, and whether they may add someone
-   * to a group who is not on this server yet. For now that is the server's
-   * owner alone; the interface reads these instead of deciding for itself, so
-   * that the rule can change on the server.
+   * to a group who is not on this server yet. The server decides, by one
+   * policy and one setting: the server's owner alone unless that setting
+   * opens both to everyone on the server. The interface reads these instead
+   * of deciding for itself, so that the rule can change on the server.
    */
   canCreateGroups: z.boolean(),
   canInvitePeople: z.boolean(),
@@ -164,8 +165,9 @@ export type Health = z.infer<typeof healthSchema>;
 /* -------------------------------------------------------------------------
  * Spaces, members and apps in a space (docs/mini-app-contract.md, section A8)
  *
- * The shapes below are agreed before the routes that use them are built.
- * Until a route exists, the server answers 404 for it.
+ * The shapes below were agreed before the routes that use them were built.
+ * Moving an app to another space is the one not built yet; until it is, the
+ * server answers 404 for it.
  *
  * Request bodies refuse properties they do not know, so a misspelt one is an
  * error and not silently ignored. Where a route has no response schema here,
@@ -175,21 +177,34 @@ export type Health = z.infer<typeof healthSchema>;
 
 const spaceNameSchema = z.string().trim().min(1).max(80);
 
-/** POST /api/spaces: create a group. The caller becomes its first owner. Answers with `spaceSchema`. */
+/**
+ * POST /api/spaces: create a group. The caller becomes its first owner.
+ * Only someone the session says `canCreateGroups` may (403 `forbidden`
+ * otherwise). Answers 201 with the new space as the session lists it
+ * (`spaceSchema`).
+ */
 export const createSpaceRequestSchema = z.strictObject({ name: spaceNameSchema });
 export type CreateSpaceRequest = z.infer<typeof createSpaceRequestSchema>;
 
-/** PATCH /api/spaces/:spaceId. Owners only. */
+/**
+ * PATCH /api/spaces/:spaceId: rename a group. Owners only. A personal space
+ * has no name of its own, so renaming one answers 409 `conflict`. Answers
+ * 204 with no body.
+ */
 export const spacePatchSchema = z.strictObject({ name: spaceNameSchema }).partial();
 export type SpacePatch = z.infer<typeof spacePatchSchema>;
 
 /**
- * POST /api/spaces/:spaceId/members. Owners only.
+ * POST /api/spaces/:spaceId/members. Owners of a group only; a personal
+ * space has no other members (409 `conflict`).
  *
  * Someone already on the server becomes a member at once. Anyone else is
- * invited, if the caller may invite people, and becomes a member with this
- * role when they first arrive. The server decides whether the address is one
- * it accepts and stores it in its one spelling.
+ * invited, if the caller may invite people (the session's
+ * `canInvitePeople`; 403 `forbidden` otherwise), and becomes a member with
+ * this role when they first arrive. The server decides whether the address
+ * is one it accepts (400 `invalid_request` otherwise) and stores it in its
+ * one spelling. Someone who is already in the group, or already invited to
+ * it, answers 409 `conflict`.
  */
 export const addMemberRequestSchema = z.strictObject({
   email: z.string().trim().min(1).max(254),
@@ -205,16 +220,30 @@ export const addMemberResponseSchema = z.object({ outcome: z.enum(["added", "inv
 export type AddMemberResponse = z.infer<typeof addMemberResponseSchema>;
 
 /**
- * PATCH /api/spaces/:spaceId/members/:userId. Owners only. Taking "owner"
- * away from the last owner of a space answers 409 `conflict`.
+ * PATCH /api/spaces/:spaceId/members/:userId. Owners of a group only.
+ * Taking "owner" away from the last owner of a space answers 409
+ * `conflict`. An owner can use every app of the space; the exceptions made
+ * for someone as a member stay, and apply again if they stop being an
+ * owner. Answers 204 with no body.
  *
- * DELETE on the same address (an owner, or the member themselves) has no
- * body; the last owner cannot be removed either.
+ * DELETE on the same address (an owner, or the member themselves, which is
+ * leaving the group) has no body and answers 204. The last owner cannot be
+ * removed or leave (409 `conflict`), and nobody leaves their personal space.
  */
 export const memberPatchSchema = z
   .strictObject({ role: spaceRoleSchema, canAddApps: z.boolean() })
   .partial();
 export type MemberPatch = z.infer<typeof memberPatchSchema>;
+
+/**
+ * DELETE /api/spaces/:spaceId/invitations: take back the invitation of
+ * someone who has not arrived yet. Owners of the group only. Answers 204
+ * with no body, and 404 when the group has no invitation for the address.
+ * When it was the address's last invitation to a group, the person is no
+ * longer let onto the server either.
+ */
+export const withdrawInvitationRequestSchema = z.strictObject({ email: z.string().trim().min(1).max(254) });
+export type WithdrawInvitationRequest = z.infer<typeof withdrawInvitationRequestSchema>;
 
 /**
  * PUT /api/spaces/:spaceId/apps/:appId: add an app to a space, or bring a
@@ -259,11 +288,21 @@ export const moveAppRequestSchema = z.strictObject({
 });
 export type MoveAppRequest = z.infer<typeof moveAppRequestSchema>;
 
-/** PUT /api/spaces/:spaceId/apps/:appId/access. Owners only. What is left out stays as it is. */
+/**
+ * PUT /api/spaces/:spaceId/apps/:appId/access. Owners only (403 `forbidden`
+ * for a member who can use the app, 404 for anyone it is hidden from). What
+ * is left out stays as it is, and the request is saved as a whole or not at
+ * all. Answers 204 with no body.
+ */
 export const appAccessRequestSchema = z.strictObject({
   /** What every member gets who has no exception. */
   memberAccess: memberAccessSchema.optional(),
-  /** Exceptions by user ID. `null` removes one, so that the person follows `memberAccess` again. */
+  /**
+   * Exceptions by user ID. `null` removes one, so that the person follows
+   * `memberAccess` again. Each must be someone in the space (400
+   * `invalid_request` otherwise). An owner can use every app whatever their
+   * exception says; it applies if they stop being an owner.
+   */
   members: z.record(z.string(), memberAccessSchema.nullable()).optional(),
 });
 export type AppAccessRequest = z.infer<typeof appAccessRequestSchema>;
@@ -309,7 +348,11 @@ export const installedAppSchema = z.object({
 });
 export type InstalledApp = z.infer<typeof installedAppSchema>;
 
-/** GET /api/spaces/:spaceId/apps. Owners only. */
+/**
+ * GET /api/spaces/:spaceId/apps. Owners only (403 `forbidden` for a member,
+ * 404 for anyone else). Apps in the order they were added, members in the
+ * order they joined, invitations in the order they were made.
+ */
 export const spaceAppsSchema = z.object({
   apps: z.array(installedAppSchema),
   members: z.array(spaceMemberDetailSchema),

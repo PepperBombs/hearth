@@ -1,26 +1,31 @@
 /**
  * Apps in spaces: who may use which app where, and adding, removing and
- * deleting them. An app in a space is a row in `space_apps`, called an
- * install here.
+ * deleting them, each person's switch and pin, the owners' list of a
+ * space's apps and the owners' choice of who can use each. An app in a
+ * space is a row in `space_apps`, called an install here.
  *
  * Every function names its space, and every answer about access comes from
  * one piece of SQL (`VISIBLE`), so the session, the routes and whatever is
- * added later cannot disagree about who sees what.
+ * added later cannot disagree about who sees what. The owners' list reports
+ * what was decided (`member_access`, `app_access`); it decides nothing.
  *
  * Design: docs/mini-app-contract.md, section A6.
  */
 import type {
   AccessLevel,
+  AppAccessRequest,
   AppPrefsPatch,
   AppSummary,
+  InstalledApp,
   MemberAccess,
-  SpaceKind,
-  SpaceRole,
+  SpaceApps,
 } from "@hearth/shared";
 import type { Db } from "../db/database";
+import { membershipOf } from "../db/people";
+import { listInvitations, listMemberDetails } from "../groups/members";
 import { notFound, Refusal } from "../http/errors";
 import type { Registry } from "./registry";
-import { deleteAllData } from "./store";
+import { countRows, deleteAllData } from "./store";
 
 /**
  * The installs a person can reach and what they may do with each: one row
@@ -113,21 +118,6 @@ export function listAppsForUser(db: Db, registry: Registry, userId: string): App
     });
   }
   return apps;
-}
-
-type Membership = { role: SpaceRole; canAddApps: 0 | 1; kind: SpaceKind };
-
-/** The person's place in a space, or null when they are not in it or it does not exist. */
-function membershipOf(db: Db, userId: string, spaceId: string): Membership | null {
-  const row = db
-    .prepare(
-      `SELECT m.role, m.can_add_apps AS canAddApps, s.kind
-         FROM space_members m
-         JOIN spaces s ON s.id = m.space_id
-        WHERE m.space_id = ? AND m.user_id = ?`,
-    )
-    .get(spaceId, userId) as Membership | undefined;
-  return row ?? null;
 }
 
 type InstallRow = { memberAccess: MemberAccess; removedAt: string | null };
@@ -248,6 +238,100 @@ export function setAppPrefs(db: Db, registry: Registry, request: AppRequest & { 
        ON CONFLICT (space_id, app_id, user_id) DO UPDATE
           SET enabled = coalesce(@enabled, enabled), pinned = coalesce(@pinned, pinned)`,
     ).run({ spaceId, appId, userId, enabled: flag(patch.enabled), pinned: flag(patch.pinned) });
+  }).immediate();
+}
+
+/**
+ * Every app a space has, as its owners see it: those removed from it and
+ * those whose code the server no longer holds too, each with how many rows
+ * it keeps, what members get and the exceptions made for single members.
+ * Then everyone in the space with their address and right to add apps, and
+ * the people invited who have not arrived yet. This is what the owners'
+ * table of who can use what is drawn from; it says what was decided, and
+ * `resolveInstall` stays the one answer to what a person may do.
+ *
+ * Throws a Refusal: 404 when the person is not in the space, 403 when they
+ * are not an owner.
+ */
+export function listSpaceApps(db: Db, registry: Registry, request: { userId: string; spaceId: string }): SpaceApps {
+  const { userId, spaceId } = request;
+  return db
+    .transaction((): SpaceApps => {
+      const member = membershipOf(db, userId, spaceId);
+      if (!member) throw notFound();
+      if (member.role !== "owner") {
+        throw new Refusal(403, "forbidden", "The list of a space's apps and who can use them is for the space's owners.");
+      }
+      const installs = db
+        .prepare(
+          `SELECT app_id AS id, member_access AS memberAccess, removed_at AS removedAt
+             FROM space_apps
+            WHERE space_id = ?
+            ORDER BY created_at, app_id`,
+        )
+        .all(spaceId) as Pick<InstalledApp, "id" | "memberAccess" | "removedAt">[];
+      const exceptions = db
+        .prepare("SELECT app_id AS appId, user_id AS userId, level FROM app_access WHERE space_id = ? ORDER BY user_id")
+        .all(spaceId) as { appId: string; userId: string; level: MemberAccess }[];
+      const apps = installs.map(
+        (install): InstalledApp => ({
+          id: install.id,
+          hasCode: registry.has(install.id),
+          removedAt: install.removedAt,
+          rowCount: countRows(db, spaceId, install.id),
+          memberAccess: install.memberAccess,
+          members: Object.fromEntries(
+            exceptions.filter((exception) => exception.appId === install.id).map((exception) => [exception.userId, exception.level]),
+          ),
+        }),
+      );
+      return { apps, members: listMemberDetails(db, spaceId), invitations: listInvitations(db, spaceId) };
+    })
+    .deferred();
+}
+
+/**
+ * Changes who can use an app in a space: what every member gets
+ * (`memberAccess`), and exceptions for single members (`null` takes one
+ * away, so that the person follows `memberAccess` again). What the request
+ * leaves out stays as it is; the request is saved as a whole or not at all.
+ * An owner can use the app whatever their exception says.
+ *
+ * Throws a Refusal: 404 when the app is not there for the person asking,
+ * 403 when they are not an owner, 400 for an exception for someone who is
+ * not in the space.
+ */
+export function setAppAccess(db: Db, registry: Registry, request: AppRequest & { change: AppAccessRequest }): void {
+  const { userId, spaceId, appId, change } = request;
+  db.transaction(() => {
+    if (resolveInstall(db, registry, userId, spaceId, appId) === null) throw notFound();
+    if (membershipOf(db, userId, spaceId)?.role !== "owner") {
+      throw new Refusal(403, "forbidden", "Changing who can use an app is for the space's owners.");
+    }
+    const exceptions = Object.entries(change.members ?? {});
+    for (const [memberId] of exceptions) {
+      if (!membershipOf(db, memberId, spaceId)) {
+        throw new Refusal(400, "invalid_request", `members.${memberId}: Not someone in this space.`);
+      }
+    }
+    if (change.memberAccess !== undefined) {
+      db.prepare("UPDATE space_apps SET member_access = ? WHERE space_id = ? AND app_id = ?").run(
+        change.memberAccess,
+        spaceId,
+        appId,
+      );
+    }
+    const now = new Date().toISOString();
+    const clear = db.prepare("DELETE FROM app_access WHERE space_id = ? AND app_id = ? AND user_id = ?");
+    const set = db.prepare(
+      `INSERT INTO app_access (space_id, app_id, user_id, level, created_by, updated_at)
+       VALUES (@spaceId, @appId, @memberId, @level, @userId, @now)
+       ON CONFLICT (space_id, app_id, user_id) DO UPDATE SET level = excluded.level, updated_at = excluded.updated_at`,
+    );
+    for (const [memberId, level] of exceptions) {
+      if (level === null) clear.run(spaceId, appId, memberId);
+      else set.run({ spaceId, appId, memberId, level, userId, now });
+    }
   }).immediate();
 }
 

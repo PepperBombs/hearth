@@ -4,10 +4,15 @@ import {
   GUEST_EMAIL,
   GUEST_PORT,
   GUEST_URL,
+  MEMBER_EMAIL,
+  MEMBER_PORT,
+  MEMBER_URL,
   OWNER_EMAIL,
   OWNER_PORT,
   OWNER_URL,
   SERVER_VERSION,
+  SHARED_DB,
+  SHARED_DB_DIR,
   WEB_PORT,
   WEB_URL,
   WITH_REAL_SERVER,
@@ -24,9 +29,12 @@ import {
  *   a failure. This is where almost every test lives.
  *
  * - "server" runs the few tests in e2e/real-server.spec.ts against the real
- *   server, built and started here with sign-in switched off (HEARTH_AUTH=dev)
- *   and a database held in memory, serving the same built web app. Two copies
- *   run: one that treats every request as the owner, one as a stranger.
+ *   server, built and started here with sign-in switched off (HEARTH_AUTH=dev),
+ *   serving the same built web app. Three copies run: one that treats every
+ *   request as the owner, one as a member of the owner's family and one as a
+ *   stranger. The owner's and the member's share a database file in the
+ *   system's temporary folder, made afresh when the owner's copy starts, so
+ *   that they are two people on one server; the stranger's is in memory.
  *   Set HEARTH_E2E_SERVER=0 to leave this project out.
  *
  * Both builds hold the framework's sample apps (packages/fixture-apps):
@@ -34,21 +42,21 @@ import {
  * HEARTH_APPS_DIR naming that folder. Afterwards the generated lists and
  * both dist folders hold those apps, until the next `pnpm build`.
  *
- * Ports are 4173, 4174 and 4175; set HEARTH_E2E_PORT to move all three.
+ * Ports are 4173 to 4176; set HEARTH_E2E_PORT to move all four.
  */
 const reuseExistingServer = !process.env.CI;
 
 /** What every command that builds is given: the folder of mini-apps to build in. */
 const buildEnv = { HEARTH_APPS_DIR: APPS_DIR };
 
-const realServer = (port: number, devUser: string) =>
+const realServer = (port: number, devUser: string, database = ":memory:") =>
   [
     "HOST=127.0.0.1",
     `PORT=${port}`,
     "HEARTH_AUTH=dev",
     `HEARTH_OWNER_EMAIL=${OWNER_EMAIL}`,
     `HEARTH_DEV_USER=${devUser}`,
-    "HEARTH_DB=:memory:",
+    `HEARTH_DB=${JSON.stringify(database)}`,
     `HEARTH_VERSION=${SERVER_VERSION}`,
     "HEARTH_WEB_DIST=packages/web/dist",
     "node packages/server/dist/main.js",
@@ -92,14 +100,25 @@ export default defineConfig({
       ? [
           {
             name: "server",
-            // Builds the server, then starts the copy that treats every request as the owner.
+            // Builds the server, then starts the copy that treats every request as the owner,
+            // on a database file of its own making: what an earlier run left there is deleted.
             // The server reads the web app's folder on each request, so it does not matter
             // whether the web build above has finished when this starts.
             // The list of apps is written again here: it is the same list, and this
             // entry must not depend on the one above having got that far.
-            command: `pnpm apps:sync && pnpm --filter @hearth/server build && ${realServer(OWNER_PORT, OWNER_EMAIL)}`,
+            command: `pnpm apps:sync && pnpm --filter @hearth/server build && rm -rf ${JSON.stringify(SHARED_DB_DIR)} && ${realServer(OWNER_PORT, OWNER_EMAIL, SHARED_DB)}`,
             env: buildEnv,
             url: `${OWNER_URL}/api/health`,
+            reuseExistingServer,
+            timeout: 120_000,
+            stdout: "ignore" as const,
+            stderr: "pipe" as const,
+          },
+          {
+            name: "server as a family member",
+            // Started after the owner's copy, which created and migrated the database they share.
+            command: realServer(MEMBER_PORT, MEMBER_EMAIL, SHARED_DB),
+            url: `${MEMBER_URL}/api/health`,
             reuseExistingServer,
             timeout: 120_000,
             stdout: "ignore" as const,

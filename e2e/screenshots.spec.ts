@@ -5,7 +5,7 @@
  */
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
-import { FAMILY_SPACE, sessionWithApps, sessionWithSampleApps, test } from "./fixtures.ts";
+import { FAMILY_SPACE, ownAFamily, sessionWithApps, sessionWithSampleApps, test } from "./fixtures.ts";
 
 /** Animations are run to their end first, so a dialog is never caught half faded in. */
 const shot = (page: Page, path: string) => page.screenshot({ path, animations: "disabled" });
@@ -80,6 +80,21 @@ test.describe("screenshots", () => {
             await page.getByRole("main").getByRole("button", { name: /Add an app|添加应用/ }).first().click();
             await page.getByRole("dialog").getByRole("radio").first().waitFor();
             await shot(page, file("apps-add"));
+          });
+
+          test("a family in Settings", async ({ page, api }) => {
+            ownAFamily(api, { theme, locale });
+            await page.goto("/settings");
+            const family = page.getByRole("main").getByRole("region", { name: "Family" });
+            await family.getByRole("table").waitFor();
+            await family.screenshot({ path: file("group-card"), animations: "disabled" });
+            await family.getByRole("button", { name: /Add a person|添加成员/ }).click();
+            await page.getByRole("dialog").getByRole("textbox").waitFor();
+            await shot(page, file("group-add"));
+            await page.keyboard.press("Escape");
+            await family.getByRole("button", { name: /Lin Example/ }).click();
+            await page.getByRole("dialog").getByRole("switch").waitFor();
+            await shot(page, file("group-member"));
           });
         });
       }

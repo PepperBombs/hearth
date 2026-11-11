@@ -20,6 +20,7 @@ import {
   spaceAppsSchema,
   spacePatchSchema,
   spaceSchema,
+  withdrawInvitationRequestSchema,
   type Session,
 } from "./index";
 
@@ -139,6 +140,7 @@ describe("request bodies", () => {
       [spacePatchSchema, { name: "Family" }],
       [addMemberRequestSchema, { email: "lin@example.com" }],
       [memberPatchSchema, { canAddApps: true }],
+      [withdrawInvitationRequestSchema, { email: "kim@example.com" }],
       [addAppRequestSchema, { memberAccess: "view" }],
       [deleteAppDataRequestSchema, { confirm: "checklist" }],
       [moveAppRequestSchema, { toSpaceId: "space-2" }],
@@ -170,6 +172,12 @@ describe("request bodies", () => {
     expect(accepts(addMemberRequestSchema, { role: "member" })).toBe(false);
     expect(accepts(addMemberResponseSchema, { outcome: "invited" })).toBe(true);
     expect(accepts(addMemberResponseSchema, { outcome: "ignored" })).toBe(false);
+  });
+
+  it("take back an invitation by address", () => {
+    expect(withdrawInvitationRequestSchema.parse({ email: " kim@example.com " })).toEqual({ email: "kim@example.com" });
+    expect(accepts(withdrawInvitationRequestSchema, { email: "" })).toBe(false);
+    expect(accepts(withdrawInvitationRequestSchema, {})).toBe(false);
   });
 
   it("change a member's role and right to add apps, each on its own", () => {

@@ -74,19 +74,23 @@ settings: the two routes that read and save them, and `ctx.settings`;
 step 7, the build pipeline: `hearth-apps sync` and `check`, the lists of
 apps a build holds, the import scan and `@hearth/sdk/eslint`; step 8,
 widgets and pages in the shell: `appHooks`, `<AppScope>`, the dashboard's
-cards and the app page; and step 9, the Apps page (add, remove, each
+cards and the app page; step 9, the Apps page (add, remove, each
 person's switch and pin, and the route behind them) and the settings dialog
-drawn from a manifest.
+drawn from a manifest; and step 10, groups, members and access: creating
+and renaming a group, adding, inviting, changing and removing people,
+invitations turned into membership on arrival, the policy of who may create
+groups and invite, the owners' list, the access route, and a card for each
+group in Settings with the member-by-app table.
 
 ## Layout and commands
 
 | Folder | Holds |
 |---|---|
-| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. It already holds the requests and answers of routes that are not built yet (groups, members, access, moving an app). |
+| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. It already holds the request of the one route that is not built yet (moving an app). |
 | `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too, and `appHooks` (`src/web/hooks.ts`), the hooks a widget or page is written with. `@hearth/sdk/web/scope` is the React context those hooks read, which the shell fills; for the framework only. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer`, `AppError`, `z` and the types of `ctx`; it holds no logic. `@hearth/sdk/manifest-schema` is the run-time check of a manifest and of a setting's value (`settingValueProblems`), for the framework only. `bin/hearth-apps.mjs` and `tools` are the `hearth-apps` command, plain JavaScript: `sync.mjs` (finds the apps, the version handshake, writes the generated lists), `import-scan.mjs` (what a file of an app may import), `default-export.mjs` (whether `widget.tsx`, `page.tsx` and `server.ts` have the default export the generated lists import), `check.mjs`, `eslint-boundary.mjs`. `@hearth/sdk/eslint` (`eslint.js`) and `tsconfig.app.json` are the ESLint and TypeScript configuration of a mini-apps repository. Imports no other Hearth package. |
-| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file), `installs.ts` (who may use which app where; add, remove, bring back, delete data, each person's switch and pin), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db`, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds), `routes.ts`, `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports) and `check-bundle.ts` (run by `hearth-apps check`, not by the server). `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
+| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file), `installs.ts` (who may use which app where; add, remove, bring back, delete data, each person's switch and pin), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db`, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds), `routes.ts`, `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports) and `check-bundle.ts` (run by `hearth-apps check`, not by the server). `installs.ts` also holds the owners' list of a space's apps (`listSpaceApps`) and the access route's work (`setAppAccess`). `src/groups` is groups and their people: `policy.ts` (`groupRights`: who may create groups and invite), `members.ts` (create, rename, add or invite, change, remove or leave, take an invitation back) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file, a widget and a page; `feed` a manifest and a widget, no server file. |
-| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card and the avatar in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes and settings, and adding, removing, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page. |
+| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card and the avatar in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes and settings, and adding, removing, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page. `src/groups` is the groups' cards in Settings: `groups.tsx` (the cards, creating, renaming, leaving), `people.tsx` (the people, adding, the dialog for one person, invitations), `access-table.tsx` (the member-by-app table), `api.ts` and `queries.ts`. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
 | `docs` | `architecture.md`, `self-hosting.md` and `mini-app-contract.md` (the agreed design for mini-apps and its build plan). |
@@ -140,10 +144,10 @@ Things that bite:
   inside from the build's list: an app the session lists and this build
   lacks gets "Reload to update". The shell draws the frame (icon, name,
   space tag, the settings button, "Open"), the skeleton and the failed state; an app's widget
-  and page have no loading or error code of their own. Groups cannot be
-  created yet, so `canCreateGroups` and `canInvitePeople` in the session
-  are always `false`; tests that need a group insert it with SQL
-  (`src/apps/test-world.ts`).
+  and page have no loading or error code of their own. Server tests that
+  need a group mostly insert it with SQL (`family()` in
+  `src/apps/test-world.ts`); `src/groups/routes.test.ts` makes them
+  through the routes.
 - Every list of apps on screen comes from `enabledApps` (switched on,
   pinned first) or, on the Apps page alone, from all of `session.apps`, in
   `packages/web/src/session/session.ts`. A switch or pin is
@@ -159,7 +163,16 @@ Things that bite:
   that changes them puts them back before it removes the app, as
   `e2e/real-server.spec.ts` does. The stand-in in `e2e/fixtures.ts` answers
   add, remove, switch and pin and the settings `PATCH` for the two sample
-  apps and records them in `appChanges`.
+  apps and records them in `appChanges`; it also keeps groups (the owners'
+  list of each in `groups`, the people it knows in `people`, `ownAFamily`
+  for a ready family) and records their changes in `groupChanges`.
+- The end-to-end tests start three copies of the real server: the owner's,
+  a family member's (Lin, `MEMBER_URL` in `e2e/servers.ts`) and a
+  stranger's. The owner's and Lin's share one database file in the system's
+  temporary folder (`SHARED_DB`), deleted whenever the owner's copy starts,
+  so that a test can be two people on one server. Nothing deletes a space,
+  so a group a test creates stays for the tests after it: give it a name of
+  its own and do not count groups.
 - An app's `useQuery` suspends and is read again after any mutation of the
   same app in the same space that the server answered, saved or turned
   down, on window focus and every 15 seconds while the window is visible
@@ -212,7 +225,33 @@ Things that bite:
   `packages/server/src/apps/installs.ts`, which `resolveInstall` and the
   session both read. A route about one app answers 404 when `resolveInstall`
   gives `null`, whatever the reason, so that the reasons cannot be told apart.
-  Do not add a second query that works out access.
+  Do not add a second query that works out access. The owners' list
+  (`listSpaceApps`, `GET /api/spaces/:spaceId/apps`) reports what was
+  decided (`member_access`, `app_access`) and decides nothing; only the web
+  app's table reads an effective level off it, for display, and a test
+  (`src/apps/access.test.ts`) checks that reading against the sessions.
+- Who may create a group and who may invite someone who is not on the
+  server yet is `groupRights` in `packages/server/src/groups/policy.ts`, read
+  from `HEARTH_GROUP_POLICY` (`owner`, the default, or `everyone`; owner's
+  decision 4). The session's `canCreateGroups` and `canInvitePeople` come
+  from it and the routes ask it again; the web app reads the session and
+  never decides this itself.
+- An invitation to a group is two rows: `invitations` (lets the person onto
+  the server) and `space_invitations` (what they become in the group).
+  `resolveMember` turns the second into membership in the transaction that
+  creates the user (`joinInvitedSpaces` in `src/db/people.ts`). Taking back
+  an address's last group invitation deletes its `invitations` row too, since
+  a group is the only way in the interface offers; a new way to invite
+  someone to the server alone must revisit that.
+- A change to `space_members` that could take away the last owner goes
+  through `keepingAnOwner` (`src/groups/members.ts`), which turns the
+  triggers' `SQLITE_CONSTRAINT_TRIGGER` into 409 `conflict`. Every owner of a
+  group manages it (owner's decision 3); anyone may leave; a personal space
+  answers 409 to every route about members.
+- Exceptions in `app_access` stay when a member becomes an owner, count for
+  nothing while they are one, and apply again if they are made a member
+  again, so stepping someone down never widens what they had. The access
+  route accepts an exception for anyone in the space, owners included.
 - To turn a request down, throw `Refusal` (`packages/server/src/http/errors.ts`)
   from anywhere, also inside a transaction: the error handler answers with
   its status and code, and it is not logged. Its message reaches the client,
