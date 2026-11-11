@@ -89,10 +89,14 @@ they were written for another SDK version, and CI builds every change with
 `package.json` with the link to the SDK, lockfile, `tsconfig.json`,
 `eslint.config.js` and CI), `@hearth/sdk/testing` with `testApp`, which
 runs an app's own tests against the real store, and the commands
-`hearth-apps test` and `hearth-apps dev`; and step 14, the template and
+`hearth-apps test` and `hearth-apps dev`; step 14, the template and
 the scaffold command: `hearth-apps new <id>` (`pnpm new <id>` in
 `hearth-stones`) makes a new mini-app as a copy of the sample checklist,
-which passes `check` untouched.
+which passes `check` untouched; and step 15, the grocery list, the first
+mini-app of `hearth-stones` (`grocery/` there), which the people of a space
+share, with tests of its own and an end-to-end test here of two family
+members sharing one list (`e2e/mini-apps`, `pnpm e2e:mini-apps`). Items 2
+to 4 are built; item 5 is next.
 
 ## Layout and commands
 
@@ -103,9 +107,9 @@ which passes `check` untouched.
 | `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file), `installs.ts` (who may use which app where; add, remove, bring back, move to another space, delete data, each person's switch and pin), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db`, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds), `routes.ts`, `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports), `check-bundle.ts` (run by `hearth-apps check`, not by the server), and `app-testing.ts` with `app-testing.setup.ts` (the implementation of `testApp` for an app's own tests, which `vitest.apps.config.ts` at the package's root installs; not part of the server). `installs.ts` also holds the owners' list of a space's apps (`listSpaceApps`) and the access route's work (`setAppAccess`). `src/groups` is groups and their people: `policy.ts` (`groupRights`: who may create groups and invite), `members.ts` (create, rename, add or invite, change, remove or leave, take an invitation back) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file, a widget, a page and tests of its own (`checklist.test.ts`, written with `testApp`), and is the template `hearth-apps new` copies; `feed` a manifest and a widget, no server file. |
 | `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card, the avatar and `LinkedText` in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes and settings, and adding, removing, moving, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, moving, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page, with the dialogs that add, move and remove an app. `src/groups` is the groups' cards in Settings: `groups.tsx` (the cards, creating, renaming, leaving), `people.tsx` (the people, adding, the dialog for one person, invitations), `access-table.tsx` (the member-by-app table), `api.ts` and `queries.ts`. |
-| `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). |
+| `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). `servers.ts` holds the addresses, the people and the command that starts a copy of the built server. `e2e/mini-apps` holds the tests of mini-apps from another repository, one file per app named after its ID (`grocery.spec.ts`), which `playwright.mini-apps.config.ts` runs against Hearth built with them. |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Each release is built with the mini-apps of `APPS_REPO` at the same moment, copied in beside the framework and linked to its SDK. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
-| `.github/workflows` | `ci.yml`: the framework by itself (`check`), end to end with the sample apps (`e2e`), and with `main` of `hearth-stones` checked out beside it (`mini-apps`). |
+| `.github/workflows` | `ci.yml`: the framework by itself (`check`), end to end with the sample apps (`e2e`), and with `main` of `hearth-stones` checked out beside it, checked, built and end to end (`mini-apps`). |
 | `docs` | `architecture.md`, `self-hosting.md` and `mini-app-contract.md` (the agreed design for mini-apps and its build plan). |
 
 Commands, from the repository root (Node 22, pnpm 10):
@@ -122,6 +126,7 @@ Commands, from the repository root (Node 22, pnpm 10):
 | `HEARTH_APPS_DIR=../hearth-stones node packages/sdk/bin/hearth-apps.mjs dev` | `hearth-apps dev`: sync, then `pnpm dev` with those apps and sign-in switched off. In a mini-apps repository it is `pnpm dev` there. |
 | `HEARTH_APPS_DIR=../hearth-stones node packages/sdk/bin/hearth-apps.mjs new <id>` | `hearth-apps new`: a new mini-app in that folder, named `<id>`, as a copy of the sample checklist. In a mini-apps repository it is `pnpm new <id>` there. |
 | `pnpm e2e` | End-to-end tests against the built app. Run `pnpm build` first. They build again with the sample apps, which stay in both `dist` folders until the next `pnpm build`. |
+| `pnpm e2e:mini-apps` | End-to-end tests of the mini-apps of `HEARTH_APPS_DIR`, or of `../hearth-stones` when it is not set: Hearth built with them, and the owner and Lin on one server. It runs the file in `e2e/mini-apps` of each app those folders hold, and passes when there is none. Those apps stay in both `dist` folders until the next `pnpm build`. |
 | `pnpm start` | Start the built server. |
 
 Things that bite:
@@ -222,6 +227,19 @@ Things that bite:
   so that a test can be two people on one server. Nothing deletes a space,
   so a group a test creates stays for the tests after it: give it a name of
   its own and do not count groups.
+- `e2e/mini-apps` tests apps of another repository, today the grocery list
+  of `hearth-stones`, which has no Playwright of its own (it installs
+  nothing but the SDK's link). `pnpm e2e` leaves the folder out; `pnpm
+  e2e:mini-apps` (`playwright.mini-apps.config.ts`) builds Hearth with
+  those apps and starts the owner's and Lin's copies of the server on ports
+  4183 and 4184 over a database of their own (`MINI_APPS_*` in
+  `e2e/servers.ts`). A file runs only when the folders hold the app it is
+  named after, so CI's `mini-apps` job passes against a `hearth-stones`
+  without that app. CI in `hearth-stones` does not run these tests: a
+  change there to an app's texts or layout needs its file here changed
+  with it, and shows first in this repository's next CI run. Do not run
+  the two Playwright commands at the same time: both build into the same
+  `dist` folders.
 - An app's `useQuery` suspends and is read again after any mutation of the
   same app in the same space that the server answered, saved or turned
   down, on window focus and every 15 seconds while the window is visible

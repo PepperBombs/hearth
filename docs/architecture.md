@@ -12,7 +12,7 @@ that exist today (the app shell) and the rules later steps build on.
 | `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. `src/apps` holds the mini-apps this build was given, decides who may use which app in which space, runs an app's queries and mutations against its own rows, and reads and saves its settings. `src/groups` creates groups and manages the people in them. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, which its tests run against: `checklist`, which keeps rows and has a page, and `feed`, which has a widget and no server file. |
 | `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings (with a card for each group), quick switcher, themes, English and Chinese. It is built from the SDK's UI kit, as mini-apps are, and draws each app's widget on the dashboard and its page at `/apps/:spaceId/:appId`. |
-| `e2e` | Playwright end-to-end tests. |
+| `e2e` | Playwright end-to-end tests: the framework with its sample apps, and in `e2e/mini-apps` the mini-apps of `hearth-stones`. |
 | `deploy` | The pull-based deploy script and service files. |
 
 Mini-apps are being built in steps. The server can already hold apps, add
@@ -30,7 +30,8 @@ group add and invite people and decide who can use each app (see "Groups,
 people and access"). The deploy builds every release with the mini-apps of
 `hearth-stones` as they are at that moment (see "Deployment"), and an app's
 own tests call its routes against the server's real store (see "Working on
-mini-apps"). The scheduler does not exist.
+mini-apps"). The first mini-app, the grocery list, is in `hearth-stones`.
+The scheduler does not exist.
 The design, and how far the build has come, is in
 [mini-app-contract.md](mini-app-contract.md).
 
@@ -129,6 +130,16 @@ transaction included, so a test sees what a browser would. That is why the
 tests run inside this repository: `hearth-apps test` starts the server
 package's vitest with `packages/server/vitest.apps.config.ts`, whose setup
 file installs the implementation.
+
+An app's end-to-end test, two people of a family using it in their
+browsers, is in this repository too, in `e2e/mini-apps`, named after the
+app: `hearth-stones` has no Playwright. `pnpm e2e:mini-apps` runs it here
+against Hearth built with `../hearth-stones` (see "Checks"). So a change to
+an app's texts or layout there changes its file here as well.
+
+`hearth-stones` holds one app so far, the grocery list (`grocery/`): a
+shopping list the people of a space share, grouped by the aisles the space
+sets, which each person may show with or without what is ticked.
 
 ## Apps in spaces
 
@@ -461,13 +472,14 @@ it runs.
 end-to-end tests. CI runs all of them on GitHub's own runners. A third job
 in CI builds every change with `main` of `hearth-stones` checked out beside
 it, as the server would build the two: it links the mini-apps offline, runs
-`hearth-apps check` on them and builds. Mini-apps written for another SDK
+`hearth-apps check` on them, builds, and runs their end-to-end tests
+(`pnpm e2e:mini-apps`, below). Mini-apps written for another SDK
 version pass with a notice, since that is expected between raising the
 version here and the matching change there; any other failure means a change
 here broke them without raising the version.
 
 Type checking covers the four packages, the fixture apps and, with its own
-`tsconfig.json`, the `e2e` folder and `playwright.config.ts`. The SDK's types are themselves
+`tsconfig.json`, the `e2e` folder and the two Playwright configurations. The SDK's types are themselves
 under test: `packages/sdk/src/index.test.ts` states what a manifest's settings
 and strings must come out as, `server.test.ts` beside it does the same for a
 handler's context and a route's input and output, and a wrong type there
@@ -498,6 +510,14 @@ the real server share one database file, one signed in as the owner and one
 as a member of the owner's family, so that one test can be two people: the
 owner invites the member, chooses what she may do with an app, and lets her
 add one.
+The mini-apps of `hearth-stones` have their end-to-end tests here as well,
+in `e2e/mini-apps`, because that repository installs nothing but the link
+to the SDK and so has no Playwright. `pnpm e2e:mini-apps` builds Hearth
+with them, starts the owner's and the member's copies of the server again,
+and runs the file of each app the build holds: for the grocery list, two
+people of a family sharing one list, each on their own screen, one of them
+on a phone and in Chinese, who see each other's changes without
+reloading.
 `pnpm test` also runs `deploy/tests/deploy.test.sh`, which drives the real
 deploy script through a failed trial, a failed switch with the database put
 back, and a restart that cannot be confirmed, using stand-ins for git, pnpm

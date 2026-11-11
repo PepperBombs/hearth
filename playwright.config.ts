@@ -10,12 +10,12 @@ import {
   OWNER_EMAIL,
   OWNER_PORT,
   OWNER_URL,
-  SERVER_VERSION,
   SHARED_DB,
   SHARED_DB_DIR,
   WEB_PORT,
   WEB_URL,
   WITH_REAL_SERVER,
+  realServerCommand as realServer,
 } from "./e2e/servers.ts";
 
 /**
@@ -42,6 +42,9 @@ import {
  * HEARTH_APPS_DIR naming that folder. Afterwards the generated lists and
  * both dist folders hold those apps, until the next `pnpm build`.
  *
+ * The tests in e2e/mini-apps are not run here: they are about mini-apps of
+ * another repository, built in by playwright.mini-apps.config.ts.
+ *
  * Ports are 4173 to 4176; set HEARTH_E2E_PORT to move all four.
  */
 const reuseExistingServer = !process.env.CI;
@@ -49,21 +52,12 @@ const reuseExistingServer = !process.env.CI;
 /** What every command that builds is given: the folder of mini-apps to build in. */
 const buildEnv = { HEARTH_APPS_DIR: APPS_DIR };
 
-const realServer = (port: number, devUser: string, database = ":memory:") =>
-  [
-    "HOST=127.0.0.1",
-    `PORT=${port}`,
-    "HEARTH_AUTH=dev",
-    `HEARTH_OWNER_EMAIL=${OWNER_EMAIL}`,
-    `HEARTH_DEV_USER=${devUser}`,
-    `HEARTH_DB=${JSON.stringify(database)}`,
-    `HEARTH_VERSION=${SERVER_VERSION}`,
-    "HEARTH_WEB_DIST=packages/web/dist",
-    "node packages/server/dist/main.js",
-  ].join(" ");
+/** The tests of mini-apps from another repository, which playwright.mini-apps.config.ts runs. */
+const MINI_APPS_TESTS = /[\\/]e2e[\\/]mini-apps[\\/]/;
 
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: MINI_APPS_TESTS,
   outputDir: "./test-results",
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
@@ -82,7 +76,7 @@ export default defineConfig({
     screenshot: "off",
   },
   projects: [
-    { name: "web", testIgnore: /real-server\.spec\.ts$/, use: { baseURL: WEB_URL } },
+    { name: "web", testIgnore: [/real-server\.spec\.ts$/, MINI_APPS_TESTS], use: { baseURL: WEB_URL } },
     ...(WITH_REAL_SERVER ? [{ name: "server", testMatch: /real-server\.spec\.ts$/, use: { baseURL: OWNER_URL } }] : []),
   ],
   webServer: [

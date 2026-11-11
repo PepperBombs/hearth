@@ -97,6 +97,24 @@ test.describe("widgets on the dashboard", () => {
     await expect(card(page, "Checklist").getByText("3 left")).toBeVisible();
   });
 
+  test("the page groups the list under each section once, whatever the space's list of sections holds", async ({ page, api }) => {
+    api.setSession(sessionWithSampleApps());
+    // The settings form lets the same name be added twice, and an entry be emptied.
+    api.appSettings.checklist = { space: { sections: ["Garden", "", "Garden", "Errands"] }, user: { hideDone: false } };
+    api.items[0]!.section = "Garden";
+    api.items[2]!.section = "Errands";
+    await page.goto(`/apps/${FAMILY_SPACE}/checklist`);
+    const main = page.getByRole("main");
+
+    await expect(main.getByRole("region")).toHaveCount(3);
+    await expect(main.getByRole("region", { name: "Garden" }).getByRole("checkbox", { name: "Water the plants" })).toBeVisible();
+    await expect(main.getByRole("region", { name: "Errands" }).getByRole("checkbox", { name: "Return the library books" })).toBeChecked();
+    await expect(main.getByRole("region", { name: "Other" }).getByRole("checkbox", { name: "Book the dentist" })).toBeVisible();
+    await expect(main.getByRole("checkbox")).toHaveCount(3);
+    await expect(main.getByRole("button", { name: "Garden" })).toHaveCount(1);
+    await expect(main.getByRole("button", { name: "Errands" })).toHaveCount(1);
+  });
+
   test("someone who may only view sees the list and cannot tick", async ({ page, api }) => {
     api.setSession(sessionWithSampleApps({}, { access: "view" }));
     await page.goto("/");

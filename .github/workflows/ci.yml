@@ -1,6 +1,7 @@
 # Checks every pull request and every push to main: the framework by itself
 # (check), end to end with the sample mini-apps (e2e), and with the mini-apps
-# of hearth-stones, as the server would build the two (mini-apps).
+# of hearth-stones, as the server would build the two, end to end included
+# (mini-apps).
 #
 # Rules for this file, because the repository is public:
 #   - GitHub-hosted runners only. Never "self-hosted": a pull request from a
@@ -111,7 +112,7 @@ jobs:
   mini-apps:
     name: Build with the mini-apps of hearth-stones
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out the code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -182,3 +183,27 @@ jobs:
         env:
           HEARTH_APPS_DIR: ../hearth-stones
         run: pnpm build
+
+      - name: Install Chromium for Playwright
+        if: ${{ steps.apps.outputs.fit == 'true' }}
+        working-directory: hearth
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Two people of a family using the mini-apps on one server, from
+      # e2e/mini-apps: the file of each app that hearth-stones holds.
+      # See playwright.mini-apps.config.ts.
+      - name: End-to-end tests of the mini-apps
+        if: ${{ steps.apps.outputs.fit == 'true' }}
+        working-directory: hearth
+        env:
+          HEARTH_APPS_DIR: ../hearth-stones
+        run: pnpm e2e:mini-apps
+
+      - name: Keep the test output if something failed
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-test-results-mini-apps
+          path: hearth/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

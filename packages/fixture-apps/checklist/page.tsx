@@ -19,12 +19,16 @@ export default function Page() {
   const tick = useMutation("tick");
   const clear = useMutation("clearTicked");
   const [name, setName] = useState("");
-  const [section, setSection] = useState("");
+  const [picked, setPicked] = useState("");
 
+  // The settings allow an empty entry and the same section twice; neither is a group of its own.
+  const sections = [...new Set(settings.sections)].filter((title) => title.trim() !== "");
+  // A section someone has taken out of the settings since it was chosen is no longer a choice.
+  const section = sections.includes(picked) ? picked : "";
   const shown = settings.hideDone ? items.filter((item) => !item.done) : items;
   // An item whose section the space no longer has is listed under "Other", with those that never had one.
-  const sectionOf = (item: { section: string }) => (settings.sections.includes(item.section) ? item.section : "");
-  const groups = [...settings.sections, ""]
+  const sectionOf = (item: { section: string }) => (sections.includes(item.section) ? item.section : "");
+  const groups = [...sections, ""]
     .map((title) => ({ title, items: shown.filter((item) => sectionOf(item) === title) }))
     .filter((group) => group.items.length > 0);
 
@@ -48,10 +52,10 @@ export default function Page() {
               {t("submit")}
             </Button>
           </div>
-          {settings.sections.length > 0 ? (
+          {sections.length > 0 ? (
             <div className="flex flex-wrap gap-1.5">
-              {settings.sections.map((title) => (
-                <Chip key={title} pressed={section === title} onClick={() => setSection(section === title ? "" : title)}>
+              {sections.map((title) => (
+                <Chip key={title} pressed={section === title} onClick={() => setPicked(section === title ? "" : title)}>
                   {title}
                 </Chip>
               ))}
@@ -63,7 +67,7 @@ export default function Page() {
       {groups.length === 0 ? <EmptyState title={t("empty")} /> : null}
       {groups.map((group) => (
         <section key={group.title} aria-label={group.title || t("other")}>
-          {settings.sections.length > 0 ? <h2 className="text-xs font-medium text-fg-3">{group.title || t("other")}</h2> : null}
+          {sections.length > 0 ? <h2 className="text-xs font-medium text-fg-3">{group.title || t("other")}</h2> : null}
           <Rows>
             {group.items.map((item) => (
               <Row key={item.id}>

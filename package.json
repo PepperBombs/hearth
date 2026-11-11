@@ -17,6 +17,7 @@
     "test": "pnpm -r test && pnpm test:deploy",
     "test:deploy": "bash deploy/tests/deploy.test.sh",
     "e2e": "playwright test --trace off",
+    "e2e:mini-apps": "playwright test --config playwright.mini-apps.config.ts --trace off --pass-with-no-tests",
     "check": "pnpm typecheck && pnpm lint && pnpm test"
   },
   "devDependencies": {
