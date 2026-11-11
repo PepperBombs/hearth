@@ -38,6 +38,12 @@ that are not built yet are marked in section B.
    never changes data. The check fails an app whose query or mutation has no
    description. Nothing else is built for the assistant now.
 
+   Agreed for when it is built, after the grocery list: it asks the person
+   to confirm every change before making it; it lives in the quick switcher
+   on desktop and the Search tab on phones; the model is Claude by default,
+   behind one interface so that another provider can replace it; it is off
+   until a space's owner switches it on, and an owner can exclude apps.
+
 ## A. The contract
 
 ### A1. Folder layout

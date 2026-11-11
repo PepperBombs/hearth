@@ -159,7 +159,7 @@ export const MIGRATIONS: readonly Migration[] = [
         pinned   INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
         PRIMARY KEY (space_id, app_id, user_id),
         FOREIGN KEY (space_id, app_id) REFERENCES space_apps (space_id, app_id)
-          ON UPDATE CASCADE ON DELETE CASCADE,
+          ON DELETE CASCADE,
         FOREIGN KEY (space_id, user_id) REFERENCES space_members (space_id, user_id)
           ON DELETE CASCADE
       ) STRICT;
