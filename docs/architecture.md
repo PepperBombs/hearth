@@ -8,9 +8,9 @@ that exist today (the app shell) and the rules later steps build on.
 | Folder | What it is |
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web. This is the contract between them: change it first, then both sides. |
-| `packages/sdk` | `@hearth/sdk`, the only thing a mini-app imports. So far: `defineApp`, the manifest types and the run-time check of a manifest. It imports no other Hearth package. |
+| `packages/sdk` | `@hearth/sdk`, the only thing a mini-app imports. So far: `defineApp`, the manifest types, the run-time check of a manifest, and the UI kit (`@hearth/sdk/web`). It imports no other Hearth package. |
 | `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. |
-| `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings, quick switcher, themes, English and Chinese. |
+| `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings, quick switcher, themes, English and Chinese. It is built from the SDK's UI kit, as mini-apps will be. |
 | `e2e` | Playwright end-to-end tests. |
 | `deploy` | The pull-based deploy script and service files. |
 
@@ -85,6 +85,9 @@ Type checking covers the four packages and, with its own `tsconfig.json`,
 the `e2e` folder and `playwright.config.ts`. The SDK's types are themselves
 under test: `packages/sdk/src/index.test.ts` states what a manifest's settings
 and strings must come out as, and a wrong type there fails the type check.
+The UI kit's unit tests run in the SDK, in a simulated browser. They cannot
+see styles: the kit's classes are turned into a stylesheet by the web app's
+build, and an end-to-end test (`e2e/shell.spec.ts`) checks that they arrive.
 `pnpm test` also runs `deploy/tests/deploy.test.sh`, which drives the real
 deploy script through a failed trial, a failed switch with the database put
 back, and a restart that cannot be confirmed, using stand-ins for git, pnpm

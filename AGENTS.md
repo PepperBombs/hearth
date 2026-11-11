@@ -64,16 +64,17 @@ The database file and secrets live in none of them.
 
 Items 2 to 4 follow `docs/mini-app-contract.md`: the agreed design (section
 A), the owner's decisions at its top, and fifteen build steps (section B),
-each marked there once built. Built so far: step 1, the SDK package skeleton.
+each marked there once built. Built so far: step 1, the SDK package skeleton,
+and step 2, the UI kit in the SDK.
 
 ## Layout and commands
 
 | Folder | Holds |
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. |
-| `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/manifest-schema` is the run-time check of a manifest, for the framework only. Imports no other Hearth package. |
+| `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too. `@hearth/sdk/manifest-schema` is the run-time check of a manifest, for the framework only. Imports no other Hearth package. |
 | `packages/server` | Hono server: config, SQLite and migrations, identity, membership, `/api` routes, static files. |
-| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/components/ui` (the future shared UI kit). |
+| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card and the avatar in `src/components` are the shell's own. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
 | `docs` | `architecture.md`, `self-hosting.md` and `mini-app-contract.md` (the agreed design for mini-apps and its build plan). |
@@ -119,6 +120,20 @@ Things that bite:
   both. `@hearth/sdk` itself must keep importing nothing (it ends up in the
   web bundle with every manifest); zod stays in `manifest-schema.ts`.
 - Icon and colour names are listed in the SDK. A new icon also needs its
-  Lucide icon in `packages/web/src/components/app-icon.tsx` (a type error
-  until then); a new colour needs a `--hearth-app-*` token in light and dark
-  (the contrast test fails until then).
+  Lucide icon in `packages/sdk/src/web/icon.tsx` (a type error until then); a
+  new colour needs a `--hearth-app-*` token in light and dark (the contrast
+  test fails until then).
+- What `packages/sdk/src/web/index.ts` exports is a promise to mini-apps in
+  other repositories. Changing a component's props, removing one, or renaming
+  a Tailwind token class in `packages/web/src/styles/index.css` is a breaking
+  change to the SDK. Components only the shell needs stay in
+  `packages/web/src/components`.
+- The kit's components live in the SDK but their styles are built by the web
+  app: `@source` in `packages/web/src/styles/index.css` makes Tailwind read
+  `packages/sdk/src/web`. A class used in a file Tailwind does not read is
+  silently missing from the stylesheet; unit tests do not notice, only the
+  end-to-end tests and your eyes do.
+- The SDK has two type-check projects, because only the kit may use the
+  browser: `packages/sdk/tsconfig.json` (everything but `src/web`, no DOM
+  types) and `packages/sdk/src/web/tsconfig.json`. Its unit tests likewise
+  run as two vitest projects, Node and jsdom.

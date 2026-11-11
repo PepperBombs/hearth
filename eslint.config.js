@@ -82,7 +82,7 @@ const tseslint = await loadTypescriptEslint();
  * Inside a mini-app (one folder directly inside a root) an import may name:
  *  - a file inside the same mini-app folder, by relative path;
  *  - a package listed in `allow`, by default only "@hearth/sdk" and anything
- *    below it ("@hearth/sdk/ui").
+ *    below it ("@hearth/sdk/web").
  * Everything else is an error: framework packages, files outside the folder
  * (another mini-app, the framework's source), Node's built-in modules, and
  * any other package. If the mini-app contract decides that mini-apps may

@@ -527,8 +527,16 @@ Each step is one pull request; `pnpm check` passes at the end of each. A step th
    - The message types are `MessageKey<A>`, `PlaceholderArgs<A, K>` and `Translate<A>` (the type of `t`). They take a manifest today; `typeof server` joins in step 5.
    - The schema also checks what A7 lists under `hearth-apps check` for a single manifest: no empty text, defaults that fit their setting, the same placeholders in both languages. It refuses unknown properties, and a setting's name must be a plain identifier.
    - `step` of a `number` setting is not applied to its default: A2 does not say whether it limits values or only sets the form's increment. Step 6 decides.
-2. **UI kit into the SDK.** Move `components/ui` to `@hearth/sdk/web`, add `Checkbox` and `Icon`, add the `@source` line; the shell imports from the SDK.
+2. **UI kit into the SDK.** *Built.* Move `components/ui` to `@hearth/sdk/web`, add `Checkbox` and `Icon`, add the `@source` line; the shell imports from the SDK.
    *Testable:* existing UI tests, contrast test and screenshot e2e unchanged.
+   *As built, where it differs from A1, A4 and A7:*
+   - `@hearth/sdk/web` exports the components A4 lists, and two helpers that already existed beside them: `buttonClass` and `chipClass`, the look of a button or chip as a class string, for links. The shell uses them, and a widget will want one for the link to its page.
+   - `Card`, `CardHeader`, `CardFooter` and `Avatar` were in `components/ui` but are not in A4's list. They stay in the shell (`packages/web/src/components`), since the shell draws the card. Adding one to the SDK later breaks nothing; taking one out would.
+   - `Icon` draws the names in `APP_ICONS`: `<Icon name="star" />`, with optional `size`, `color` (an app colour), `label` (for screen readers; without it the icon is decorative) and `className`. There are no interface icons such as a plus or a bin yet; a new name is added to `APP_ICONS` and to `packages/sdk/src/web/icon.tsx`, and is not a breaking change.
+   - `Checkbox` takes `checked`, `onChange(checked)`, its text as children, `label` when there is no text, and what a checkbox input takes otherwise (`disabled`, `name`). Disabled dims the box and leaves the text readable.
+   - `react` and `lucide-react` are dependencies of the SDK. Mini-apps still declare none.
+   - The `@source` line names `packages/sdk/src/web`, not all of `packages/sdk/src`: only the kit holds class names.
+   - The kit's tests moved with it and run in the SDK. The avatar's test stayed with the avatar. A new end-to-end test checks that the kit's classes reach the built stylesheet, which no unit test can see.
 3. **Shared contract and migration 2.** Extend `AppSummary`, `Space`, the error codes and the new request and response schemas; add the tables.
    *Testable:* the migration applies to a version-1 database with data; SQL-level tests for the foreign-key refusal, the cascade on a `space_id` update, `RESTRICT` on data tables and the one-owner index.
 4. **Registry and installs on the server.** Add `createApp({ apps })`, `resolveInstall`, add, remove, restore and delete-data routes, the session listing and start-up manifest validation. Add the fixture app `checklist` (manifest only).
