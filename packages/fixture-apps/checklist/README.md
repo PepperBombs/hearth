@@ -8,7 +8,8 @@ command will copy it as the start of a new app.
 |---|---|
 | `manifest.ts` | Name, icon, card size, two settings (`sections` for the space, `hideDone` for each person) and the interface strings, each in English and Chinese. |
 | `server.ts` | One collection, `items` (`name`, `section`, `done`), and four routes: `list`, `add`, `tick` and `clearTicked`. |
-| `widget.tsx` | The body of the dashboard card. A placeholder until widgets get their hooks. |
+| `widget.tsx` | The body of the dashboard card: the first six items still to do, each with a box to tick it off, and how many are left. |
+| `page.tsx` | The app's own page: every item, grouped by the space's sections, a form to add one and a button to clear the ticked ones. Someone with view access gets the list and nothing to press. |
 | `package.json` | The app's name. A mini-app declares no dependencies. |
 
 Everything in it is sample data.

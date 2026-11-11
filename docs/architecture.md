@@ -8,10 +8,10 @@ that exist today (the app shell) and the rules later steps build on.
 | Folder | What it is |
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web. This is the contract between them: change it first, then both sides. |
-| `packages/sdk` | `@hearth/sdk`, the only thing a mini-app imports. So far: `defineApp`, the manifest types, the run-time check of a manifest, the UI kit (`@hearth/sdk/web`), and `defineServer` for an app's queries and mutations (`@hearth/sdk/server`). It also holds the `hearth-apps` command, which builds mini-apps into the framework and checks them, and the ESLint and TypeScript configuration of a mini-apps repository. It imports no other Hearth package. |
+| `packages/sdk` | `@hearth/sdk`, the only thing a mini-app imports. So far: `defineApp`, the manifest types, the run-time check of a manifest, the UI kit and the hooks of a widget or page (`@hearth/sdk/web`), and `defineServer` for an app's queries and mutations (`@hearth/sdk/server`). It also holds the `hearth-apps` command, which builds mini-apps into the framework and checks them, and the ESLint and TypeScript configuration of a mini-apps repository. It imports no other Hearth package. |
 | `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. `src/apps` holds the mini-apps this build was given, decides who may use which app in which space, runs an app's queries and mutations against its own rows, and reads and saves its settings. |
-| `packages/fixture-apps` | The framework's own sample mini-apps, which its tests run against: `checklist`, which keeps rows, and `feed`, which has a widget and no server file. |
-| `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings, quick switcher, themes, English and Chinese. It is built from the SDK's UI kit, as mini-apps will be. |
+| `packages/fixture-apps` | The framework's own sample mini-apps, which its tests run against: `checklist`, which keeps rows and has a page, and `feed`, which has a widget and no server file. |
+| `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings, quick switcher, themes, English and Chinese. It is built from the SDK's UI kit, as mini-apps are, and draws each app's widget on the dashboard and its page at `/apps/:spaceId/:appId`. |
 | `e2e` | Playwright end-to-end tests. |
 | `deploy` | The pull-based deploy script and service files. |
 
@@ -20,9 +20,9 @@ one to a space, remove it, bring it back and delete its data (see "Apps in
 spaces" below), run an app's queries and mutations (see "What an app's
 code can do") and read and save its settings (see "An app's settings"). A
 build takes in the mini-apps of the folders it is told about (see "How
-mini-apps get into a build"). The web app carries their widgets but does not
-draw them yet: the dashboard shows a plain card for each app, from what the
-session says about it. The deploy does not tell its build about any folder
+mini-apps get into a build"), and the web app draws their widgets and pages
+(see "How the shell draws an app"). Nobody can add an app from the
+interface yet, nor change its settings there. The deploy does not tell its build about any folder
 yet, so a deployed server holds no apps. The scheduler does not exist.
 The design, and how far the build has come, is in
 [mini-app-contract.md](mini-app-contract.md).
@@ -226,6 +226,42 @@ plus a whole number of steps, as in a form's number field.
 
 A handler reads the same values, in one object by name, as `ctx.settings`.
 
+## How the shell draws an app
+
+The dashboard has a card for each app the session lists and the person has
+switched on, in the size its manifest asked for. The shell draws the card's
+frame: icon, name, the group's tag, and "Open" when the app has a
+`page.tsx`. Inside it is the app's `widget.tsx`; at
+`/apps/:spaceId/:appId` (and anything below it, for later) the shell draws
+the top bar and the app's `page.tsx` below it.
+
+An app's code is fetched only when it is first drawn. Until it and its first
+answers are there, the card shows a skeleton; when they fail, a message and
+"Try again"; when a change fails, a notice under the widget. A fault in one
+app's code stays in that app's card. An app the session lists but this
+browser's copy of Hearth does not hold gets "Reload to update": the server
+was updated after the page was opened.
+
+A widget or page is written with three hooks from `appHooks<typeof
+server>()` in `@hearth/sdk/web`, typed from the app's own server file:
+
+- `useApp()`: `t` for the app's own strings, the reader's language, the
+  reader, the space and its members (no IDs of spaces), the access level,
+  the settings and the address of the app's page.
+- `useQuery(name, input?)`: the answer of a query. It suspends, so the app
+  has no loading code.
+- `useMutation(name)`: `run(input?)`, `pending` and `error`. After a
+  mutation succeeds, every query of that app in that space is read again.
+
+What the hooks read is put around the widget by `<AppScope>`
+(`packages/web/src/apps/scope.tsx`), which knows the space and the app and
+makes the calls; the app never builds an address. Queries and settings are
+read again when the window gets the focus back and every 15 seconds while
+it is visible, which is how family members see each other's changes.
+Nothing is pushed. A `not_found` from any of an app's routes means it is no
+longer there for this person (removed, or access taken away), so the
+session is loaded again and the card goes.
+
 ## Where an app's data lives
 
 The database has no table per mini-app. `space_apps` says which app is in
@@ -318,7 +354,9 @@ temporary folder outside the checkout, each with one thing wrong. Those
 tests send the generated files to a temporary folder too.
 The end-to-end tests build with the fixture apps, so the whole path is
 tried: from an app's folder to a server that answers for it and a web app
-that carries its widget and its styles.
+that draws its widget and page with their styles. One of them ticks an
+item in a widget against the real server, sees it ticked on the app's page
+and checks that the Content-Security-Policy refused nothing.
 `pnpm test` also runs `deploy/tests/deploy.test.sh`, which drives the real
 deploy script through a failed trial, a failed switch with the database put
 back, and a restart that cannot be confirmed, using stand-ins for git, pnpm

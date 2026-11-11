@@ -5,7 +5,7 @@
  */
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
-import { sessionWithApps, test } from "./fixtures.ts";
+import { FAMILY_SPACE, sessionWithApps, sessionWithSampleApps, test } from "./fixtures.ts";
 
 /** Animations are run to their end first, so a dialog is never caught half faded in. */
 const shot = (page: Page, path: string) => page.screenshot({ path, animations: "disabled" });
@@ -60,6 +60,16 @@ test.describe("screenshots", () => {
             await page.getByRole("dialog").waitFor();
             await page.getByRole("combobox").fill(locale === "zh" ? "购物" : "gro");
             await shot(page, file("sample-switcher"));
+          });
+
+          test("with the apps this build holds", async ({ page, api }) => {
+            api.setSession(sessionWithSampleApps({ theme, locale }));
+            await page.goto("/");
+            await page.getByTestId("widget-grid").getByRole("checkbox").first().waitFor();
+            await shot(page, file("widgets"));
+            await page.goto(`/apps/${FAMILY_SPACE}/checklist`);
+            await page.getByRole("main").getByRole("checkbox").first().waitFor();
+            await shot(page, file("app-page"));
           });
         });
       }

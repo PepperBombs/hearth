@@ -84,6 +84,15 @@ describe("scanApp: what is refused", () => {
     ]);
   });
 
+  it("refuses what the shell hands a widget, which only the framework reads", () => {
+    const dir = app({
+      "widget.tsx": 'import { AppScopeContext } from "@hearth/sdk/web/scope";\nexport default function Widget() {\n  return String(AppScopeContext);\n}\n',
+    });
+    expect(refused(dir)).toEqual([
+      expect.stringMatching(/^widget\.tsx:1: .*"@hearth\/sdk\/web\/scope" is not a part of the SDK that mini-apps import\.$/),
+    ]);
+  });
+
   it("refuses a file outside the app's folder, however it is named", () => {
     const dir = app({
       "widget.tsx":

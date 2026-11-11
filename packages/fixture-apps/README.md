@@ -11,13 +11,12 @@ They are sample apps with sample data. Nobody's real app lives here.
 
 | Folder | Holds |
 |---|---|
-| `checklist` | A list of things to do. `manifest.ts`, `server.ts` (one collection, `items`, with a query that lists them and mutations that add one, tick one and clear the ticked ones) and `widget.tsx`. |
-| `feed` | A card each person filters for themselves. `manifest.ts` with two settings of each person's own, and `widget.tsx`. It has no server file, so it keeps no rows. |
+| `checklist` | A list of things to do. `manifest.ts`, `server.ts` (one collection, `items`, with a query that lists them and mutations that add one, tick one and clear the ticked ones), `widget.tsx` (the open items, each with a box to tick) and `page.tsx` (every item by section, a form to add one, "Clear ticked"). |
+| `feed` | A card each person filters for themselves. `manifest.ts` with two settings of each person's own, and `widget.tsx`. It has no server file, so it keeps no rows, and its widget is typed from the manifest. |
 
-Both widgets are placeholders that draw the app's icon. A widget gets its
-strings, its settings and its data from hooks, which arrive with the step of
-[docs/mini-app-contract.md](../../docs/mini-app-contract.md) that draws
-widgets in the shell.
+Both get their strings, settings and data from the hooks of `appHooks` in
+`@hearth/sdk/web`; the shell draws the card around a widget, the top bar
+of a page, the loading and failed states.
 
 ## How they are used
 
