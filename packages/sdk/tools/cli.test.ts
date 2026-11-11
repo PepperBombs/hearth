@@ -11,7 +11,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SDK_VERSION } from "../src/index";
 import { GENERATED } from "./sync.mjs";
-import { BIN, FIXTURES, ROOT, SDK_DIR, appFiles, makeRepo, removeTempDirs, setUpStones, tempDir, write } from "./test-repos";
+import { BIN, FIXTURES, ROOT, SDK_DIR, appFiles, makeRepo, printed, removeTempDirs, setUpStones, tempDir, write } from "./test-repos";
 
 afterEach(removeTempDirs);
 
@@ -28,7 +28,7 @@ function hearthApps(args: string[], options: { appsDir?: string; cwd?: string } 
     env,
     encoding: "utf8",
   });
-  return { status: result.status, output: result.stdout + result.stderr, out };
+  return { status: result.status, output: printed(result), out };
 }
 
 const generated = (run: Run, name: keyof typeof GENERATED) => fs.readFileSync(path.join(run.out, GENERATED[name]), "utf8");
@@ -194,7 +194,9 @@ describe("hearth-apps check", () => {
     expect(run.status).toBe(1);
     expect(run.output).toContain("feed has no README.md.");
     expect(run.output).toContain("feed has no package.json.");
-    expect(run.output).toMatch(/feed\/widget\.tsx\(\d+,\d+\): error TS2322/);
+    // The compiler writes "file(line,col): error" plainly, and "file:line:col - error"
+    // where colour is on (as for a person at a terminal).
+    expect(run.output).toMatch(/feed\/widget\.tsx(\(\d+,\d+\):| ?:\d+:\d+ -) error TS2322/);
     expect(run.output).toContain("Unexpected use of 'localStorage'.");
     expect(run.output).toContain("failed (required files, types, lint)");
   });
@@ -353,7 +355,7 @@ describe("hearth-apps dev", () => {
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.HEARTH_APPS_DIR;
     const result = spawnSync(process.execPath, [BIN, "dev"], { cwd, env, encoding: "utf8", timeout: 30_000 });
-    return { status: result.status, output: result.stdout + result.stderr };
+    return { status: result.status, output: printed(result) };
   };
 
   it("refuses what a build refuses, with sync's status, and starts nothing", () => {

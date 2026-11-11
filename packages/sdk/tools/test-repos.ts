@@ -4,6 +4,7 @@
  * lies beside hearth.
  */
 import { spawnSync } from "node:child_process";
+import { stripVTControlCharacters } from "node:util";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -158,8 +159,16 @@ export function setUpStones(hearth: string = ROOT) {
   const pnpm = (args: string[]) => {
     const result = spawnSync("pnpm", args, { cwd: stones, env, encoding: "utf8" });
     expect(result.error).toBeUndefined();
-    return { status: result.status, output: result.stdout + result.stderr };
+    return { status: result.status, output: printed(result) };
   };
   expect(pnpm(["install", "--frozen-lockfile", "--offline"]).status).toBe(0);
   return { stones, env, pnpm };
 }
+
+/**
+ * What a command run by a test printed, as plain text. Some environments
+ * switch colour on for every child process (GitHub's runners do), and the
+ * codes that colour a word would come between the words a test looks for.
+ */
+export const printed = (result: { stdout: string; stderr: string }): string =>
+  stripVTControlCharacters(result.stdout + result.stderr);
