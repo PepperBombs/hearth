@@ -1,9 +1,11 @@
 /**
  * `hearth-apps dev` up to the moment it starts the framework's dev servers,
  * which a test cannot hold (their ports are fixed): what it syncs, where it
- * starts them and with which environment. The refusals of the command as it
- * is run are in cli.test.ts.
+ * starts them and with which environment. How they are stopped, against a
+ * stand-in for them, also through a mini-apps repository's `pnpm dev`. The
+ * refusals of the command as it is run are in cli.test.ts.
  */
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import net from "node:net";
@@ -11,11 +13,84 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEV_OWNER_EMAIL, dev, devEnvironment, startDevServers } from "./dev.mjs";
 import { GENERATED } from "./sync.mjs";
-import { ROOT, appFiles, makeRepo, removeTempDirs, tempDir, write } from "./test-repos";
+import { BIN, ROOT, SDK_DIR, appFiles, makeRepo, removeTempDirs, setUpStones, tempDir, write } from "./test-repos";
 
 afterEach(removeTempDirs);
 
 type Start = typeof startDevServers;
+
+/** Whether something listens on this port of this machine. */
+const listening = (port: number) =>
+  new Promise<boolean>((resolve) => {
+    const socket = net.connect(port, "127.0.0.1");
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+  });
+
+/**
+ * A stand-in for the framework's `pnpm dev`, written into `root`: a script
+ * whose child holds a port, as the dev servers do below pnpm, a shell and
+ * concurrently. `port` waits until it listens; `kill` makes sure that
+ * nothing of it outlives the test, whatever happened.
+ */
+function standInServers(root: string) {
+  write(root, {
+    "package.json": `${JSON.stringify({ name: "stand-in", private: true, scripts: { dev: "node servers.mjs" } })}\n`,
+    "servers.mjs": [
+      'import { spawn } from "node:child_process";',
+      'import fs from "node:fs";',
+      "const server = 'const fs = require(\"node:fs\"); require(\"node:net\").createServer().listen(0, \"127.0.0.1\", function () { fs.writeFileSync(\"port.part\", String(this.address().port)); fs.renameSync(\"port.part\", \"port\"); });';",
+      'const child = spawn(process.execPath, ["-e", server], { stdio: "ignore" });',
+      'fs.writeFileSync("pids", JSON.stringify([process.pid, child.pid]));',
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
+  });
+  const portFile = path.join(root, "port");
+  const pidsFile = path.join(root, "pids");
+  return {
+    async port(why = () => ""): Promise<number> {
+      await vi.waitFor(() => expect(fs.existsSync(portFile), why()).toBe(true), { timeout: 30_000, interval: 100 });
+      return Number(fs.readFileSync(portFile, "utf8"));
+    },
+    kill() {
+      const pids: number[] = fs.existsSync(pidsFile) ? JSON.parse(fs.readFileSync(pidsFile, "utf8")) : [];
+      for (const pid of pids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Stopped already, as it should be.
+        }
+      }
+    },
+  };
+}
+
+/**
+ * A stand-in for this checkout, for a mini-apps repository beside it: the
+ * SDK's package.json, the `hearth-apps` command (copies of its bin and
+ * tools, so that it takes the stand-in for the checkout it belongs to, and
+ * writes its lists there) and the stand-in dev servers in place of the
+ * framework's. The tools' own packages come from the SDK's node_modules, as
+ * in deploy/tests/deploy.test.sh.
+ */
+function standInHearth() {
+  const root = tempDir();
+  const servers = standInServers(root);
+  const sdk = path.join(root, "packages/sdk");
+  fs.mkdirSync(path.join(sdk, "bin"), { recursive: true });
+  fs.mkdirSync(path.join(sdk, "tools"), { recursive: true });
+  fs.copyFileSync(path.join(SDK_DIR, "package.json"), path.join(sdk, "package.json"));
+  fs.copyFileSync(BIN, path.join(sdk, "bin/hearth-apps.mjs"));
+  for (const name of fs.readdirSync(path.join(SDK_DIR, "tools")).filter((file) => file.endsWith(".mjs"))) {
+    fs.copyFileSync(path.join(SDK_DIR, "tools", name), path.join(sdk, "tools", name));
+  }
+  fs.symlinkSync(path.join(SDK_DIR, "node_modules"), path.join(sdk, "node_modules"), "dir");
+  return { root, servers };
+}
 
 /** Runs `dev` with the servers' start recorded instead of done, and the generated files sent to a temporary folder. */
 async function devWith(appsDirs: string[], env: NodeJS.ProcessEnv) {
@@ -97,42 +172,16 @@ describe("hearth-apps dev", () => {
 });
 
 describe("startDevServers", () => {
-  /** Whether something listens on this port of this machine. */
-  const listening = (port: number) =>
-    new Promise<boolean>((resolve) => {
-      const socket = net.connect(port, "127.0.0.1");
-      socket.once("connect", () => {
-        socket.destroy();
-        resolve(true);
-      });
-      socket.once("error", () => resolve(false));
-    });
-
   it("stops every process below it when it is told to stop, not pnpm alone", { timeout: 60_000 }, async () => {
-    // A stand-in for the framework's `pnpm dev`: a script whose child holds
-    // a port, as the dev servers do below pnpm, a shell and concurrently.
     const root = tempDir();
-    write(root, {
-      "package.json": `${JSON.stringify({ name: "stand-in", private: true, scripts: { dev: "node servers.mjs" } })}\n`,
-      "servers.mjs": [
-        'import { spawn } from "node:child_process";',
-        'import fs from "node:fs";',
-        "const server = 'require(\"node:net\").createServer().listen(0, \"127.0.0.1\", function () { require(\"node:fs\").writeFileSync(\"port\", String(this.address().port)); });';",
-        'const child = spawn(process.execPath, ["-e", server], { stdio: "ignore" });',
-        'fs.writeFileSync("pids", JSON.stringify([process.pid, child.pid]));',
-        "setInterval(() => {}, 1000);",
-        "",
-      ].join("\n"),
-    });
+    const servers = standInServers(root);
     const signals = new EventEmitter();
     // Silent, so that pnpm's report of the stop it was given does not read like a failure in the log.
     const env = { ...process.env, npm_config_loglevel: "silent" };
     const running = startDevServers({ root, env, log: () => {}, signals });
 
-    const portFile = path.join(root, "port");
     try {
-      await vi.waitFor(() => expect(fs.existsSync(portFile)).toBe(true), { timeout: 30_000, interval: 100 });
-      const port = Number(fs.readFileSync(portFile, "utf8"));
+      const port = await servers.port();
       expect(await listening(port)).toBe(true);
 
       signals.emit("SIGTERM", "SIGTERM");
@@ -140,17 +189,56 @@ describe("startDevServers", () => {
       await vi.waitFor(async () => expect(await listening(port)).toBe(false), { timeout: 10_000, interval: 100 });
       expect(signals.listenerCount("SIGTERM")).toBe(0);
     } finally {
-      // Whatever happened, nothing of the stand-in outlives the test.
-      const pids: number[] = fs.existsSync(path.join(root, "pids")) ? JSON.parse(fs.readFileSync(path.join(root, "pids"), "utf8")) : [];
-      for (const pid of pids) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // Stopped already, as it should be.
-        }
-      }
+      servers.kill();
     }
   });
+});
+
+describe("pnpm dev in a mini-apps repository", () => {
+  // A9's `pnpm dev`, in a repository set up as hearth-stones is, stopped as
+  // `kill` or a tool stops it: a signal to pnpm's own process, not to its
+  // group as Ctrl+C sends one. pnpm passes SIGTERM and SIGINT on to its
+  // script, which `exec` makes the command itself, and dies of SIGHUP or
+  // SIGKILL, after which the command finds that its parent is gone.
+  it.each(["SIGTERM", "SIGINT", "SIGHUP", "SIGKILL"] as const)(
+    "stops the dev servers when pnpm alone is sent %s",
+    { timeout: 60_000 },
+    async (signal) => {
+      const hearth = standInHearth();
+      const { stones, env } = setUpStones(hearth.root);
+      const pnpm = spawn("pnpm", ["dev"], {
+        cwd: stones,
+        env: { ...env, npm_config_loglevel: "silent" },
+        // A group of its own, so that the test can end everything in it.
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const pid = pnpm.pid;
+      if (pid === undefined) throw new Error("pnpm could not be started.");
+      let output = "";
+      pnpm.stdout.on("data", (data) => (output += data));
+      pnpm.stderr.on("data", (data) => (output += data));
+      let ended = false;
+      pnpm.on("exit", () => (ended = true));
+
+      try {
+        const port = await hearth.servers.port(() => output);
+        expect(await listening(port)).toBe(true);
+        expect(output).toContain("hearth-apps dev: no mini-apps to run");
+
+        process.kill(pid, signal);
+        await vi.waitFor(async () => expect(await listening(port), output).toBe(false), { timeout: 10_000, interval: 100 });
+        await vi.waitFor(() => expect(ended).toBe(true), { timeout: 10_000, interval: 100 });
+      } finally {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          // Its group is gone, as it should be.
+        }
+        hearth.servers.kill();
+      }
+    },
+  );
 });
 
 describe("devEnvironment", () => {

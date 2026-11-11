@@ -118,7 +118,7 @@ from the SDK, and its commands are the SDK's `hearth-apps`:
 |---|---|
 | `pnpm check` | `hearth-apps check` (above). CI runs it on every pull request, with `main` of this repository checked out beside it, then builds Hearth with the apps. |
 | `pnpm test` | `hearth-apps test`: the apps' own tests. |
-| `pnpm dev` | `hearth-apps dev`: sync, then this repository's `pnpm dev` with the apps in and sign-in switched off. A change to a widget or page shows without reloading the page; one to a manifest or server file restarts the server. |
+| `pnpm dev` | `hearth-apps dev`: sync, then this repository's `pnpm dev` with the apps in and sign-in switched off. A change to a widget or page shows without reloading the page; one to a manifest or server file restarts the server. The script is `exec hearth-apps dev`, so that a stop sent to pnpm alone reaches the command, which stops both servers; they also stop when pnpm is gone. |
 | `pnpm new <id>` | `hearth-apps new`: a new app in a folder named `<id>`, as a copy of this repository's sample checklist (`packages/fixture-apps/checklist`) with the new ID, a test file named after it and a README that says what to change first. It passes `pnpm check` as it is, and overwrites nothing. |
 
 An app's tests are written with `testApp(server)` from `@hearth/sdk/testing`:

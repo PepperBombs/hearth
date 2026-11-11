@@ -326,7 +326,8 @@ framework's own sample apps in `packages/fixture-apps` have the same shape.
 
 ```
 package.json       "hearth": { "sdk": "^0.1.0" }, @hearth/sdk as a link to ../hearth/packages/sdk,
-                   and the scripts check, test, dev and new (hearth-apps check, test, dev, new)
+                   and the scripts check, test, dev and new (hearth-apps check, test and new,
+                   and exec hearth-apps dev)
 pnpm-lock.yaml     the link, and nothing else
 tsconfig.json      { "extends": "@hearth/sdk/tsconfig.app.json", "compilerOptions": { "noEmit": true } }
 eslint.config.js   export { default } from "@hearth/sdk/eslint";
@@ -406,7 +407,13 @@ hearth-apps new <id>   # a new app in the folder <id>, copied from the sample ch
   set. A change to a widget or a page shows without reloading the page; a
   change to a manifest or server file restarts the server. Start it again
   after adding or taking away an app, a page or a server file. The folders
-  are chosen as for `check`.
+  are chosen as for `check`. A stop signal it is sent goes to both servers,
+  and they also stop when the process that started it ends. A mini-apps
+  repository's `dev` script is therefore `exec hearth-apps dev`: `exec`
+  puts the command in the place of the shell pnpm runs the script in,
+  which would otherwise keep an interrupt sent to pnpm to itself, so that
+  a stop sent to `pnpm dev` alone reaches the servers. (pnpm's
+  `shell-emulator` setting, which has no `exec`, cannot run that script.)
 - **`new <id>`** makes a new app in a folder named `<id>`, as a copy of the
   framework's sample checklist (`packages/fixture-apps/checklist` in the
   `hearth` checkout): a complete app that passes `check` as it is, to be

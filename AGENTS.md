@@ -298,8 +298,12 @@ Things that bite:
   `--out`, but it writes an app into a folder of mini-apps, so its tests
   make apps only in repositories they made up. Those repositories
   (`tools/test-repos.ts`) lie outside the checkout, linked to the SDK, as
-  `hearth-stones` does; one test sets one up exactly as `hearth-stones` is,
-  beside a folder named `hearth`, and installs it with the real `pnpm`.
+  `hearth-stones` does; `setUpStones` there sets one up exactly as
+  `hearth-stones` is (`STONES`: keep its files as `hearth-stones` has
+  them), beside a folder named `hearth`, and installs it with the real
+  `pnpm`. The tests of its `pnpm dev` put a stand-in for this checkout in
+  that folder, so that they start no real dev servers and write no lists
+  here.
 - `hearth-apps new <id>` (`packages/sdk/tools/new.mjs`) copies
   `packages/fixture-apps/checklist` as it is at that moment, so a change to
   the sample checklist reaches every app made after it: keep it a complete
@@ -344,9 +348,18 @@ Things that bite:
   and sends a stop signal to the whole group (`startDevServers` in
   `packages/sdk/tools/dev.mjs`): pnpm does not pass a signal on to the
   shell and `concurrently` below it, so signalling pnpm alone leaves both
-  servers running; a test in `tools/dev.test.ts` holds it to that. The
-  ports 4310 and 5173 are fixed, so a dev server already running, even one
-  left from another session, makes it fail to listen.
+  servers running. It also stops the group once the process that started
+  it is gone (checked every second). In a mini-apps repository the `dev`
+  script is `exec hearth-apps dev`: pnpm passes SIGTERM and SIGINT only to
+  the shell it runs a script in, and that shell (dash, as `/bin/sh` on
+  Debian and Ubuntu) keeps an interrupt to itself and dies of a terminate
+  signal alone; `exec` puts the command in its place. pnpm dies of SIGHUP
+  or SIGKILL without passing anything on, which is what the check of the
+  parent is for. `tools/dev.test.ts` holds all of it to that, through the
+  real `pnpm dev` of such a repository: each signal sent to pnpm alone
+  frees the stand-in servers' port. The ports 4310 and 5173 are fixed, so
+  a dev server already running, even one left from another session, makes
+  it fail to listen.
 - A JSON config file may still name `HEARTH_APPS_DIR`; the server ignores
   it (`IGNORED_NAMES` in `packages/server/src/config.ts`), so that a file
   written for an earlier release does not fail the deploy's trial start.

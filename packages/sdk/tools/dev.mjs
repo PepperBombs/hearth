@@ -13,7 +13,8 @@
  *
  * Which folders: those named in HEARTH_APPS_DIR, or the folder the command
  * runs in when the variable is not set, which is how a mini-apps repository
- * runs it (`pnpm dev` there).
+ * runs it (`pnpm dev` there, whose script is `exec hearth-apps dev`: see
+ * `startDevServers`).
  *
  * Everyone is signed in as HEARTH_OWNER_EMAIL, the server's owner, or as
  * you@example.com when that is not set. The data is the framework's own
@@ -45,6 +46,9 @@ export function devEnvironment(env, appsDirs) {
   };
 }
 
+/** How often `startDevServers` checks that the process that started it is still there. */
+const PARENT_CHECK_MS = 1000;
+
 /**
  * Starts `pnpm dev` in the hearth checkout and resolves with its exit
  * status once it ends, or with 0 when it was stopped.
@@ -54,6 +58,16 @@ export function devEnvironment(env, appsDirs) {
  * goes to that whole group: pnpm does not pass a signal on through the
  * shell and `concurrently` below it, so signalling pnpm alone would leave
  * the servers running.
+ *
+ * The group is also stopped once the process that started this one is gone
+ * (checked every second), because no stop can reach this one after that. A
+ * stop sent to a mini-apps repository's `pnpm dev` alone takes one of two
+ * ways. Its script is `exec hearth-apps dev`, so that this process takes
+ * the place of the shell pnpm runs a script in, and pnpm passes SIGINT and
+ * SIGTERM on to it; pnpm dies of SIGHUP or SIGKILL without passing anything
+ * on, and that is where the check comes in. Without `exec`, the shell (dash
+ * as /bin/sh) stays between them: it keeps an interrupt to itself and dies
+ * of SIGTERM alone, which the check catches as well.
  *
  * @param {object} options
  * @param {string} options.root The hearth checkout.
@@ -76,7 +90,17 @@ export function startDevServers({ root, env, log, signals = process }) {
     };
     const stops = /** @type {const} */ (["SIGINT", "SIGTERM", "SIGHUP"]);
     for (const signal of stops) signals.on(signal, pass);
+    // A process whose parent ends is handed to another (init, or a
+    // subreaper), so its parent's ID changes.
+    const parent = process.ppid;
+    const watch = setInterval(() => {
+      if (process.ppid === parent) return;
+      clearInterval(watch);
+      pass("SIGTERM");
+    }, PARENT_CHECK_MS);
+    watch.unref();
     const done = (/** @type {number} */ status) => {
+      clearInterval(watch);
       for (const signal of stops) signals.off(signal, pass);
       resolve(status);
     };

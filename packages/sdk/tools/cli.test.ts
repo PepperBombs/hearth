@@ -11,7 +11,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SDK_VERSION } from "../src/index";
 import { GENERATED } from "./sync.mjs";
-import { BIN, FIXTURES, ROOT, SDK_DIR, appFiles, makeRepo, removeTempDirs, tempDir, write } from "./test-repos";
+import { BIN, FIXTURES, ROOT, SDK_DIR, appFiles, makeRepo, removeTempDirs, setUpStones, tempDir, write } from "./test-repos";
 
 afterEach(removeTempDirs);
 
@@ -372,60 +372,9 @@ describe("hearth-apps dev", () => {
 });
 
 describe("a mini-apps repository set up as hearth-stones is", () => {
-  // Its files as docs/mini-app-contract.md (A1) has them, and the lockfile
-  // pnpm 10 writes for that package.json: the link to the SDK and nothing else.
-  const STONES = {
-    "package.json": `${JSON.stringify(
-      {
-        name: "sample-stones",
-        private: true,
-        type: "module",
-        hearth: { sdk: `^${SDK_VERSION}` },
-        scripts: { check: "hearth-apps check", test: "hearth-apps test", dev: "hearth-apps dev", new: "hearth-apps new" },
-        devDependencies: { "@hearth/sdk": "link:../hearth/packages/sdk" },
-      },
-      null,
-      2,
-    )}\n`,
-    "pnpm-lock.yaml": [
-      "lockfileVersion: '9.0'",
-      "",
-      "settings:",
-      "  autoInstallPeers: true",
-      "  excludeLinksFromLockfile: false",
-      "",
-      "importers:",
-      "",
-      "  .:",
-      "    devDependencies:",
-      "      '@hearth/sdk':",
-      "        specifier: link:../hearth/packages/sdk",
-      "        version: link:../hearth/packages/sdk",
-      "",
-    ].join("\n"),
-    "tsconfig.json": '{ "extends": "@hearth/sdk/tsconfig.app.json", "compilerOptions": { "noEmit": true } }\n',
-    "eslint.config.js": 'export { default } from "@hearth/sdk/eslint";\n',
-  };
-
-  /**
-   * The repository beside a folder named "hearth" that is this checkout, as
-   * on the server and in CI, linked to the SDK as they link it.
-   */
-  function setUpStones() {
-    const base = tempDir();
-    fs.symlinkSync(ROOT, path.join(base, "hearth"), "dir");
-    const stones = path.join(base, "hearth-stones");
-    write(stones, STONES);
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    delete env.HEARTH_APPS_DIR;
-    const pnpm = (args: string[]) => {
-      const result = spawnSync("pnpm", args, { cwd: stones, env, encoding: "utf8" });
-      expect(result.error).toBeUndefined();
-      return { status: result.status, output: result.stdout + result.stderr };
-    };
-    expect(pnpm(["install", "--frozen-lockfile", "--offline"]).status).toBe(0);
-    return { stones, pnpm };
-  }
+  // Beside this checkout, as `setUpStones` makes it. Its `pnpm dev` is in
+  // dev.test.ts, beside a stand-in for this checkout: the real one would
+  // start the dev servers on their fixed ports.
 
   it("links the SDK beside it offline, and passes pnpm check with no apps and with one", { timeout: SLOW }, () => {
     const { stones, pnpm } = setUpStones();
