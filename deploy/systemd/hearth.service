@@ -1,0 +1,43 @@
+# Runs the Hearth server from the current release.
+# Install to /etc/systemd/system/hearth.service. See docs/self-hosting.md.
+[Unit]
+Description=Hearth server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hearth
+Group=hearth
+WorkingDirectory=/opt/hearth/current/hearth/packages/server
+# Secrets and settings, outside every repository. See deploy/hearth.env.example.
+EnvironmentFile=/etc/hearth/hearth.env
+# Written by the deploy script: HEARTH_VERSION of this release.
+EnvironmentFile=-/opt/hearth/current/release.env
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+ExecStart=/usr/bin/env node dist/main.js
+# The database holds everyone's data: files the server creates are readable
+# by this user only.
+UMask=0077
+Restart=on-failure
+RestartSec=3
+
+# Hardening: the server only needs to read its release and write its data folder.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+ReadWritePaths=/var/lib/hearth
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

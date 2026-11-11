@@ -1,0 +1,21 @@
+// Lets the "hearth" user restart and stop hearth.service, and nothing else,
+// so the deploy script needs no root access. It restarts the service to
+// switch releases, and stops it for the moment it copies the database or
+// puts it back.
+//
+// systemd asks about every operation on a unit under this one action and
+// names the operation in "verb". Without the check on the verb, the rule
+// would also allow kill, freeze, set-property and the rest.
+//
+// Install to /etc/polkit-1/rules.d/50-hearth-deploy.rules.
+polkit.addRule(function (action, subject) {
+  var verb = action.lookup("verb");
+  if (
+    action.id === "org.freedesktop.systemd1.manage-units" &&
+    action.lookup("unit") === "hearth.service" &&
+    (verb === "restart" || verb === "stop") &&
+    subject.user === "hearth"
+  ) {
+    return polkit.Result.YES;
+  }
+});

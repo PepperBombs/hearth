@@ -1,0 +1,102 @@
+/*
+ * Hearth design tokens: look "A · Clean", light and dark.
+ * Values are ported from the approved mockup, which is not kept in this
+ * repository.
+ *
+ * These custom properties are the theming surface for the shell and, later,
+ * for mini-apps. Components never use raw colours, only these.
+ */
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --hearth-bg: #f1f4f9;
+  --hearth-side: #e6ebf3;
+  --hearth-surface: #ffffff;
+  --hearth-surface-2: #eef1f6;
+  --hearth-line: #dde2ea;
+  --hearth-soft: #dfe5ee;
+  --hearth-hover: rgba(15, 35, 70, 0.06);
+  --hearth-overlay: rgba(20, 20, 20, 0.35);
+
+  /* Text */
+  --hearth-text: #141a24;
+  --hearth-text-2: #434c5b;
+  --hearth-text-3: #5b6575;
+
+  /* Accent */
+  --hearth-accent: #0b60d8;
+  --hearth-on-accent: #ffffff;
+  --hearth-accent-soft: #dbe8fd;
+  --hearth-accent-text: #0a4fb3;
+
+  /* One icon colour per app. An app names one of these in its manifest. */
+  --hearth-app-green: #1a7f45;
+  --hearth-app-purple: #6a4bd4;
+  --hearth-app-teal: #0b7f8f;
+  --hearth-app-amber: #a35f00;
+  --hearth-app-pink: #b83a6b;
+  --hearth-app-orange: #c2500e;
+  --hearth-app-blue: var(--hearth-accent);
+
+  /* Status */
+  --hearth-up: #1f6b4a;
+  --hearth-down: #b42318;
+  --hearth-warn-bg: #fff4d6;
+  --hearth-warn-text: #6b4a00;
+
+  /* Shape, spacing and type */
+  --hearth-radius-card: 12px;
+  --hearth-radius-ctl: 8px;
+  --hearth-pad: 16px;
+  --hearth-gap: 16px;
+  --hearth-row: 32px;
+  --hearth-font-size: 14px;
+  --hearth-line-height: 1.57;
+  --hearth-title-size: 14px;
+  --hearth-title-case: none;
+  --hearth-title-track: 0;
+  --hearth-title-color: var(--hearth-text);
+
+  /* Elevation */
+  --hearth-shadow-card: 0 2px 3px rgba(0, 0, 0, 0.05);
+  --hearth-shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.16);
+  --hearth-shadow-seg: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --hearth-bg: #10141b;
+  --hearth-side: #0c1016;
+  --hearth-surface: #1a2029;
+  --hearth-surface-2: #242c38;
+  --hearth-line: #2e3745;
+  --hearth-soft: #2a3342;
+  --hearth-hover: rgba(255, 255, 255, 0.08);
+  --hearth-overlay: rgba(0, 0, 0, 0.55);
+
+  --hearth-text: #e6eaf0;
+  --hearth-text-2: #b4bdca;
+  --hearth-text-3: #98a2b1;
+
+  --hearth-accent: #5b9cf5;
+  --hearth-on-accent: #0c1016;
+  --hearth-accent-soft: #1b2d4d;
+  --hearth-accent-text: #a9cbfb;
+
+  --hearth-app-green: #5fc395;
+  --hearth-app-purple: #a897fa;
+  --hearth-app-teal: #4fc3d1;
+  --hearth-app-amber: #e6b05a;
+  --hearth-app-pink: #f08fb5;
+  --hearth-app-orange: #f29a62;
+
+  --hearth-up: #5fc395;
+  --hearth-down: #f2958c;
+  --hearth-warn-bg: #33290f;
+  --hearth-warn-text: #f0d38a;
+
+  --hearth-shadow-card: none;
+  --hearth-shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5);
+}

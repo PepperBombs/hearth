@@ -15,7 +15,7 @@ server:
 | Repository | Visibility | Holds |
 |---|---|---|
 | `hearth` (this one) | public | framework and SDK |
-| `hearth-apps` | public | mini-apps, one folder each |
+| `hearth-stones` | public | mini-apps, one folder each |
 | `hearth-data` | private | the owner's content (notes as Markdown, later) |
 
 The database file and secrets live in none of them.
@@ -50,7 +50,7 @@ The database file and secrets live in none of them.
 - Adding an app that already exists on the server to a space is a saved
   setting and needs no redeploy. A redeploy happens only when code changes.
 - Deployment is pull-based: a timer on the server checks `main` in `hearth`
-  and `hearth-apps`, builds, and switches over only if the build succeeds. No
+  and `hearth-stones`, builds, and switches over only if the build succeeds. No
   self-hosted GitHub Actions runner, because the repositories are public.
 - On phones the tab bar is Home, Apps, Search, Me.
 
@@ -64,4 +64,40 @@ The database file and secrets live in none of them.
 
 ## Layout and commands
 
-Not written yet. This section is filled in with the first code.
+| Folder | Holds |
+|---|---|
+| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. |
+| `packages/server` | Hono server: config, SQLite and migrations, identity, membership, `/api` routes, static files. |
+| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/components/ui` (the future shared UI kit). |
+| `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). |
+| `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
+| `docs` | `architecture.md` and `self-hosting.md`. |
+
+Commands, from the repository root (Node 22, pnpm 10):
+
+| Command | Does |
+|---|---|
+| `pnpm install` | Install dependencies. |
+| `HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@example.com pnpm dev` | Run server (port 4310) and web dev server (port 5173) with sign-in switched off. |
+| `pnpm check` | Type checking (the three packages and `e2e`), lint, unit tests and the deploy script's tests. Run before every push. |
+| `pnpm build` | Build shared, web, then server. |
+| `pnpm e2e` | End-to-end tests against the built app. Run `pnpm build` first. |
+| `pnpm start` | Start the built server. |
+
+Things that bite:
+
+- TypeScript stays on version 6 until `typescript-eslint` supports 7.
+- Every interface string goes in both `packages/web/src/i18n/en.ts` and
+  `zh.ts`; a missing key is a type error.
+- The server's Content-Security-Policy allows scripts from its own origin
+  only: no inline scripts, no outside hosts, no outside fonts.
+- With `HEARTH_AUTH=dev` the server answers only requests addressed to this
+  machine (`localhost`, `127.0.0.1`, `::1`) and refuses any that a proxy or
+  tunnel passed on. Reach it by one of those names, also in tests.
+- Every email address goes through `normaliseEmail` in
+  `packages/server/src/email.ts` before it is compared or stored.
+- The deploy script stops the service for a moment at each switch to copy the
+  database, and puts that copy back if the new release does not come up. A
+  migration must therefore work on a copy of the real data in the trial start.
+- Mini-apps do not exist yet. The session lists no apps; pages show empty
+  states.

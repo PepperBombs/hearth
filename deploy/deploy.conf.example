@@ -1,0 +1,34 @@
+# Settings for deploy/hearth-deploy.sh. Copy to /etc/hearth/deploy.conf.
+# This file holds no secrets.
+
+# Everything the deployment owns lives under this folder.
+HEARTH_BASE=/opt/hearth
+
+# Clones the script fetches from. It never writes to them.
+FRAMEWORK_REPO=/opt/hearth/repos/hearth
+APPS_REPO=/opt/hearth/repos/hearth-stones
+
+REMOTE=origin
+BRANCH=main
+
+# How many old releases to keep for going back.
+KEEP_RELEASES=5
+
+# The service to restart, and where it answers once restarted.
+SERVICE=hearth.service
+LIVE_URL=http://127.0.0.1:4310
+
+# The database file: the same path as HEARTH_DB in hearth.env. A new build is
+# tried against a copy of it, and it is copied again just before the switch
+# so that a failed switch can put it back. The copies are kept beside it.
+# Leave empty to deploy without either safeguard.
+DATABASE=/var/lib/hearth/hearth.db
+
+# A spare local port for trying out a new build before switching to it.
+HEALTH_PORT=4319
+HEALTH_TIMEOUT=30
+
+# After the same commits failed to build or failed their trial start, wait
+# this long before retrying. Commits that failed as the live service are not
+# retried at all until a new commit arrives or state/failed is deleted.
+RETRY_AFTER_MINUTES=15

@@ -1,0 +1,83 @@
+/**
+ * Not a test: takes screenshots for looking over the design.
+ * Skipped unless HEARTH_SHOTS_DIR names a folder to write to, for example
+ *   HEARTH_SHOTS_DIR=/tmp/hearth-shots pnpm e2e screenshots
+ */
+import { join } from "node:path";
+import type { Page } from "@playwright/test";
+import { sessionWithApps, test } from "./fixtures.ts";
+
+/** Animations are run to their end first, so a dialog is never caught half faded in. */
+const shot = (page: Page, path: string) => page.screenshot({ path, animations: "disabled" });
+
+const dir = process.env.HEARTH_SHOTS_DIR;
+const sizes = [
+  { name: "1440x900", viewport: { width: 1440, height: 900 }, isMobile: false },
+  { name: "390x844", viewport: { width: 390, height: 844 }, isMobile: true },
+] as const;
+const themes = ["light", "dark"] as const;
+const locales = ["en", "zh"] as const;
+
+test.describe("screenshots", () => {
+  test.skip(!dir, "Set HEARTH_SHOTS_DIR to take screenshots.");
+
+  for (const size of sizes) {
+    for (const theme of themes) {
+      for (const locale of locales) {
+        test.describe(`${size.name} ${theme} ${locale}`, () => {
+          test.use({ viewport: size.viewport, isMobile: size.isMobile, hasTouch: size.isMobile, deviceScaleFactor: 2 });
+          const file = (screen: string) => join(dir ?? ".", `${screen}-${size.name}-${theme}-${locale}.png`);
+
+          test("empty shell", async ({ page, api }) => {
+            api.setSession({ ...api.session, user: { ...api.session.user, theme, locale } });
+            await page.goto("/");
+            await page.getByRole("heading", { level: 1 }).waitFor();
+            await shot(page, file("dashboard"));
+            await page.goto("/settings");
+            await page.getByRole("heading", { level: 1 }).waitFor();
+            await shot(page, file("settings"));
+            await page.goto("/apps");
+            await page.getByRole("heading", { level: 1 }).waitFor();
+            await shot(page, file("apps"));
+            await page.goto("/");
+            await page.getByRole("heading", { level: 1 }).waitFor();
+            await page.keyboard.press("Control+K");
+            await page.getByRole("dialog").waitFor();
+            await shot(page, file("switcher"));
+            await page.getByRole("combobox").fill(locale === "zh" ? "深色" : "zzz");
+            await shot(page, file("switcher-typed"));
+          });
+
+          test("with sample apps", async ({ page, api }) => {
+            api.setSession(sessionWithApps({ theme, locale }));
+            await page.goto("/");
+            await page.getByRole("heading", { level: 1 }).waitFor();
+            await shot(page, file("sample-dashboard"));
+            await page.goto("/apps");
+            await page.getByRole("heading", { level: 1 }).waitFor();
+            await shot(page, file("sample-apps"));
+            await page.keyboard.press("Control+K");
+            await page.getByRole("dialog").waitFor();
+            await page.getByRole("combobox").fill(locale === "zh" ? "购物" : "gro");
+            await shot(page, file("sample-switcher"));
+          });
+        });
+      }
+    }
+  }
+
+  test("screens without a session", async ({ page, api }) => {
+    api.failSession(403, "not_a_member");
+    await page.goto("/");
+    await page.getByRole("heading", { level: 1 }).waitFor();
+    await shot(page, join(dir ?? ".", "not-a-member-1440x900-light-en.png"));
+    api.failSession(500, "internal");
+    await page.goto("/");
+    await page.getByRole("heading", { level: 1 }).waitFor();
+    await shot(page, join(dir ?? ".", "error-1440x900-light-en.png"));
+    api.setSession(api.session);
+    await page.goto("/nowhere");
+    await page.getByRole("heading", { level: 1 }).waitFor();
+    await shot(page, join(dir ?? ".", "not-found-1440x900-light-en.png"));
+  });
+});
