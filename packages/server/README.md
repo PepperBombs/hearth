@@ -7,9 +7,10 @@ path. It keeps its data in one SQLite file.
 It is the app shell plus the first parts of mini-apps: the server is built
 with a list of apps; an app can be added to a space, removed, brought back
 and its data deleted; and an app's own queries and mutations run against
-rows that belong to one app in one space (see "Mini-apps"). The build does
-not hand the server any apps yet, so a running server's session still lists
-`apps: []`.
+rows that belong to one app in one space (see "Mini-apps"). Which apps a
+server holds is decided when it is built (`HEARTH_APPS_DIR`, read by
+`pnpm build` and `pnpm dev`, not by the running server); built without it,
+a server holds none and its session lists `apps: []`.
 
 ## Run it in development
 
@@ -55,13 +56,16 @@ by `HEARTH_CONFIG`, using the same names as keys; a variable set in the
 environment wins over the file. An empty value counts as not set. If anything
 is missing or wrong, the server prints what and exits before listening.
 
+`HEARTH_APPS_DIR` is not one of them. It names the folders of mini-apps for
+the build (see "Mini-apps"), and the running server does not read it. A
+config file that still has it is accepted, and the value ignored.
+
 | Setting | Default | Meaning |
 |---|---|---|
 | `HEARTH_CONFIG` | none | Path of a JSON file of settings. Environment only. |
 | `HOST` | `127.0.0.1` | Address to listen on. Leave it on loopback unless something on another machine must connect. An IPv6 address may be written with or without brackets (`::1` or `[::1]`). |
 | `PORT` | `4310` | Port to listen on. |
 | `HEARTH_DB` | `./data/hearth.db` | Path of the SQLite file. Its folder is created if needed. A folder or file created here is readable by the server's own account only. |
-| `HEARTH_APPS_DIR` | none | Folder of the `hearth-stones` checkout. Stored for a later step; not used yet. |
 | `HEARTH_DATA_DIR` | none | Folder of the `hearth-data` checkout. Stored for a later step; not used yet. |
 | `HEARTH_WEB_DIST` | `../web/dist`, from this package | Folder holding the built web app. |
 | `HEARTH_AUTH` | `cloudflare-access` | How requests are identified: `cloudflare-access` or `dev`. |
@@ -170,9 +174,24 @@ this app's manifest, that every query and mutation has a description, and
 that the names of routes, collections and fields are plain and no field is
 called like one of the fields every row has. If anything is wrong the server
 prints every problem and exits with status 1, before it opens the database
-or listens. `main.ts` passes an empty list for now: writing the list from
-the apps folders is a later step.
-The tests pass the sample apps in `packages/fixture-apps`.
+or listens.
+
+`main.ts` takes the list from `src/apps/registry.generated.js`, which
+`hearth-apps sync` writes before every build and before `pnpm dev` from the
+folders named in `HEARTH_APPS_DIR` (one, or several separated like `PATH`;
+`docs/architecture.md`, "How mini-apps get into a build"). The file is not
+in Git; its types, `registry.generated.d.ts`, are. Nothing else imports it:
+the tests pass the sample apps in `packages/fixture-apps` by hand
+(`FIXTURE_APPS` in `src/testing.ts`). To run the server from source with
+the sample apps:
+
+```sh
+HEARTH_APPS_DIR=packages/fixture-apps HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@example.com pnpm dev
+```
+
+`src/apps/check-bundle.ts` is not part of the server. `hearth-apps check`
+runs it to put a generated list through `createRegistry`, so that an app
+which passes the check does not stop a server from starting.
 
 **An app in a space** is a row in `space_apps`.
 
@@ -387,7 +406,7 @@ file or folder that already exists is left as it is.
 pnpm --filter @hearth/server dev        # run from source, restarting on change
 pnpm --filter @hearth/server typecheck
 pnpm --filter @hearth/server test
-pnpm --filter @hearth/server build      # writes dist/main.js
+pnpm --filter @hearth/server build      # writes dist/main.js; run `pnpm apps:sync` first, as `pnpm build` does
 pnpm --filter @hearth/server start      # runs dist/main.js
 ```
 

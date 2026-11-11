@@ -5,7 +5,9 @@ nothing else: no framework internals, no other mini-app.
 
 It is being built in steps; the design is
 [docs/mini-app-contract.md](../../docs/mini-app-contract.md). So far it holds
-the manifest, the UI kit and what an app's server file is written with.
+the manifest, the UI kit, what an app's server file is written with, and the
+`hearth-apps` command that builds mini-apps into the framework and checks
+them.
 
 ## What is here
 
@@ -15,9 +17,12 @@ the manifest, the UI kit and what an app's server file is written with.
 | `@hearth/sdk/web` | The UI kit: `Button`, `IconButton`, `Input`, `Field`, `Switch`, `Checkbox`, `Chip`, `Tag`, `Segmented`, `Rows`, `Row`, `EmptyState`, `Dialog`, `DialogBody`, `Icon`, and the class helpers `buttonClass` and `chipClass`. | A mini-app's widget and page, and the shell. |
 | `@hearth/sdk/server` | `defineServer`, `AppError`, `z` (the one zod that mini-apps use), and the types of a handler's context and of rows and collections (`QueryCtx`, `MutationCtx`, `Row`, `ReadCollection`, `Collection`, `Json`, `InputOf`, `OutputOf`). | A mini-app's `server.ts`. |
 | `@hearth/sdk/manifest-schema` | `manifestSchema`, a zod schema that checks a manifest at run time, and `settingValueProblems`, which says whether a value fits a setting. | The framework only. |
+| `@hearth/sdk/eslint` | The ESLint configuration of a mini-apps repository, and `miniAppBoundary`, the part of it that holds an app to the SDK. | A mini-apps repository's `eslint.config.js`. |
+| `@hearth/sdk/tsconfig.app.json` | The compiler settings mini-apps are checked with. | A mini-apps repository's `tsconfig.json`. |
+| `hearth-apps` (`bin/hearth-apps.mjs`, `tools/`) | The command: `sync` and `check`. | The framework's build, and a mini-apps repository checking itself. |
 
-Still to come: the hooks in `@hearth/sdk/web`, `@hearth/sdk/testing`,
-`@hearth/sdk/eslint` and the `hearth-apps` command.
+Still to come: the hooks in `@hearth/sdk/web`, `@hearth/sdk/testing`, and
+the commands `hearth-apps dev`, `test` and `new`.
 
 ## A manifest
 
@@ -194,11 +199,83 @@ import { Checkbox, EmptyState, Icon, Row, Rows } from "@hearth/sdk/web";
 - Components take `className` to be placed in a layout; changing their look
   is the theme's job.
 
+## A repository of mini-apps
+
+Mini-apps live in a repository of their own, checked out beside `hearth`:
+one folder per app, named after the app's ID. `hearth-stones` is one; the
+framework's own sample apps in `packages/fixture-apps` have the same shape.
+
+```
+package.json       "hearth": { "sdk": "^0.1.0" }, and @hearth/sdk as a link to ../hearth/packages/sdk
+tsconfig.json      { "extends": "@hearth/sdk/tsconfig.app.json" }
+eslint.config.js   export { default } from "@hearth/sdk/eslint";
+grocery/
+  manifest.ts      required: what makes the folder an app
+  widget.tsx       required: the body of the app's card on the dashboard
+  page.tsx         optional: the app's own page
+  server.ts        optional: collections, queries and mutations
+  package.json     required: the app's name; no dependencies
+  README.md        required
+```
+
+The repository installs nothing but the link. The compiler, ESLint and
+React's types come with the SDK.
+
+### What a file of an app may import
+
+| Import | Where |
+|---|---|
+| The app's own files, by a relative path that stays in its folder | Anywhere. |
+| `@hearth/sdk` | Anywhere. |
+| `@hearth/sdk/web`, `react` | `widget.tsx`, `page.tsx` and the files they import. |
+| `@hearth/sdk/server` | `server.ts` and the files only it imports. |
+| `./server`, with `import type` | The widget and the page: they see its types, never its code. |
+| `vitest`, `@hearth/sdk/testing` | Test files (`*.test.ts`). |
+
+Everything else is refused: other packages, Node's built-in modules, the
+framework's packages, another app's files, `require`, and an `import()`
+whose address is not written out. `manifest.ts` is read by the server and
+the browser alike, so it and what it imports keep to `@hearth/sdk`. A file
+both sides import may use neither side's part of the SDK. Write
+`import type server from "./server"`, not `import { type ... }`: only the
+first is removed entirely when the file is compiled.
+
+A mini-app also leaves `fetch`, `process`, `localStorage`, `eval` and
+`Function` alone, and cannot switch a lint rule off with a comment.
+
+### The command
+
+```sh
+hearth-apps sync     # find the apps and tell the framework to build them in
+hearth-apps check    # sync, then check every app
+```
+
+- **`sync`** reads the folders named in `HEARTH_APPS_DIR` (several are
+  separated like `PATH`; a relative one is read from the root of the
+  `hearth` checkout). It checks the SDK version the folder declares, that
+  the folder's `@hearth/sdk` is a link to this checkout, that no app ID
+  comes twice, that no app declares a dependency, and every import; then it
+  writes the lists the framework's server and web app are built from. The
+  framework runs it before every build and before `pnpm dev`. Without the
+  variable there are no apps.
+- **`check`** runs sync, then checks that every app has its `README.md` and
+  `package.json`, that every manifest and server file is valid (the check
+  the server makes when it starts), the types (`tsc` with the folder's
+  `tsconfig.json`) and lint (ESLint with the folder's configuration).
+  Without `HEARTH_APPS_DIR` it checks the folder it is run in. It does not
+  run tests yet.
+- Exit status: 0 when all is well; **3** when a folder of apps was written
+  for another version of the SDK, and for nothing else; 1 for any other
+  problem; 2 for a command it does not know.
+
+Neither the scan nor lint is a sandbox. Mini-apps are trusted code; the
+checks stop accidents.
+
 ## Version
 
 `SDK_VERSION` equals `version` in this package's `package.json`. A mini-apps
-repository declares the version it was written for, and a build refuses a
-mismatch (that check arrives with the build pipeline). While the version is
+repository declares the version it was written for as a caret range, and
+`hearth-apps sync` refuses a build when this version does not fit it. While the version is
 below 1.0, any breaking change to the SDK's types, to a kit component's props,
 to a token class name or to the manifest schema raises the minor version.
 
@@ -206,8 +283,14 @@ to a token class name or to the manifest schema raises the minor version.
 
 ```sh
 pnpm --filter @hearth/sdk typecheck   # also runs the type tests in src/index.test.ts and src/server.test.ts
-pnpm --filter @hearth/sdk test        # the manifest in Node, the UI kit in a simulated browser
+pnpm --filter @hearth/sdk test        # the manifest and the hearth-apps command in Node, the UI kit in a simulated browser
 ```
+
+`bin` and `tools` are plain JavaScript, because the command runs before
+anything is built. They are type-checked through their JSDoc comments. The
+tests of the command (`tools/*.test.ts`) run it against the fixture apps and
+against mini-apps repositories they make up in a temporary folder, and send
+what it writes to a temporary folder as well.
 
 Only `src/web` may use the browser. It has its own `tsconfig.json` with the
 DOM types; the rest of the package is checked without them.

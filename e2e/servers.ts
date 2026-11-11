@@ -18,6 +18,14 @@ export const GUEST_PORT = base + 2;
 export const GUEST_URL = `http://127.0.0.1:${GUEST_PORT}`;
 export const GUEST_EMAIL = "guest@example.com";
 
+/**
+ * The mini-apps both builds hold: the framework's own sample apps. A plain
+ * `pnpm build` holds none; the end-to-end tests build with these so that the
+ * whole path is tried, from an app's folder to a server that answers for it
+ * and a web app that carries its widget.
+ */
+export const APPS_DIR = "packages/fixture-apps";
+
 /** Shown as the build version by both copies. */
 export const SERVER_VERSION = "e2e";
 

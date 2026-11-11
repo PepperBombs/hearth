@@ -1,6 +1,7 @@
 /** Helpers for tests. Not part of the running server. */
 import checklist from "../../fixture-apps/checklist/manifest";
 import checklistServer from "../../fixture-apps/checklist/server";
+import feed from "../../fixture-apps/feed/manifest";
 import { createApp, type AppOptions } from "./app";
 import type { BundledApp } from "./apps/registry";
 import type { Identify } from "./auth";
@@ -9,9 +10,14 @@ import { migrate, openDatabase, type Db } from "./db/database";
 
 export const OWNER_EMAIL = "owner@example.com";
 
-/** The framework's own sample apps (packages/fixture-apps), as a build would hand them over. */
+/**
+ * The framework's own sample apps (packages/fixture-apps), as a build hands
+ * them over: what `hearth-apps sync` writes for that folder. `checklist`
+ * keeps rows; `feed` has no server file.
+ */
 export const FIXTURE_APPS: readonly BundledApp[] = [
   { id: "checklist", manifest: checklist, hasPage: false, server: checklistServer },
+  { id: "feed", manifest: feed, hasPage: false },
 ];
 
 export function testConfig(overrides: Partial<Config> = {}): Config {
@@ -19,7 +25,6 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     host: "127.0.0.1",
     port: 4310,
     dbPath: ":memory:",
-    appsDir: null,
     dataDir: null,
     webDist: "/nonexistent/hearth-web-dist",
     auth: {

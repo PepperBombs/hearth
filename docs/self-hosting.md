@@ -40,6 +40,13 @@ sudo -u hearth git clone https://github.com/YOUR-ORG/hearth-stones.git /opt/hear
 `hearth-data` is private and is only needed once notes exist; it will need a
 deploy key with write access.
 
+Which mini-apps a release holds is decided when the release is built, from
+the mini-apps repository at that commit. There is no setting for it on the
+server: an older `hearth.env` may still have a `HEARTH_APPS_DIR` line, which
+the server ignores and you can delete. For now the deploy script copies the
+mini-apps into each release without building them in; that last step is
+still to come (see [mini-app-contract.md](mini-app-contract.md), section B).
+
 ## 4. Write the settings
 
 ```sh

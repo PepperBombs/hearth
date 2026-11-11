@@ -8,8 +8,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,green \"pnpm --filter @hearth/server dev\" \"pnpm --filter @hearth/web dev\"",
-    "build": "pnpm --filter @hearth/shared build && pnpm --filter @hearth/web build && pnpm --filter @hearth/server build",
+    "apps:sync": "node packages/sdk/bin/hearth-apps.mjs sync",
+    "dev": "pnpm apps:sync && concurrently -n server,web -c blue,green \"pnpm --filter @hearth/server dev\" \"pnpm --filter @hearth/web dev\"",
+    "build": "pnpm apps:sync && pnpm --filter @hearth/shared build && pnpm --filter @hearth/web build && pnpm --filter @hearth/server build",
     "start": "pnpm --filter @hearth/server start",
     "typecheck": "pnpm -r typecheck && tsc -p e2e/tsconfig.json",
     "lint": "eslint .",

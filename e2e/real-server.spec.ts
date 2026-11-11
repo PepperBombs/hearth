@@ -3,7 +3,8 @@
  * Everything else in this folder answers /api itself; these few tests check that
  * the two halves really fit: the session, saving preferences, the security
  * headers the server sends, the routes for apps as the built server answers
- * them, and the screen for someone who was not invited.
+ * them, the sample apps the build was given (packages/fixture-apps), and the
+ * screen for someone who was not invited.
  */
 import { expect, test, type Page } from "@playwright/test";
 import { GUEST_URL, OWNER_EMAIL, SERVER_VERSION } from "./servers.ts";
@@ -82,7 +83,7 @@ test("someone who was never invited gets the not-a-member screen", async ({ page
   await expect(page.getByRole("navigation")).toHaveCount(0);
 });
 
-test("the built server answers the routes for apps in a space, and holds no apps yet", async ({ request }) => {
+test("the built server answers the routes for apps in a space, with 404 for an app it does not hold", async ({ request }) => {
   const session = (await (await request.get("/api/session")).json()) as { spaces: { id: string; kind: string }[] };
   const personal = session.spaces.find((space) => space.kind === "personal");
   expect(personal).toBeDefined();
@@ -123,6 +124,88 @@ test("the built server answers the routes for apps in a space, and holds no apps
   }
 });
 
+test("the build holds the sample apps: each can be added to a space, used and removed", async ({ page, request }) => {
+  type Listed = { id: string; spaceId: string; name: { en: string; zh: string }; widgetSize: string; hasPage: boolean };
+  const sessionNow = async () =>
+    (await (await request.get("/api/session")).json()) as { spaces: { id: string; kind: string }[]; apps: Listed[] };
+  const personal = (await sessionNow()).spaces.find((space) => space.kind === "personal");
+  expect(personal).toBeDefined();
+  const checklist = `/api/spaces/${personal?.id}/apps/checklist`;
+  const feed = `/api/spaces/${personal?.id}/apps/feed`;
+
+  try {
+    // Adding an app the server holds is a saved setting: no rebuild, no restart.
+    expect((await request.put(checklist, { data: {} })).status()).toBe(204);
+    expect((await request.put(feed, { data: {} })).status()).toBe(204);
+
+    // The session describes each from its manifest, which the build read from the app's folder.
+    const listed = (await sessionNow()).apps.map((app) => [app.id, app.name.en, app.name.zh, app.widgetSize, app.hasPage]);
+    expect(listed).toHaveLength(2);
+    expect(listed).toContainEqual(["checklist", "Checklist", "清单", "tall", false]);
+    expect(listed).toContainEqual(["feed", "Feed", "动态", "wide", false]);
+
+    // The checklist's server file was built in: its mutation writes, its query reads.
+    const name = `Water the plants ${Date.now()}`;
+    const added = await request.post(`${checklist}/m/add`, { data: { input: { name } } });
+    expect(added.status()).toBe(200);
+    const items = (await (await request.post(`${checklist}/q/list`, { data: {} })).json()) as { output: unknown[] };
+    expect(items.output).toContainEqual(expect.objectContaining({ name, section: "", done: false }));
+
+    // The feed has no server file, so nothing to call; its settings come from its manifest.
+    expect((await request.post(`${feed}/q/list`, { data: {} })).status()).toBe(404);
+    expect(await (await request.get(`${feed}/settings`)).json()).toEqual({ space: {}, user: { topics: [], period: "day" } });
+
+    // The dashboard has a card for each.
+    await page.goto("/");
+    const grid = page.getByTestId("widget-grid");
+    await expect(grid.getByRole("heading", { name: "Checklist" })).toBeVisible();
+    await expect(grid.getByRole("heading", { name: "Feed" })).toBeVisible();
+  } finally {
+    // Removing keeps the data; it leaves the dashboard empty for whoever runs next.
+    await request.delete(checklist);
+    await request.delete(feed);
+  }
+  expect((await sessionNow()).apps).toEqual([]);
+});
+
+test("the web app carries each sample app's widget and its styles, and fetches a widget only when asked", async ({ page, request }) => {
+  const problems = watchForProblems(page);
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+
+  // The entry script names one file for each app's widget.
+  const entry = await page.locator('script[type="module"][src]').first().getAttribute("src");
+  expect(entry).toBeTruthy();
+  const script = await (await request.get(entry ?? "")).text();
+  const chunks = [...new Set(script.match(/widget-[\w-]+\.js/g) ?? [])];
+  expect(chunks).toHaveLength(2);
+
+  // A dashboard without widgets has fetched neither.
+  const fetched = await page.evaluate(() => performance.getEntriesByType("resource").map((entry) => entry.name));
+  expect(fetched.filter((url) => url.includes("/assets/widget-"))).toEqual([]);
+
+  // Each loads from the server's own origin, which is all the Content-Security-Policy
+  // allows, and brings a component. The sample widgets take no props and use no hooks
+  // yet, so calling one gives what it would draw; its classes are in the stylesheet
+  // although no file of the web app itself uses them.
+  const heights: string[] = [];
+  for (const chunk of chunks) {
+    heights.push(
+      await page.evaluate(async (url) => {
+        const module = (await import(url)) as { default: () => { props: { className: string } } };
+        const box = document.createElement("div");
+        box.className = module.default().props.className;
+        document.body.append(box);
+        const height = getComputedStyle(box).minHeight;
+        box.remove();
+        return height;
+      }, `/assets/${chunk}`),
+    );
+  }
+  expect(heights.sort()).toEqual(["72px", "88px"]);
+  expect(problems).toEqual([]);
+});
+
 test.describe("installed", () => {
   test.use({ serviceWorkers: "allow" });
 
@@ -141,6 +224,8 @@ test.describe("installed", () => {
     });
     expect(cached).toContain("/");
     expect(cached.filter((url) => url.startsWith("/api"))).toEqual([]);
+    // The widgets of the apps this build holds are part of the shell, so they work offline too.
+    expect(cached.filter((url) => url.startsWith("/assets/widget-"))).toHaveLength(2);
 
     const session = page.waitForResponse((response) => response.url().endsWith("/api/session"));
     await page.reload();

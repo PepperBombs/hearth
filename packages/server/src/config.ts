@@ -22,8 +22,6 @@ export type Config = {
   /** Absolute path of the SQLite file, or ":memory:". */
   dbPath: string;
   /** Stored for later steps. */
-  appsDir: string | null;
-  /** Stored for later steps. */
   dataDir: string | null;
   /** Absolute path of the folder holding the built web app. */
   webDist: string;
@@ -54,7 +52,6 @@ const SETTING_NAMES = [
   "HOST",
   "PORT",
   "HEARTH_DB",
-  "HEARTH_APPS_DIR",
   "HEARTH_DATA_DIR",
   "HEARTH_WEB_DIST",
   "HEARTH_AUTH",
@@ -65,6 +62,15 @@ const SETTING_NAMES = [
   "HEARTH_VERSION",
 ] as const;
 type SettingName = (typeof SETTING_NAMES)[number];
+
+/**
+ * Names a config file may still hold although the server no longer reads
+ * them, so that a file written for an earlier release does not stop this
+ * one. HEARTH_APPS_DIR is read by the build (`hearth-apps sync`), which
+ * decides which mini-apps a release holds; the running server has no use
+ * for it.
+ */
+const IGNORED_NAMES: readonly string[] = ["HEARTH_APPS_DIR"];
 
 // The same spelling the sign-in check produces, so the owner is recognised.
 // Text normaliseEmail refuses goes on unchanged and fails the check after it.
@@ -82,7 +88,6 @@ const settingsSchema = z.object({
     .max(65535, { error: "must be a port number between 1 and 65535" })
     .default(4310),
   HEARTH_DB: z.string().default("./data/hearth.db"),
-  HEARTH_APPS_DIR: z.string().optional(),
   HEARTH_DATA_DIR: z.string().optional(),
   HEARTH_WEB_DIST: z.string().optional(),
   HEARTH_AUTH: z
@@ -155,6 +160,7 @@ function readConfigFile(path: string, cwd: string): Record<string, string> {
   const values: Record<string, string> = {};
   const problems: string[] = [];
   for (const [key, value] of Object.entries(parsed)) {
+    if (IGNORED_NAMES.includes(key)) continue;
     if (!known.has(key)) {
       problems.push(`${key} in the config file is not a setting Hearth knows.`);
     } else if (typeof value === "string" || typeof value === "number") {
@@ -184,7 +190,7 @@ export function loadConfig(
   const configFile = env.HEARTH_CONFIG?.trim();
   const fromFile = configFile ? readConfigFile(configFile, cwd) : {};
 
-  // An empty value counts as not set, so `HEARTH_APPS_DIR=` in a unit file is harmless.
+  // An empty value counts as not set, so `HEARTH_DATA_DIR=` in a unit file is harmless.
   const raw: Partial<Record<SettingName, string>> = {};
   for (const name of SETTING_NAMES) {
     const value = (env[name] ?? "").trim() || (fromFile[name] ?? "").trim();
@@ -250,7 +256,6 @@ export function loadConfig(
     host,
     port: settings.PORT,
     dbPath: settings.HEARTH_DB === ":memory:" ? ":memory:" : resolve(cwd, settings.HEARTH_DB),
-    appsDir: optionalPath(settings.HEARTH_APPS_DIR),
     dataDir: optionalPath(settings.HEARTH_DATA_DIR),
     webDist: settings.HEARTH_WEB_DIST
       ? resolve(cwd, settings.HEARTH_WEB_DIST)

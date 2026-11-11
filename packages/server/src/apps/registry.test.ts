@@ -36,8 +36,11 @@ describe("createRegistry", () => {
 
   it("accepts the framework's own sample apps", () => {
     const registry = createRegistry(FIXTURE_APPS);
-    expect(registry.list().map((app) => app.id)).toEqual(["checklist"]);
+    expect(registry.list().map((app) => app.id)).toEqual(["checklist", "feed"]);
     expect(registry.get("checklist")?.manifest.name).toEqual({ en: "Checklist", zh: "清单" });
+    // One keeps rows and one does not.
+    expect(registry.get("checklist")?.server).toBeDefined();
+    expect(registry.get("feed")?.server).toBeUndefined();
   });
 
   it("finds an app by its ID and no other", () => {

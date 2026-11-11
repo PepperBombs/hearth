@@ -30,7 +30,6 @@ describe("loadConfig", () => {
       host: "127.0.0.1",
       port: 4310,
       dbPath: resolve(CWD, "data/hearth.db"),
-      appsDir: null,
       dataDir: null,
       auth: { mode: "cloudflare-access", teamDomain: "team.example.com", audience: "aud-tag" },
       ownerEmail: "owner@example.com",
@@ -45,7 +44,6 @@ describe("loadConfig", () => {
       HOST: "::1",
       PORT: "8080",
       HEARTH_DB: "/var/lib/hearth/hearth.db",
-      HEARTH_APPS_DIR: "../hearth-stones",
       HEARTH_DATA_DIR: "/srv/hearth-data",
       HEARTH_WEB_DIST: "web",
       HEARTH_VERSION: "abc1234",
@@ -54,7 +52,6 @@ describe("loadConfig", () => {
       host: "::1",
       port: 8080,
       dbPath: "/var/lib/hearth/hearth.db",
-      appsDir: "/srv/hearth-stones",
       dataDir: "/srv/hearth-data",
       webDist: "/srv/hearth/web",
       version: "abc1234",
@@ -144,6 +141,12 @@ describe("loadConfig", () => {
     );
   });
 
+  it("does not read the mini-apps' folder: the build decided which apps this server holds", () => {
+    const config = load({ ...cloudflare, HEARTH_APPS_DIR: "../hearth-stones" });
+    expect(config).not.toHaveProperty("appsDir");
+    expect(JSON.stringify(config)).not.toContain("hearth-stones");
+  });
+
   describe("config file", () => {
     function fileWith(content: string): string {
       const path = join(mkdtempSync(join(tmpdir(), "hearth-config-")), "hearth.json");
@@ -159,6 +162,13 @@ describe("loadConfig", () => {
       expect(config.port).toBe(5000);
       expect(config.version).toBe("from-env");
       expect(config.ownerEmail).toBe("owner@example.com");
+    });
+
+    it("may still name the mini-apps' folder, as a file written for an earlier release does", () => {
+      const path = fileWith(JSON.stringify({ ...cloudflare, HEARTH_APPS_DIR: "/srv/hearth-stones", PORT: 5000 }));
+      const config = load({ HEARTH_CONFIG: path });
+      expect(config.port).toBe(5000);
+      expect(config).not.toHaveProperty("appsDir");
     });
 
     it("is refused when it cannot be read, is not JSON, or holds unknown settings", () => {

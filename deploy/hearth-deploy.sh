@@ -585,8 +585,9 @@ log "New commits: framework ${framework_commit:0:12}, mini-apps ${apps_commit:0:
 export_commit "$FRAMEWORK_REPO" "$framework_commit" "$new_release/hearth" >>"$build_log" 2>&1 ||
   die "Could not copy the framework's files into the release."
 if [[ -n $APPS_REPO ]]; then
-  # Mini-apps are only copied for now. The step that adds the mini-app
-  # contract decides how they are built.
+  # Mini-apps are only copied for now. The build below is not told about
+  # this folder (HEARTH_APPS_DIR), so a release holds no mini-apps yet; see
+  # docs/mini-app-contract.md, section A7, "Deploy script".
   export_commit "$APPS_REPO" "$apps_commit" "$new_release/hearth-stones" >>"$build_log" 2>&1 ||
     die "Could not copy the mini-apps' files into the release."
 fi

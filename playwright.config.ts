@@ -1,5 +1,6 @@
 import { defineConfig } from "@playwright/test";
 import {
+  APPS_DIR,
   GUEST_EMAIL,
   GUEST_PORT,
   GUEST_URL,
@@ -28,9 +29,17 @@ import {
  *   run: one that treats every request as the owner, one as a stranger.
  *   Set HEARTH_E2E_SERVER=0 to leave this project out.
  *
+ * Both builds hold the framework's sample apps (packages/fixture-apps):
+ * every build command below runs `pnpm apps:sync` first, with
+ * HEARTH_APPS_DIR naming that folder. Afterwards the generated lists and
+ * both dist folders hold those apps, until the next `pnpm build`.
+ *
  * Ports are 4173, 4174 and 4175; set HEARTH_E2E_PORT to move all three.
  */
 const reuseExistingServer = !process.env.CI;
+
+/** What every command that builds is given: the folder of mini-apps to build in. */
+const buildEnv = { HEARTH_APPS_DIR: APPS_DIR };
 
 const realServer = (port: number, devUser: string) =>
   [
@@ -71,7 +80,8 @@ export default defineConfig({
   webServer: [
     {
       name: "web",
-      command: `pnpm --filter @hearth/web build && pnpm --filter @hearth/web exec vite preview --host 127.0.0.1 --port ${WEB_PORT} --strictPort`,
+      command: `pnpm apps:sync && pnpm --filter @hearth/web build && pnpm --filter @hearth/web exec vite preview --host 127.0.0.1 --port ${WEB_PORT} --strictPort`,
+      env: buildEnv,
       url: WEB_URL,
       reuseExistingServer,
       timeout: 120_000,
@@ -85,7 +95,10 @@ export default defineConfig({
             // Builds the server, then starts the copy that treats every request as the owner.
             // The server reads the web app's folder on each request, so it does not matter
             // whether the web build above has finished when this starts.
-            command: `pnpm --filter @hearth/server build && ${realServer(OWNER_PORT, OWNER_EMAIL)}`,
+            // The list of apps is written again here: it is the same list, and this
+            // entry must not depend on the one above having got that far.
+            command: `pnpm apps:sync && pnpm --filter @hearth/server build && ${realServer(OWNER_PORT, OWNER_EMAIL)}`,
+            env: buildEnv,
             url: `${OWNER_URL}/api/health`,
             reuseExistingServer,
             timeout: 120_000,

@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server";
 import { createApp } from "./app";
-import { AppRegistryError, createRegistry, type BundledApp } from "./apps/registry";
+import { AppRegistryError, createRegistry } from "./apps/registry";
+import { apps } from "./apps/registry.generated.js";
 import { ConfigError, isLoopbackHost, loadConfig, type Config } from "./config";
 import { migrate, openDatabase } from "./db/database";
 
@@ -16,10 +17,10 @@ function readConfig(): Config {
   }
 }
 
-// The mini-apps this build holds. The build will write this list from the
-// apps folders it was given (docs/mini-app-contract.md, section A7); until
-// that exists a running server holds none, and only tests pass apps in.
-const apps: readonly BundledApp[] = [];
+// `apps` are the mini-apps this build holds. `hearth-apps sync` wrote the
+// list before the build, from the folders named in HEARTH_APPS_DIR at that
+// moment (docs/mini-app-contract.md, section A7). A running server reads no
+// apps folder: this file is the only one that imports the list.
 
 /**
  * Stops the process when a bundled app is not valid, so that the deploy's

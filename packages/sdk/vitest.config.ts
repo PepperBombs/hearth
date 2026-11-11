@@ -1,8 +1,8 @@
 import { defineConfig } from "vitest/config";
 
 /**
- * Two kinds of test: the manifest and its schema run in Node; the UI kit in
- * src/web needs a page to render into.
+ * Two kinds of test: the manifest, its schema and the `hearth-apps` command
+ * (tools) run in Node; the UI kit in src/web needs a page to render into.
  */
 export default defineConfig({
   test: {
@@ -10,7 +10,7 @@ export default defineConfig({
       {
         test: {
           name: "sdk",
-          include: ["src/**/*.test.ts"],
+          include: ["src/**/*.test.ts", "tools/**/*.test.ts"],
           exclude: ["src/web/**"],
           environment: "node",
         },

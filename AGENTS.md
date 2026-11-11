@@ -69,18 +69,20 @@ step 2, the UI kit in the SDK; step 3, the shared contract and the database
 tables for apps in spaces; step 4, the server's registry of apps and the
 routes that add an app to a space, remove it, bring it back and delete its
 data; step 5, `defineServer` in the SDK, the store behind `ctx.db` and the
-routes that run an app's queries and mutations; and step 6, an app's
-settings: the two routes that read and save them, and `ctx.settings`.
+routes that run an app's queries and mutations; step 6, an app's
+settings: the two routes that read and save them, and `ctx.settings`; and
+step 7, the build pipeline: `hearth-apps sync` and `check`, the lists of
+apps a build holds, the import scan and `@hearth/sdk/eslint`.
 
 ## Layout and commands
 
 | Folder | Holds |
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. It already holds the requests and answers of routes that are not built yet (groups, members, access, moving an app). |
-| `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer`, `AppError`, `z` and the types of `ctx`; it holds no logic. `@hearth/sdk/manifest-schema` is the run-time check of a manifest and of a setting's value (`settingValueProblems`), for the framework only. Imports no other Hearth package. |
-| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file), `installs.ts` (who may use which app where; add, remove, bring back, delete data), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db`, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
-| `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them. So far `checklist`, a manifest and a server file. |
-| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card and the avatar in `src/components` are the shell's own. |
+| `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer`, `AppError`, `z` and the types of `ctx`; it holds no logic. `@hearth/sdk/manifest-schema` is the run-time check of a manifest and of a setting's value (`settingValueProblems`), for the framework only. `bin/hearth-apps.mjs` and `tools` are the `hearth-apps` command, plain JavaScript: `sync.mjs` (finds the apps, the version handshake, writes the generated lists), `import-scan.mjs` (what a file of an app may import), `check.mjs`, `eslint-boundary.mjs`. `@hearth/sdk/eslint` (`eslint.js`) and `tsconfig.app.json` are the ESLint and TypeScript configuration of a mini-apps repository. Imports no other Hearth package. |
+| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file), `installs.ts` (who may use which app where; add, remove, bring back, delete data), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db`, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds), `routes.ts`, `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports) and `check-bundle.ts` (run by `hearth-apps check`, not by the server). `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
+| `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file and a widget; `feed` a manifest and a widget, no server file. Both widgets are placeholders until widgets get their hooks (step 8). |
+| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card and the avatar in `src/components` are the shell's own. `src/apps` holds the list of mini-apps the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only) and `bundled.tsx`, the provider the shell will read it from. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
 | `docs` | `architecture.md`, `self-hosting.md` and `mini-app-contract.md` (the agreed design for mini-apps and its build plan). |
@@ -90,10 +92,12 @@ Commands, from the repository root (Node 22, pnpm 10):
 | Command | Does |
 |---|---|
 | `pnpm install` | Install dependencies. |
-| `HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@example.com pnpm dev` | Run server (port 4310) and web dev server (port 5173) with sign-in switched off. |
+| `HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@example.com pnpm dev` | Run server (port 4310) and web dev server (port 5173) with sign-in switched off. Add `HEARTH_APPS_DIR=packages/fixture-apps` to hold the sample apps, or the path of a mini-apps checkout. |
 | `pnpm check` | Type checking (the packages, the fixture apps and `e2e`), lint, unit tests and the deploy script's tests. Run before every push. |
-| `pnpm build` | Build shared, web, then server. |
-| `pnpm e2e` | End-to-end tests against the built app. Run `pnpm build` first. |
+| `pnpm build` | Write the lists of mini-apps (`pnpm apps:sync`), then build shared, web and server. Without `HEARTH_APPS_DIR` the build holds no mini-apps. |
+| `pnpm apps:sync` | `hearth-apps sync`: find the mini-apps in the folders named in `HEARTH_APPS_DIR`, check them, and write the three generated files. `pnpm build` and `pnpm dev` run it first. |
+| `pnpm --filter @hearth/fixture-apps check` | `hearth-apps check` on the sample apps: sync, required files, manifests, types, lint. It leaves the generated files holding the sample apps. |
+| `pnpm e2e` | End-to-end tests against the built app. Run `pnpm build` first. They build again with the sample apps, which stay in both `dist` folders until the next `pnpm build`. |
 | `pnpm start` | Start the built server. |
 
 Things that bite:
@@ -111,13 +115,61 @@ Things that bite:
 - The deploy script stops the service for a moment at each switch to copy the
   database, and puts that copy back if the new release does not come up. A
   migration must therefore work on a copy of the real data in the trial start.
-- A running server holds no mini-apps yet: `main.ts` passes `createApp` an
-  empty list until the build writes one (step 7). Its session lists no apps
-  and pages show empty states. Only the server's tests pass apps in
-  (`FIXTURE_APPS` in `packages/server/src/testing.ts`). The web app knows
-  nothing of manifests yet. Groups cannot be created yet either, so
-  `canCreateGroups` and `canInvitePeople` in the session are always `false`;
-  tests that need a group insert it with SQL (`src/apps/test-world.ts`).
+- Which mini-apps a server holds is decided when it is built, by
+  `HEARTH_APPS_DIR` at that moment: one folder, or several separated like
+  `PATH`, a relative one read from the root of this repository. The running
+  server reads no apps folder. A plain `pnpm build` holds none, and so does
+  a deployed release until the deploy script passes the variable (step 12).
+- `hearth-apps sync` writes three files that are not in Git:
+  `packages/server/src/apps/registry.generated.js`,
+  `packages/web/src/apps/registry.generated.js` and
+  `packages/web/src/apps/sources.generated.css`. Only `main.ts` and
+  `main.tsx` import the lists; their types are the `registry.generated.d.ts`
+  beside each, which is in Git. Type checking, lint and unit tests need
+  none of the three, so `pnpm check` works on a fresh checkout. Building one
+  package by itself does not: run `pnpm apps:sync` first, or `pnpm build`.
+- The server's tests do not read the generated list. They pass
+  `FIXTURE_APPS` (`packages/server/src/testing.ts`), written by hand; a test
+  (`src/apps/fixtures.test.ts`) fails when it differs from the folders in
+  `packages/fixture-apps`. Add a fixture app in both places.
+- The web app holds the list of apps but draws nothing from it yet: the
+  dashboard's cards still come from the session alone (step 8). The sample
+  widgets are placeholders without hooks, and one end-to-end test
+  (`e2e/real-server.spec.ts`) calls them as plain functions; it changes with
+  them. Groups cannot be created yet either, so `canCreateGroups` and
+  `canInvitePeople` in the session are always `false`; tests that need a
+  group insert it with SQL (`src/apps/test-world.ts`).
+- `packages/sdk/tools` and `packages/sdk/bin` are plain JavaScript that Node
+  runs before anything is built: no TypeScript syntax, and no import from
+  `src`. They are type-checked through JSDoc (`allowJs` in the SDK's
+  `tsconfig.json`). `APP_FOLDER_PATTERN` in `sync.mjs` repeats
+  `APP_ID_PATTERN` for that reason; a test compares them.
+- What a file of a mini-app may import is decided in one place,
+  `scanApp` in `packages/sdk/tools/import-scan.mjs`. `hearth-apps sync` runs
+  it before every build and the ESLint rule `hearth/mini-app-imports` runs
+  the same function, so change the list there and nowhere else. A file's
+  side follows from who imports it (`widget.tsx` and `page.tsx`,
+  `server.ts`, `manifest.ts` on both); only imports that survive compiling
+  count, and `import { type X }` survives.
+- `hearth-apps` ends with status 3 for exactly one thing: a folder of apps
+  that declares another SDK version (`hearth.sdk` in its `package.json`)
+  than `packages/sdk/package.json` has. The cross-repository CI job of step
+  12 will read that status. Every other problem is status 1.
+- A test that runs `hearth-apps` or `sync()` passes `--out` (or `out`) with
+  a temporary folder, as `packages/sdk/tools/cli.test.ts` does. Without it
+  the test rewrites this checkout's generated files. The mini-apps
+  repositories those tests make up (`tools/test-repos.ts`) lie outside the
+  checkout, linked to the SDK, as `hearth-stones` will.
+- A mini-apps repository installs nothing but a link to the SDK, so what it
+  needs to be checked is a dependency of `@hearth/sdk`: `typescript`,
+  `eslint`, `@eslint/js`, `typescript-eslint`, `@types/react`.
+  `packages/sdk/tsconfig.app.json` leads `react` to the SDK's copy of
+  React's types for the same reason, and `resolve.dedupe` in
+  `packages/web/vite.config.ts` gives an app the web app's React; without
+  it a build with apps fails.
+- A JSON config file may still name `HEARTH_APPS_DIR`; the server ignores
+  it (`IGNORED_NAMES` in `packages/server/src/config.ts`), so that a file
+  written for an earlier release does not fail the deploy's trial start.
 - Who may use an app is decided in one place, the SQL named `VISIBLE` in
   `packages/server/src/apps/installs.ts`, which `resolveInstall` and the
   session both read. A route about one app answers 404 when `resolveInstall`
@@ -181,10 +233,12 @@ Things that bite:
   `id` differs from its manifest's, or an ID that comes twice. `main.ts`
   makes the same check before it opens the database and exits with status 1,
   which is what fails the deploy's trial start.
-- A mini-app folder under `packages/fixture-apps` may import `@hearth/sdk`
-  and its own files only; `pnpm lint` enforces it
-  (`hearth/mini-app-imports`). Server tests import a fixture's manifest by
-  relative path.
+- A mini-app folder under `packages/fixture-apps` is held to the rules of
+  every mini-app by `pnpm lint` (`miniAppBoundary` in
+  `packages/sdk/tools/eslint-boundary.mjs`): the imports the scan allows,
+  no `fetch`, `process`, `localStorage`, `eval` or `Function`, and no
+  comment that switches a rule off. Server tests import a fixture's
+  manifest and server file by relative path.
 - A space may have several owners and must keep one. Triggers on
   `space_members` enforce it: insert the owner of a new space before anyone
   else, and expect `SQLITE_CONSTRAINT_TRIGGER` when the last owner is removed

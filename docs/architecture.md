@@ -8,9 +8,9 @@ that exist today (the app shell) and the rules later steps build on.
 | Folder | What it is |
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web. This is the contract between them: change it first, then both sides. |
-| `packages/sdk` | `@hearth/sdk`, the only thing a mini-app imports. So far: `defineApp`, the manifest types, the run-time check of a manifest, the UI kit (`@hearth/sdk/web`), and `defineServer` for an app's queries and mutations (`@hearth/sdk/server`). It imports no other Hearth package. |
+| `packages/sdk` | `@hearth/sdk`, the only thing a mini-app imports. So far: `defineApp`, the manifest types, the run-time check of a manifest, the UI kit (`@hearth/sdk/web`), and `defineServer` for an app's queries and mutations (`@hearth/sdk/server`). It also holds the `hearth-apps` command, which builds mini-apps into the framework and checks them, and the ESLint and TypeScript configuration of a mini-apps repository. It imports no other Hearth package. |
 | `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. `src/apps` holds the mini-apps this build was given, decides who may use which app in which space, runs an app's queries and mutations against its own rows, and reads and saves its settings. |
-| `packages/fixture-apps` | The framework's own sample mini-apps, which its tests run against. So far `checklist`: a manifest and a server file. |
+| `packages/fixture-apps` | The framework's own sample mini-apps, which its tests run against: `checklist`, which keeps rows, and `feed`, which has a widget and no server file. |
 | `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings, quick switcher, themes, English and Chinese. It is built from the SDK's UI kit, as mini-apps will be. |
 | `e2e` | Playwright end-to-end tests. |
 | `deploy` | The pull-based deploy script and service files. |
@@ -18,10 +18,12 @@ that exist today (the app shell) and the rules later steps build on.
 Mini-apps are being built in steps. The server can already hold apps, add
 one to a space, remove it, bring it back and delete its data (see "Apps in
 spaces" below), run an app's queries and mutations (see "What an app's
-code can do") and read and save its settings (see "An app's settings"). The
-build does not hand it any apps yet, and the web app shows none: on a
-running server the session still lists no apps and screens show empty
-states. The scheduler does not exist.
+code can do") and read and save its settings (see "An app's settings"). A
+build takes in the mini-apps of the folders it is told about (see "How
+mini-apps get into a build"). The web app carries their widgets but does not
+draw them yet: the dashboard shows a plain card for each app, from what the
+session says about it. The deploy does not tell its build about any folder
+yet, so a deployed server holds no apps. The scheduler does not exist.
 The design, and how far the build has come, is in
 [mini-app-contract.md](mini-app-contract.md).
 
@@ -43,13 +45,67 @@ requests in `packages/shared`. The rules for who may use an app in a group
 are built and tested (with groups written straight into a test database);
 the routes that create a group or change access are not.
 
+## How mini-apps get into a build
+
+A mini-app is a folder in a repository of its own (`hearth-stones`, or
+anyone's laid out the same way), checked out beside this one. It is trusted
+code that the server's owner chose to check out: nothing is loaded at run
+time, and nothing is sandboxed.
+
+`HEARTH_APPS_DIR` names the folders of mini-apps when the framework is
+built: one folder, or several separated like `PATH`. `pnpm build` and
+`pnpm dev` first run `hearth-apps sync` (`packages/sdk/tools/sync.mjs`),
+which finds every direct child folder that holds a `manifest.ts` and writes
+three files that are not in Git:
+
+| File | Holds |
+|---|---|
+| `packages/server/src/apps/registry.generated.js` | Each app's manifest and, when it has one, its server file. Only `main.ts` imports it. |
+| `packages/web/src/apps/registry.generated.js` | Each app's manifest, and its widget and page as files of their own that the browser fetches when first needed. Only `main.tsx` imports it. |
+| `packages/web/src/apps/sources.generated.css` | Each app's folder, for Tailwind to read class names from. |
+
+With no folder named, a folder missing or a folder without apps, the three
+say "no apps" and the framework builds alone. The running server reads no
+apps folder: what a release holds was decided when it was built.
+
+Before it writes anything, sync refuses what must not be built in, and
+writes nothing then:
+
+- **Another SDK version.** A folder of apps says in its `package.json`
+  which SDK it was written for (`"hearth": { "sdk": "^0.1.0" }`). If
+  `packages/sdk/package.json` does not fit that range, sync ends with exit
+  status 3, a status it uses for nothing else, and names both versions. Its
+  `node_modules/@hearth/sdk` must also be a link to this very checkout.
+- **An app ID in two folders**, naming both, and a folder name that cannot
+  be an ID.
+- **A dependency.** An app's `package.json` declares none.
+- **An import a mini-app may not make.** `packages/sdk/tools/import-scan.mjs`
+  reads every file of every app with the TypeScript parser. An app imports
+  its own files and `@hearth/sdk`; its widget and page also `@hearth/sdk/web`
+  and `react`; its `server.ts`, and the files only that imports, also
+  `@hearth/sdk/server`. The widget and the page may see the server file's
+  types (`import type`) and nothing else of it, so that server code never
+  reaches a browser. No comment switches this off.
+
+The same scan is an ESLint rule (`hearth/mini-app-imports`, from
+`@hearth/sdk/eslint`), together with a ban on `fetch`, `process`,
+`localStorage`, `eval` and `Function`, so an editor shows a problem before
+the build refuses it. The scan is the gate; lint is the early warning.
+Neither is a sandbox.
+
+`hearth-apps check` is what a mini-apps repository runs before a merge:
+sync, then that every app has its `README.md` and `package.json`, that every
+manifest and server file passes the server's own start-up check, the
+TypeScript compiler and ESLint. It does not run an app's tests yet.
+
 ## Apps in spaces
 
 The server is built with a fixed list of mini-apps: the **registry**
-(`packages/server/src/apps/registry.ts`). Code arrives with a deploy, never
-at run time. At start-up every app's manifest and server file are checked,
-and a bad one stops the server before it opens the database, so the deploy's
-trial of a new release fails and the old release keeps running.
+(`packages/server/src/apps/registry.ts`), made from the list the build wrote.
+Code arrives with a deploy, never at run time. At start-up every app's
+manifest and server file are checked, and a bad one stops the server before
+it opens the database, so the deploy's trial of a new release fails and the
+old release keeps running.
 
 Whether a space *has* an app is a separate thing, a row in `space_apps`:
 
@@ -252,8 +308,16 @@ fails the type check.
 The UI kit's unit tests run in the SDK, in a simulated browser. They cannot
 see styles: the kit's classes are turned into a stylesheet by the web app's
 build, and an end-to-end test (`e2e/shell.spec.ts`) checks that they arrive.
-Lint also holds the fixture apps to the rule for every mini-app: import the
-SDK and your own files, nothing else.
+Lint also holds the fixture apps to the rules for every mini-app: import the
+SDK and your own files, nothing else, and leave the globals that reach
+outside alone.
+The `hearth-apps` command is tested as it is run (`packages/sdk/tools`):
+against the fixture apps, and against mini-apps repositories made up in a
+temporary folder outside the checkout, each with one thing wrong. Those
+tests send the generated files to a temporary folder too.
+The end-to-end tests build with the fixture apps, so the whole path is
+tried: from an app's folder to a server that answers for it and a web app
+that carries its widget and its styles.
 `pnpm test` also runs `deploy/tests/deploy.test.sh`, which drives the real
 deploy script through a failed trial, a failed switch with the database put
 back, and a restart that cannot be confirmed, using stand-ins for git, pnpm

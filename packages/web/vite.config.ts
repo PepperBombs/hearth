@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { delimiter, join, relative, resolve, sep } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
@@ -52,12 +52,35 @@ function serviceWorker(): Plugin {
   };
 }
 
+/**
+ * The folders of mini-apps this build was given: HEARTH_APPS_DIR, one folder
+ * or several separated like PATH, a relative one read from the root of the
+ * repository. `hearth-apps sync` reads the variable the same way
+ * (packages/sdk/tools/sync.mjs) and writes src/apps/registry.generated.js,
+ * which imports the apps from there.
+ */
+const repositoryRoot = resolve(import.meta.dirname, "../..");
+const appsDirs = (process.env.HEARTH_APPS_DIR ?? "")
+  .split(delimiter)
+  .map((entry) => entry.trim())
+  .filter((entry) => entry !== "")
+  .map((entry) => resolve(repositoryRoot, entry));
+
 export default defineConfig({
   plugins: [react(), tailwindcss(), serviceWorker()],
+  resolve: {
+    // A mini-app lives outside this package and has no React of its own.
+    // Its imports of react, and the ones its JSX compiles to, get this
+    // package's copy, so that the page holds one React and not two.
+    dedupe: ["react", "react-dom"],
+  },
   server: {
     port: 5173,
     strictPort: true,
     proxy: { "/api": "http://127.0.0.1:4310" },
+    // The dev server serves files of this repository only, unless told:
+    // the mini-apps may be in a repository beside it.
+    fs: { allow: [repositoryRoot, ...appsDirs] },
   },
   preview: {
     port: 4173,
