@@ -1,10 +1,17 @@
 /** Helpers for tests. Not part of the running server. */
+import checklist from "../../fixture-apps/checklist/manifest";
 import { createApp, type AppOptions } from "./app";
+import type { BundledApp } from "./apps/registry";
 import type { Identify } from "./auth";
 import type { Config } from "./config";
 import { migrate, openDatabase, type Db } from "./db/database";
 
 export const OWNER_EMAIL = "owner@example.com";
+
+/** The framework's own sample apps (packages/fixture-apps), as a build would hand them over. */
+export const FIXTURE_APPS: readonly BundledApp[] = [
+  { id: "checklist", manifest: checklist, hasPage: false },
+];
 
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -40,6 +47,8 @@ export const identifyFromTestHeader: Identify = async (request) => {
 export type TestAppOptions = {
   config?: Config;
   db?: Db;
+  /** The mini-apps the server holds. Defaults to none; FIXTURE_APPS are the sample ones. */
+  apps?: readonly BundledApp[];
   /** "from-config" uses the real login method the configuration names. */
   identify?: Identify | "from-config";
   logError?: AppOptions["logError"];
@@ -51,6 +60,7 @@ export function testApp(options: TestAppOptions = {}) {
   const app = createApp({
     config: options.config ?? testConfig(),
     db,
+    apps: options.apps ?? [],
     identify:
       options.identify === "from-config" ? undefined : (options.identify ?? identifyFromTestHeader),
     logError: options.logError ?? ((error) => errors.push(error)),

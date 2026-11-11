@@ -65,16 +65,19 @@ The database file and secrets live in none of them.
 Items 2 to 4 follow `docs/mini-app-contract.md`: the agreed design (section
 A), the owner's decisions at its top, and fifteen build steps (section B),
 each marked there once built. Built so far: step 1, the SDK package skeleton;
-step 2, the UI kit in the SDK; and step 3, the shared contract and the
-database tables for apps in spaces.
+step 2, the UI kit in the SDK; step 3, the shared contract and the database
+tables for apps in spaces; and step 4, the server's registry of apps and the
+routes that add an app to a space, remove it, bring it back and delete its
+data.
 
 ## Layout and commands
 
 | Folder | Holds |
 |---|---|
-| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. It already holds the requests and answers of routes that are not built yet (groups, members, apps in a space, app settings, queries and mutations). |
+| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. It already holds the requests and answers of routes that are not built yet (groups, members, access, moving an app, app settings, queries and mutations). |
 | `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too. `@hearth/sdk/manifest-schema` is the run-time check of a manifest, for the framework only. Imports no other Hearth package. |
-| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. Migration 2 holds the tables for apps in spaces; no code writes to them yet. |
+| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `installs.ts` (who may use which app where; add, remove, bring back, delete data), `store.ts` (the only SQL for `app_rows` and `app_settings`) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
+| `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them. So far `checklist`, a manifest only. |
 | `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card and the avatar in `src/components` are the shell's own. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
@@ -86,7 +89,7 @@ Commands, from the repository root (Node 22, pnpm 10):
 |---|---|
 | `pnpm install` | Install dependencies. |
 | `HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@example.com pnpm dev` | Run server (port 4310) and web dev server (port 5173) with sign-in switched off. |
-| `pnpm check` | Type checking (the four packages and `e2e`), lint, unit tests and the deploy script's tests. Run before every push. |
+| `pnpm check` | Type checking (the packages, the fixture apps and `e2e`), lint, unit tests and the deploy script's tests. Run before every push. |
 | `pnpm build` | Build shared, web, then server. |
 | `pnpm e2e` | End-to-end tests against the built app. Run `pnpm build` first. |
 | `pnpm start` | Start the built server. |
@@ -106,10 +109,38 @@ Things that bite:
 - The deploy script stops the service for a moment at each switch to copy the
   database, and puts that copy back if the new release does not come up. A
   migration must therefore work on a copy of the real data in the trial start.
-- Mini-apps do not exist yet. The session lists no apps; pages show empty
-  states. Nothing reads a manifest yet either: the shell uses the SDK only for
-  its icon and colour names and its UI kit. Groups cannot be created yet, so
-  `canCreateGroups` and `canInvitePeople` in the session are always `false`.
+- A running server holds no mini-apps yet: `main.ts` passes `createApp` an
+  empty list until the build writes one (step 7). Its session lists no apps
+  and pages show empty states. Only the server's tests pass apps in
+  (`FIXTURE_APPS` in `packages/server/src/testing.ts`). The web app knows
+  nothing of manifests yet. Groups cannot be created yet either, so
+  `canCreateGroups` and `canInvitePeople` in the session are always `false`;
+  tests that need a group insert it with SQL (`src/apps/test-world.ts`).
+- Who may use an app is decided in one place, the SQL named `VISIBLE` in
+  `packages/server/src/apps/installs.ts`, which `resolveInstall` and the
+  session both read. A route about one app answers 404 when `resolveInstall`
+  gives `null`, whatever the reason, so that the reasons cannot be told apart.
+  Do not add a second query that works out access.
+- To turn a request down, throw `Refusal` (`packages/server/src/http/errors.ts`)
+  from anywhere, also inside a transaction: the error handler answers with
+  its status and code, and it is not logged. Its message reaches the client,
+  so it must not say what the person may not know. Read a request body with
+  `readBody` and its schema from `packages/shared`.
+- A check and the change it allows go in one `db.transaction(...).immediate()`,
+  as in `installs.ts`, so that a revoke cannot land between them.
+- SQL that names `app_rows` or `app_settings` belongs in
+  `packages/server/src/apps/store.ts` and in test files, nowhere else.
+- Removing an app from a space only sets `space_apps.removed_at`. Its rows,
+  settings, switches and pins stay; bringing it back resets access
+  (`member_access` as asked, exceptions deleted) and nothing else.
+- `createApp` throws `AppRegistryError` for a bad manifest, an entry whose
+  `id` differs from its manifest's, or an ID that comes twice. `main.ts`
+  makes the same check before it opens the database and exits with status 1,
+  which is what fails the deploy's trial start.
+- A mini-app folder under `packages/fixture-apps` may import `@hearth/sdk`
+  and its own files only; `pnpm lint` enforces it
+  (`hearth/mini-app-imports`). Server tests import a fixture's manifest by
+  relative path.
 - A space may have several owners and must keep one. Triggers on
   `space_members` enforce it: insert the owner of a new space before anyone
   else, and expect `SQLITE_CONSTRAINT_TRIGGER` when the last owner is removed

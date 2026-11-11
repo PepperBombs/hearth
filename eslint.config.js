@@ -60,13 +60,12 @@ const tseslint = await loadTypescriptEslint();
 /* -------------------------------------------------------------------------
  * "A mini-app uses only the SDK" (AGENTS.md)
  *
- * Mini-apps do not exist yet. This is where the automated check for that
- * rule lives, ready for the step that adds the mini-app contract:
+ * This is the automated check for that rule:
  *
  *  - In this repository it applies to every folder directly inside one of
- *    MINI_APP_ROOTS (for example the template app). Nothing is there today,
- *    so the rule matches no file. Change MINI_APP_ROOTS when the real
- *    location is decided.
+ *    MINI_APP_ROOTS: the framework's own sample apps in
+ *    packages/fixture-apps, which tests run against and the template will be
+ *    copied from.
  *  - The hearth-stones repository lints itself. Its eslint.config.js imports
  *    `miniAppBoundary` from this file (the two repositories are checked out
  *    side by side) and calls it with the folder that holds its apps:
@@ -88,7 +87,7 @@ const tseslint = await loadTypescriptEslint();
  * any other package. If the mini-app contract decides that mini-apps may
  * import something else directly, add it to MINI_APP_ALLOWED_PACKAGES.
  * ---------------------------------------------------------------------- */
-const MINI_APP_ROOTS = ["apps"];
+const MINI_APP_ROOTS = ["packages/fixture-apps"];
 const MINI_APP_ALLOWED_PACKAGES = ["@hearth/sdk"];
 
 /** The folder of the mini-app that `file` belongs to, or null. */

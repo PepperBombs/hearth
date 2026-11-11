@@ -4,9 +4,11 @@ The Hearth server: a small [Hono](https://hono.dev) application on Node that
 answers the JSON API under `/api` and serves the built web app for every other
 path. It keeps its data in one SQLite file.
 
-At this step it is the app shell only. There are no mini-apps yet, so the
-session always lists `apps: []`. The tables that mini-apps, groups and access
-will use exist (see "Database"), but no route reads or writes them.
+It is the app shell plus the first part of mini-apps: the server is built
+with a list of apps, and an app can be added to a space, removed, brought
+back and its data deleted (see "Mini-apps"). It cannot run an app's code yet,
+and the build does not hand it any apps, so a running server's session still
+lists `apps: []`.
 
 ## Run it in development
 
@@ -134,16 +136,67 @@ app.
 | Route | Sign-in | Answer |
 |---|---|---|
 | `GET /api/health` | no | `{ ok: true, version }` |
-| `GET /api/session` | yes | The user; their spaces, each with their role, whether they may add apps, and its members (ID, name and role, no email address); `apps: []`; `canCreateGroups` and `canInvitePeople`, both `false` until groups are built; and the version. |
+| `GET /api/session` | yes | The user; their spaces, each with their role, whether they may add apps, and its members (ID, name and role, no email address); `apps`, every app they can use in every space they are in; `canCreateGroups` and `canInvitePeople`, both `false` until groups are built; and the version. |
 | `PATCH /api/me` | yes | Takes any of `name`, `locale`, `theme`; answers with the updated user. |
+| `PUT /api/spaces/:spaceId/apps/:appId` | yes | Adds the app to the space, or brings a removed one back with its data. Takes `{ memberAccess? }`. Answers `204`. |
+| `DELETE /api/spaces/:spaceId/apps/:appId` | yes | Removes the app from the space and keeps its data. Answers `204`. |
+| `DELETE /api/spaces/:spaceId/apps/:appId/data` | yes | Deletes the data of a removed app for good. Takes `{ confirm }`, the app's ID. Answers `204`. |
 
 Every failure has the shape `{ error: { code, message } }`. The message is
 English text for logs and network traces; the web app chooses what to show
 from the code. Unknown routes under `/api` answer `404` with `not_found`. An
 unexpected failure answers `500` with `internal` and no detail; the detail goes
-to the server's log. The contract also names `forbidden` (403) and `conflict`
-(409) and the requests of the routes for groups, members and apps
-(`docs/mini-app-contract.md`, section A8); nothing answers with them yet.
+to the server's log. `forbidden` (403) is for a member who may not do this,
+and `conflict` (409) for a request that cannot be carried out as things
+stand. The contract also holds the requests of routes that are not built yet:
+groups, members, access, moving an app, settings, and an app's own queries
+and mutations (`docs/mini-app-contract.md`, section A8).
+
+## Mini-apps
+
+The code is in `src/apps`; the design is `docs/mini-app-contract.md`.
+
+**The registry.** `createApp({ config, db, apps })` is given the mini-apps
+this build holds, each as `{ id, manifest, hasPage, server? }`. It checks
+every manifest against the SDK's schema, that `id` equals the manifest's
+`id`, and that no ID comes twice. If anything is wrong the server prints
+every problem and exits with status 1, before it opens the database or
+listens. `main.ts` passes an empty list for now: writing the list from the
+apps folders is a later step.
+The tests pass the sample apps in `packages/fixture-apps`.
+
+**An app in a space** is a row in `space_apps`.
+
+- `PUT .../apps/:appId` adds it. The person must be an owner of the space or
+  a member allowed to add apps (`403` otherwise; `404` if they are not in the
+  space or the server holds no such app). `memberAccess` is what the other
+  members of a group get: `none` (the default), `view` or `edit`. A member
+  who adds an app gets edit for themselves. `409` if the app's manifest does
+  not allow this kind of space.
+- The same `PUT` on an app that is already there changes nothing and answers
+  `204`; asking for a different `memberAccess` answers `409`.
+- `DELETE .../apps/:appId` removes it: owners only (`403` for a member who
+  can use the app, `404` for anyone it is hidden from). Nothing is deleted.
+- The same `PUT` on a removed app brings it back with its rows, settings and
+  everyone's switches and pins. Owners only, and access starts afresh:
+  `memberAccess` as given now, and no exceptions from before. A member who
+  may add apps gets `409` for an app the space has an entry for that they
+  cannot see.
+- `DELETE .../apps/:appId/data` deletes the rows, the settings and the entry
+  for good. Owners only (`403` for any other member), `confirm` must be the
+  app's ID (`400`), and the app must have been removed or its code be gone
+  (`409` otherwise).
+
+**Who may use an app** is `resolveInstall` in `src/apps/installs.ts`: `null`,
+`"view"` or `"edit"`. An owner of the space has edit; a member has their
+exception in `app_access`, or else the app's `member_access`; `none`, a
+removed app, an app without code and a space the person is not in are all
+`null`, which every route about one app answers with `404`. The session lists
+exactly the apps for which it is not `null`, from the same SQL.
+
+**An app whose folder is gone** from a deploy disappears from every session
+and answers `404`. Its rows are not touched, and it returns when the folder
+does. An owner can delete its data without removing it first.
 
 ## Web app files
 
@@ -198,10 +251,14 @@ number; never change one that has shipped. The server refuses to start on a
 database that a newer build has migrated.
 
 Tables so far, from migration 1: `users`, `spaces`, `space_members`,
-`invitations`. Migration 2 adds the tables of the mini-app contract, which
-nothing writes to yet: `space_apps` (an app added to a space), `app_rows`
-(every mini-app's data), `app_settings`, `app_access`, `app_prefs` and
-`space_invitations`, plus the column `space_members.can_add_apps`.
+`invitations`. Migration 2 adds the tables of the mini-app contract:
+`space_apps` (an app added to a space), `app_rows` (every mini-app's data),
+`app_settings`, `app_access`, `app_prefs` and `space_invitations`, plus the
+column `space_members.can_add_apps`. The server writes `space_apps` and, for
+a member who adds an app, `app_access`; it deletes from all of them when an
+app's data is deleted. Nothing writes rows, settings, switches or
+invitations yet. SQL for `app_rows` and `app_settings` lives in
+`src/apps/store.ts` only.
 
 Rules the database keeps by itself, tested as SQL in
 `src/db/apps-schema.test.ts`:

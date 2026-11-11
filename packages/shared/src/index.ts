@@ -84,8 +84,8 @@ export type Space = z.infer<typeof spaceSchema>;
 
 /**
  * One mini-app as a person sees it in one space. Apps the person has no
- * access to are not listed at all. The list is empty until the server knows
- * about mini-apps (docs/mini-app-contract.md, step 4).
+ * access to are not listed at all, nor are apps that were removed from the
+ * space or whose code the server does not hold.
  */
 export const appSummarySchema = z.object({
   id: z.string(),
@@ -218,12 +218,22 @@ export type MemberPatch = z.infer<typeof memberPatchSchema>;
 
 /**
  * PUT /api/spaces/:spaceId/apps/:appId: add an app to a space, or bring a
- * removed one back with its data. Owners, and members who may add apps.
+ * removed one back with its data. Owners, and members who may add apps; only
+ * an owner may bring a removed app back. Answers 204 with no body.
+ *
+ * An app that is already in the space is left as it is, and that is not an
+ * error, unless `memberAccess` asks for something else than it has: that
+ * answers 409 `conflict`, because access is changed through its own route.
+ * 409 is also the answer for an app whose manifest does not allow this kind
+ * of space, and for a member adding an app that the space has an entry for
+ * which they cannot see.
  */
 export const addAppRequestSchema = z.strictObject({
   /**
    * What the other members of a group get: "none" (only the person adding
-   * it, and the owners), "view" or "edit". Left out: "none".
+   * it, and the owners), "view" or "edit". Left out: "none". It applies when
+   * the app is added and when it is brought back, where access starts
+   * afresh: exceptions made for single members before the removal are gone.
    */
   memberAccess: memberAccessSchema.optional(),
 });
@@ -231,11 +241,12 @@ export type AddAppRequest = z.infer<typeof addAppRequestSchema>;
 
 /**
  * DELETE /api/spaces/:spaceId/apps/:appId/data. Owners only, and only for an
- * app that was removed or whose code is gone. `confirm` is the app's ID,
- * typed by the person.
+ * app that was removed or whose code is gone; for one still in use the
+ * answer is 409 `conflict`. `confirm` is the app's ID, typed by the person.
+ * Answers 204 with no body.
  *
  * DELETE /api/spaces/:spaceId/apps/:appId, which removes the app and keeps
- * its data, has no body.
+ * its data, has no body. Owners only.
  */
 export const deleteAppDataRequestSchema = z.strictObject({ confirm: z.string() });
 export type DeleteAppDataRequest = z.infer<typeof deleteAppDataRequestSchema>;

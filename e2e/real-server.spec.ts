@@ -2,7 +2,8 @@
  * The web app against the real server (see playwright.config.ts for how it is started).
  * Everything else in this folder answers /api itself; these few tests check that
  * the two halves really fit: the session, saving preferences, the security
- * headers the server sends, and the screen for someone who was not invited.
+ * headers the server sends, the routes for apps as the built server answers
+ * them, and the screen for someone who was not invited.
  */
 import { expect, test, type Page } from "@playwright/test";
 import { GUEST_URL, OWNER_EMAIL, SERVER_VERSION } from "./servers.ts";
@@ -79,6 +80,24 @@ test("someone who was never invited gets the not-a-member screen", async ({ page
   expect((await session).status()).toBe(403);
   await expect(page.getByRole("heading", { level: 1, name: "You are not a member yet" })).toBeVisible();
   await expect(page.getByRole("navigation")).toHaveCount(0);
+});
+
+test("the built server answers the routes for apps in a space, and holds no apps yet", async ({ request }) => {
+  const session = (await (await request.get("/api/session")).json()) as { spaces: { id: string; kind: string }[] };
+  const personal = session.spaces.find((space) => space.kind === "personal");
+  expect(personal).toBeDefined();
+  const address = `/api/spaces/${personal?.id}/apps/no-such-app`;
+
+  // The route is there: it reads the request before it looks for the app.
+  const malformed = await request.put(address, { data: { memberAccess: "admin" } });
+  expect(malformed.status()).toBe(400);
+  expect(await malformed.json()).toMatchObject({ error: { code: "invalid_request" } });
+
+  // The server holds no app of this name, so there is nothing to add or to remove.
+  for (const response of [await request.put(address, { data: {} }), await request.delete(address)]) {
+    expect(response.status()).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: "not_found" } });
+  }
 });
 
 test.describe("installed", () => {

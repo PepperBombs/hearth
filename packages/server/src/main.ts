@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { createApp } from "./app";
+import { AppRegistryError, createRegistry, type BundledApp } from "./apps/registry";
 import { ConfigError, isLoopbackHost, loadConfig, type Config } from "./config";
 import { migrate, openDatabase } from "./db/database";
 
@@ -15,13 +16,36 @@ function readConfig(): Config {
   }
 }
 
+// The mini-apps this build holds. The build will write this list from the
+// apps folders it was given (docs/mini-app-contract.md, section A7); until
+// that exists a running server holds none, and only tests pass apps in.
+const apps: readonly BundledApp[] = [];
+
+/**
+ * Stops the process when a bundled app is not valid, so that the deploy's
+ * trial of a new release fails and the old release keeps running. It runs
+ * before the database is opened: a build with a bad app changes nothing.
+ */
+function checkApps(): void {
+  try {
+    createRegistry(apps);
+  } catch (error) {
+    if (error instanceof AppRegistryError) {
+      console.error(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
 const config = readConfig();
+checkApps();
 const db = openDatabase(config.dbPath);
 for (const migration of migrate(db)) {
   console.log(`Applied database migration ${migration.id} (${migration.name}).`);
 }
 
-const app = createApp({ config, db });
+const app = createApp({ config, db, apps });
 
 const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info) => {
   const host = info.family === "IPv6" ? `[${info.address}]` : info.address;
