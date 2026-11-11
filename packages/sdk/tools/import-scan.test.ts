@@ -109,6 +109,22 @@ describe("scanApp: what is refused", () => {
     ]);
   });
 
+  it("refuses the app's own files where the scan does not read: packages and whatever is hidden", () => {
+    const dir = app({
+      "widget.tsx":
+        'import pad from "./node_modules/left-pad/index.js";\nimport cache from "./.cache/data";\nimport type { Secret } from "./parts/.secret";\nexport default () => [pad, cache] as Secret[];\n',
+      // None of these is read, so none of them is reported itself.
+      "node_modules/left-pad/index.js": 'import fs from "node:fs";\nexport default fs;\n',
+      ".cache/data.ts": 'import fs from "node:fs";\nexport default fs;\n',
+      "parts/.secret.ts": 'import fs from "node:fs";\nexport type Secret = typeof fs;\n',
+    });
+    expect(refused(dir)).toEqual([
+      'widget.tsx:1: "./node_modules/left-pad/index.js" is in a node_modules folder. A mini-app has no packages of its own: it uses only the SDK.',
+      'widget.tsx:2: "./.cache/data" is hidden (".cache" starts with a dot), and the build does not check hidden files. Keep the app\'s code in plain files and folders.',
+      'widget.tsx:3: "./parts/.secret" is hidden (".secret" starts with a dot), and the build does not check hidden files. Keep the app\'s code in plain files and folders.',
+    ]);
+  });
+
   it("refuses the server file imported as a value by the widget or the page", () => {
     const plain = app({ "widget.tsx": 'import server from "./server";\nexport default () => server;\n' });
     expect(refused(plain)).toEqual([
@@ -121,6 +137,10 @@ describe("scanApp: what is refused", () => {
 
     const lazy = app({ "widget.tsx": 'export default () => import("./server");\n' });
     expect(refused(lazy)).toEqual([expect.stringMatching(/^widget\.tsx:1: "\.\/server" must be imported with "import type"/)]);
+
+    // What a bundler lets follow an address does not hide which file it is.
+    const asText = app({ "widget.tsx": 'import source from "./server?raw";\nexport default () => source;\n' });
+    expect(refused(asText)).toEqual([expect.stringMatching(/^widget\.tsx:1: "\.\/server\?raw" must be imported with "import type"/)]);
 
     const indirect = app({
       "widget.tsx": 'import { load } from "./parts/load";\nexport default () => load;\n',

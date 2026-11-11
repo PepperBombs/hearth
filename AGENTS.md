@@ -150,7 +150,10 @@ Things that bite:
   the same function, so change the list there and nowhere else. A file's
   side follows from who imports it (`widget.tsx` and `page.tsx`,
   `server.ts`, `manifest.ts` on both); only imports that survive compiling
-  count, and `import { type X }` survives.
+  count, and `import { type X }` survives. The scan skips `node_modules`
+  and names that start with a dot, so it refuses an import that leads into
+  either: one function, `isUnread`, says what is skipped and what is
+  refused.
 - `hearth-apps` ends with status 3 for exactly one thing: a folder of apps
   that declares another SDK version (`hearth.sdk` in its `package.json`)
   than `packages/sdk/package.json` has. The cross-repository CI job of step

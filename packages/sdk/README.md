@@ -233,8 +233,10 @@ React's types come with the SDK.
 | `vitest`, `@hearth/sdk/testing` | Test files (`*.test.ts`). |
 
 Everything else is refused: other packages, Node's built-in modules, the
-framework's packages, another app's files, `require`, and an `import()`
-whose address is not written out. `manifest.ts` is read by the server and
+framework's packages, another app's files, `require`, an `import()` whose
+address is not written out, and a file of the app's own that is hidden (a
+name starting with a dot) or in a `node_modules` folder, because the check
+does not read those. `manifest.ts` is read by the server and
 the browser alike, so it and what it imports keep to `@hearth/sdk`. A file
 both sides import may use neither side's part of the SDK. Write
 `import type server from "./server"`, not `import { type ... }`: only the

@@ -20,7 +20,9 @@
  *
  * Everything else is refused: other packages, Node's built-in modules, the
  * framework's own packages, another mini-app, `require`, and an `import()`
- * whose address is not written out as text.
+ * whose address is not written out as text. So is a file of the app's own
+ * that this scan does not read: one in a `node_modules` folder, or one that
+ * is hidden or in a hidden folder (a name that starts with a dot).
  *
  * Which side a file is on follows from who imports it. `widget.tsx` and
  * `page.tsx` start the browser's side, `server.ts` the server's, and
@@ -77,6 +79,19 @@ const SHARED_ENTRY = "manifest.ts";
 
 const isSourceFile = (/** @type {string} */ name) => SOURCE_EXTENSIONS.some((extension) => name.endsWith(extension));
 
+/**
+ * Files and folders the scan does not read, by name: packages, and whatever
+ * is hidden. An app may not import from them either, or its bundle would
+ * hold code nobody checked.
+ */
+const isUnread = (/** @type {string} */ name) => name === "node_modules" || name.startsWith(".");
+
+/**
+ * A relative address without what a bundler lets follow it: "./server?raw"
+ * and "./server#x" name the file ./server.
+ */
+const withoutQuery = (/** @type {string} */ source) => source.replace(/[?#].*$/, "");
+
 /** Whether `target` is `folder` or lies inside it. */
 function isInside(/** @type {string} */ folder, /** @type {string} */ target) {
   const relative = path.relative(folder, target);
@@ -103,7 +118,7 @@ function listSourceFiles(appDir) {
   }
   const walk = (/** @type {string} */ dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      if (isUnread(entry.name)) continue;
       const full = path.join(dir, entry.name);
       if (entry.isSymbolicLink()) {
         // A link is followed by every tool that reads the app, so one that
@@ -179,7 +194,7 @@ function importsOf(file, text) {
  * @param {Set<string>} files The app's source files.
  */
 function resolveRelative(from, source, files) {
-  const base = path.resolve(path.dirname(from), source);
+  const base = path.resolve(path.dirname(from), withoutQuery(source));
   const candidates = [base];
   // "./items.js" may name items.ts, as TypeScript allows.
   const asWritten = /\.([cm]?)jsx?$/.exec(base);
@@ -280,9 +295,19 @@ export function scanApp(appDir, options = {}) {
       }
 
       if (isRelative(source)) {
-        const target = path.resolve(path.dirname(file), source);
+        const target = path.resolve(path.dirname(file), withoutQuery(source));
         if (!isInside(root, target)) {
           report(site, `"${source}" is a file outside this mini-app's folder. A mini-app may only import its own files and the SDK.`);
+          continue;
+        }
+        const unread = path.relative(root, target).split(path.sep).find(isUnread);
+        if (unread !== undefined) {
+          report(
+            site,
+            unread === "node_modules"
+              ? `"${source}" is in a node_modules folder. A mini-app has no packages of its own: it uses only the SDK.`
+              : `"${source}" is hidden ("${unread}" starts with a dot), and the build does not check hidden files. Keep the app's code in plain files and folders.`,
+          );
           continue;
         }
         if (site.typeOnly || isTest(file)) continue;

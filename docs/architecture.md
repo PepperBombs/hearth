@@ -85,7 +85,8 @@ writes nothing then:
   and `react`; its `server.ts`, and the files only that imports, also
   `@hearth/sdk/server`. The widget and the page may see the server file's
   types (`import type`) and nothing else of it, so that server code never
-  reaches a browser. No comment switches this off.
+  reaches a browser. The scan does not read hidden files or `node_modules`
+  folders, so an app may not import from them. No comment switches this off.
 
 The same scan is an ESLint rule (`hearth/mini-app-imports`, from
 `@hearth/sdk/eslint`), together with a ban on `fetch`, `process`,
