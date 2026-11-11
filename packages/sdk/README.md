@@ -351,6 +351,13 @@ repository declares the version it was written for as a caret range, and
 below 1.0, any breaking change to the SDK's types, to a kit component's props,
 to a token class name or to the manifest schema raises the minor version.
 
+A breaking change therefore goes out in two merges: raise the version here
+and merge, then merge the matching change of the mini-apps. In between, the
+server's deploy keeps the release it runs (status 3 stops the build, and
+those commits are not built again), and CI's job that builds this
+repository with `main` of `hearth-stones` passes with a notice. A change
+that breaks the mini-apps without raising the version fails that job.
+
 ## Commands
 
 ```sh

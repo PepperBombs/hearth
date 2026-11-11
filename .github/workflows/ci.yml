@@ -1,4 +1,6 @@
-# Checks every pull request and every push to main.
+# Checks every pull request and every push to main: the framework by itself
+# (check), end to end with the sample mini-apps (e2e), and with the mini-apps
+# of hearth-stones, as the server would build the two (mini-apps).
 #
 # Rules for this file, because the repository is public:
 #   - GitHub-hosted runners only. Never "self-hosted": a pull request from a
@@ -101,3 +103,82 @@ jobs:
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+  # This commit with main of hearth-stones: the pair the server builds once
+  # this commit is on main. The two are checked out side by side, as on the
+  # server, because hearth-stones links the SDK as ../hearth/packages/sdk.
+  # See docs/mini-app-contract.md, section A7, "CI".
+  mini-apps:
+    name: Build with the mini-apps of hearth-stones
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: hearth
+          persist-credentials: false
+
+      - name: Check out main of hearth-stones beside it
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/hearth-stones
+          ref: main
+          path: hearth-stones
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: hearth/package.json
+
+      - name: Install Node and restore the pnpm cache
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: hearth/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: hearth
+        run: pnpm install --frozen-lockfile
+
+      # As the deploy does it: the mini-apps' lockfile holds nothing but the
+      # link to the SDK, so the install needs no network.
+      - name: Link the mini-apps to this SDK
+        working-directory: hearth-stones
+        run: |
+          if [ -f package.json ]; then
+            pnpm install --frozen-lockfile --offline
+          else
+            echo "hearth-stones has no package.json yet: it holds no mini-apps."
+          fi
+
+      # hearth-apps ends with status 3 for one thing only: mini-apps written
+      # for another version of the SDK. That is expected after this
+      # repository raises the version and until hearth-stones follows; the
+      # server keeps the release it runs meanwhile. Any other failure means
+      # that a change here broke the mini-apps without raising the version.
+      - name: Check the mini-apps against this SDK
+        id: apps
+        working-directory: hearth
+        env:
+          HEARTH_APPS_DIR: ../hearth-stones
+        run: |
+          status=0
+          node packages/sdk/bin/hearth-apps.mjs check || status=$?
+          if [ "$status" -eq 3 ]; then
+            echo "::notice title=Mini-apps not built::main of hearth-stones was written for another version of the SDK than this commit holds (the lines above name both). Merge the matching change into hearth-stones after this one; until then the server keeps the release it runs."
+            exit 0
+          fi
+          if [ "$status" -eq 0 ]; then
+            echo "fit=true" >>"$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+
+      - name: Build with them
+        if: ${{ steps.apps.outputs.fit == 'true' }}
+        working-directory: hearth
+        env:
+          HEARTH_APPS_DIR: ../hearth-stones
+        run: pnpm build

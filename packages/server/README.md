@@ -13,7 +13,8 @@ people added to them or invited, and their owners decide who can use each
 app (see "Groups and members"). Which apps a server holds is decided when it
 is built (`HEARTH_APPS_DIR`, read by `pnpm build` and `pnpm dev`, not by the
 running server); built without it, a server holds none and its session lists
-`apps: []`.
+`apps: []`. The deploy script builds each release with the mini-apps of
+`hearth-stones` checked out beside it (`docs/self-hosting.md`).
 
 ## Run it in development
 
@@ -44,13 +45,22 @@ another address, for example `HEARTH_DEV_USER=guest@example.com`.
 ## Run it for real
 
 ```sh
-pnpm build        # at the repository root: shared, then web, then server
+# At the repository root: the list of mini-apps, then shared, web and server.
+# Without HEARTH_APPS_DIR the build holds no mini-apps.
+HEARTH_APPS_DIR=../hearth-stones pnpm build
 HEARTH_CONFIG=/path/to/hearth.json pnpm start
 ```
 
 `pnpm start` runs `node dist/main.js` in this package. The server listens on
 `127.0.0.1` and expects Cloudflare Access (through a tunnel on the same
 machine) in front of it. It stops cleanly on `SIGINT` and `SIGTERM`.
+
+On a server, `deploy/hearth-deploy.sh` does this for each release: it links
+the release's copy of `hearth-stones` to the release's SDK
+(`pnpm install --frozen-lockfile --offline` there), builds with
+`HEARTH_APPS_DIR` naming that copy, tries the result on a spare port and
+then switches systemd's service to it. Mini-apps written for another SDK
+version stop the build with status 3, and the release that runs stays.
 
 ## Settings
 

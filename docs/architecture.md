@@ -27,8 +27,9 @@ moves it with its data to another space or removes it; a dialog drawn from
 the manifest changes an app's settings (see "The Apps page and the settings
 dialog"). In Settings the server's owner creates groups, and the owners of a
 group add and invite people and decide who can use each app (see "Groups,
-people and access"). The deploy does not tell its build about any folder
-yet, so a deployed server holds no apps. The scheduler does not exist.
+people and access"). The deploy builds every release with the mini-apps of
+`hearth-stones` as they are at that moment (see "Deployment"). The scheduler
+does not exist.
 The design, and how far the build has come, is in
 [mini-app-contract.md](mini-app-contract.md).
 
@@ -67,7 +68,9 @@ three files that are not in Git:
 
 With no folder named, a folder missing or a folder without apps, the three
 say "no apps" and the framework builds alone. The running server reads no
-apps folder: what a release holds was decided when it was built.
+apps folder: what a release holds was decided when it was built. On the
+server, the deploy names the copy of `hearth-stones` that lies beside the
+framework in each release.
 
 Before it writes anything, sync refuses what must not be built in, and
 writes nothing then:
@@ -404,19 +407,37 @@ on the server. The database file and secrets live in none of them.
 
 A timer on the server runs `deploy/hearth-deploy.sh` every minute. It fetches
 `main` of the framework and the mini-apps, and only when something changed
-builds a fresh release, tries it on a spare port against a copy of the
-database, switches a `current` link to it and restarts the service. If the
-build or the trial fails, the old release keeps running untouched. If the new
-release fails as the live service, the script goes back to the old release
-and puts the database back as it was just before the switch, because an older
-build refuses a database that a newer build has migrated. There is no
-self-hosted GitHub Actions runner, because the repositories are public. See
+builds a fresh release: both repositories at their new commits, side by side
+in a folder of their own. The mini-apps are linked to the SDK of that
+release with an offline install, since their lockfile holds nothing but that
+link, and the framework is built with them in. The script then tries the
+release on a spare port against a copy of the database, switches a `current`
+link to it and restarts the service. If the build or the trial fails, the
+old release keeps running untouched. If the new release fails as the live
+service, the script goes back to the old release and puts the database back
+as it was just before the switch, because an older build refuses a database
+that a newer build has migrated. There is no self-hosted GitHub Actions
+runner, because the repositories are public. See
 [self-hosting.md](self-hosting.md).
+
+Mini-apps written for another version of the SDK than the framework holds
+stop the build with status 3 (see "How mini-apps get into a build"). The
+release that runs stays, those commits are not built again, and the next
+commit of either repository is built at once. So a change that breaks the
+SDK goes out in two merges: raise the SDK's version here, then merge the
+matching change in `hearth-stones`; in between the server keeps the release
+it runs.
 
 ## Checks
 
 `pnpm check` runs type checking, lint and unit tests; `pnpm e2e` runs the
-end-to-end tests. CI runs all of them on GitHub's own runners.
+end-to-end tests. CI runs all of them on GitHub's own runners. A third job
+in CI builds every change with `main` of `hearth-stones` checked out beside
+it, as the server would build the two: it links the mini-apps offline, runs
+`hearth-apps check` on them and builds. Mini-apps written for another SDK
+version pass with a notice, since that is expected between raising the
+version here and the matching change there; any other failure means a change
+here broke them without raising the version.
 
 Type checking covers the four packages, the fixture apps and, with its own
 `tsconfig.json`, the `e2e` folder and `playwright.config.ts`. The SDK's types are themselves
@@ -446,7 +467,9 @@ add one.
 `pnpm test` also runs `deploy/tests/deploy.test.sh`, which drives the real
 deploy script through a failed trial, a failed switch with the database put
 back, and a restart that cannot be confirmed, using stand-ins for git, pnpm
-and systemctl.
+and systemctl. It also builds mini-apps in, and turns down mini-apps that
+cannot be linked and mini-apps written for another SDK version: the made-up
+commits carry the real `hearth-apps sync`, so that check is the real one.
 
 TypeScript is held at version 6 on purpose. The lint tooling
 (`typescript-eslint`) does not yet support TypeScript 7; if TypeScript is

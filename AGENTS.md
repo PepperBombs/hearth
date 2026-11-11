@@ -80,8 +80,12 @@ drawn from a manifest; step 10, groups, members and access: creating
 and renaming a group, adding, inviting, changing and removing people,
 invitations turned into membership on arrival, the policy of who may create
 groups and invite, the owners' list, the access route, and a card for each
-group in Settings with the member-by-app table; and step 11, moving an app
-with its data to another space: the route and the dialog on the Apps page.
+group in Settings with the member-by-app table; step 11, moving an app
+with its data to another space: the route and the dialog on the Apps page;
+and step 12, deploy and CI: the deploy links the mini-apps to the SDK of
+their release, offline, and builds them in, keeping the running release when
+they were written for another SDK version, and CI builds every change with
+`main` of `hearth-stones`.
 
 ## Layout and commands
 
@@ -93,7 +97,8 @@ with its data to another space: the route and the dialog on the Apps page.
 | `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file, a widget and a page; `feed` a manifest and a widget, no server file. |
 | `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card, the avatar and `LinkedText` in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes and settings, and adding, removing, moving, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, moving, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page, with the dialogs that add, move and remove an app. `src/groups` is the groups' cards in Settings: `groups.tsx` (the cards, creating, renaming, leaving), `people.tsx` (the people, adding, the dialog for one person, invitations), `access-table.tsx` (the member-by-app table), `api.ts` and `queries.ts`. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). |
-| `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
+| `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Each release is built with the mini-apps of `APPS_REPO` at the same moment, copied in beside the framework and linked to its SDK. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
+| `.github/workflows` | `ci.yml`: the framework by itself (`check`), end to end with the sample apps (`e2e`), and with `main` of `hearth-stones` checked out beside it (`mini-apps`). |
 | `docs` | `architecture.md`, `self-hosting.md` and `mini-app-contract.md` (the agreed design for mini-apps and its build plan). |
 
 Commands, from the repository root (Node 22, pnpm 10):
@@ -131,8 +136,11 @@ Things that bite:
 - Which mini-apps a server holds is decided when it is built, by
   `HEARTH_APPS_DIR` at that moment: one folder, or several separated like
   `PATH`, a relative one read from the root of this repository. The running
-  server reads no apps folder. A plain `pnpm build` holds none, and so does
-  a deployed release until the deploy script passes the variable (step 12).
+  server reads no apps folder. A plain `pnpm build` holds none. The deploy
+  script passes the release's own copy of the mini-apps
+  (`releases/<time>/hearth-stones`, from `APPS_REPO`), after linking it to
+  the release's SDK with `pnpm install --frozen-lockfile --offline`; it logs
+  what the build holds from sync's line "this build holds ...".
 - `hearth-apps sync` writes three files that are not in Git:
   `packages/server/src/apps/registry.generated.js`,
   `packages/web/src/apps/registry.generated.js` and
@@ -235,8 +243,19 @@ Things that bite:
   refused.
 - `hearth-apps` ends with status 3 for exactly one thing: a folder of apps
   that declares another SDK version (`hearth.sdk` in its `package.json`)
-  than `packages/sdk/package.json` has. The cross-repository CI job of step
-  12 will read that status. Every other problem is status 1.
+  than `packages/sdk/package.json` has. Every other problem is status 1.
+  Two places read it. The deploy script reads it from `pnpm build`, which
+  starts with `pnpm apps:sync &&` and so ends with sync's status (pnpm
+  passes it on; a test in `packages/sdk/tools/cli.test.ts` checks both): it
+  keeps the running release and does not build those commits again (stage
+  `sdk` in `state/failed`). The `mini-apps` job in CI reads it from
+  `hearth-apps check` and passes with a notice. Keep `build` starting with
+  sync, and keep the status.
+- The deploy tests run the real `hearth-apps sync`: each made-up framework
+  commit in `deploy/tests/deploy.test.sh` carries a copy of
+  `packages/sdk/bin` and `packages/sdk/tools/*.mjs` with an SDK version of
+  its own, and the pnpm stand-in's `build` runs it. In the mini-apps folder
+  the stand-in makes the links a `link:` dependency asks for, as pnpm does.
 - A test that runs `hearth-apps` or `sync()` passes `--out` (or `out`) with
   a temporary folder, as `packages/sdk/tools/cli.test.ts` does. Without it
   the test rewrites this checkout's generated files. The mini-apps

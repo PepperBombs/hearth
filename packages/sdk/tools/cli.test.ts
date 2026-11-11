@@ -67,6 +67,20 @@ describe("hearth-apps sync", () => {
     expect(wroteNothing(run)).toBe(true);
   });
 
+  it("keeps status 3 through pnpm build, where the deploy reads it", () => {
+    // deploy/hearth-deploy.sh tells a version that does not fit from every
+    // other failure by the status of `pnpm build`, whose first step is sync.
+    const scripts = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).scripts;
+    expect(scripts.build).toMatch(/^pnpm apps:sync && /);
+
+    const out = tempDir();
+    const env = { ...process.env, HEARTH_APPS_DIR: makeRepo({ sdk: "^0.9.0", fixtures: ["feed"] }) };
+    const result = spawnSync("pnpm", ["apps:sync", "--out", out], { cwd: ROOT, env, encoding: "utf8" });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(3);
+    expect(fs.readdirSync(out)).toEqual([]);
+  });
+
   it("ends with status 1 for a foreign import", () => {
     const repo = makeRepo({ fixtures: ["feed"] });
     write(repo, { "feed/widget.tsx": 'import dayjs from "dayjs";\nexport default function Widget() {\n  return dayjs;\n}\n' });
