@@ -31,8 +31,9 @@ export type Localized = { en: string; zh: string };
 export const APP_ID_PATTERN = /^[a-z][a-z0-9-]{1,30}$/;
 
 /**
- * Icons an app may name. The web app draws each with the Lucide icon of the
- * same name; adding one here without drawing it there is a type error.
+ * Icons an app may name, and that `Icon` in `@hearth/sdk/web` draws, each
+ * with the Lucide icon of the same name. Adding one here without drawing it
+ * there is a type error.
  */
 export const APP_ICONS = [
   "bookmark",

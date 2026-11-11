@@ -106,8 +106,8 @@ Things that bite:
   database, and puts that copy back if the new release does not come up. A
   migration must therefore work on a copy of the real data in the trial start.
 - Mini-apps do not exist yet. The session lists no apps; pages show empty
-  states. Nothing reads a manifest yet either: the SDK is used only for its
-  icon and colour names.
+  states. Nothing reads a manifest yet either: the shell uses the SDK only for
+  its icon and colour names and its UI kit.
 - `SDK_VERSION` in `packages/sdk/src/index.ts` must equal `version` in
   `packages/sdk/package.json`; a unit test fails otherwise. Below 1.0, a
   breaking change to the SDK's types or to the manifest schema raises the
