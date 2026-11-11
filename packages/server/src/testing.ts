@@ -1,5 +1,6 @@
 /** Helpers for tests. Not part of the running server. */
 import checklist from "../../fixture-apps/checklist/manifest";
+import checklistServer from "../../fixture-apps/checklist/server";
 import { createApp, type AppOptions } from "./app";
 import type { BundledApp } from "./apps/registry";
 import type { Identify } from "./auth";
@@ -10,7 +11,7 @@ export const OWNER_EMAIL = "owner@example.com";
 
 /** The framework's own sample apps (packages/fixture-apps), as a build would hand them over. */
 export const FIXTURE_APPS: readonly BundledApp[] = [
-  { id: "checklist", manifest: checklist, hasPage: false },
+  { id: "checklist", manifest: checklist, hasPage: false, server: checklistServer },
 ];
 
 export function testConfig(overrides: Partial<Config> = {}): Config {

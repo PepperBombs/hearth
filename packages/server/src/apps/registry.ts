@@ -11,6 +11,7 @@
  */
 import type { Manifest } from "@hearth/sdk";
 import { manifestSchema } from "@hearth/sdk/manifest-schema";
+import { checkServer, type ServerDefinition } from "./definition";
 
 /** One app as the build hands it to the server. */
 export type BundledApp = {
@@ -20,16 +21,29 @@ export type BundledApp = {
   manifest: Manifest;
   /** Whether the app has a `page.tsx`, and so a page of its own besides its dashboard card. */
   hasPage: boolean;
-  /** The default export of the app's `server.ts`, when it has one. Not used yet. */
+  /**
+   * The default export of the app's `server.ts`, when it has one. Untyped
+   * here, because it comes from code outside the framework: createRegistry
+   * checks it.
+   */
   server?: unknown;
+};
+
+/** An app the registry accepted: its manifest and its server file have been checked. */
+export type RegisteredApp = {
+  id: string;
+  manifest: Manifest;
+  hasPage: boolean;
+  /** The app's collections, queries and mutations. Absent for an app that keeps no data. */
+  server?: ServerDefinition;
 };
 
 export type Registry = {
   /** The app with this ID, or undefined when the server holds no code for it. */
-  get(appId: string): BundledApp | undefined;
+  get(appId: string): RegisteredApp | undefined;
   has(appId: string): boolean;
   /** Every app, in the order given. */
-  list(): readonly BundledApp[];
+  list(): readonly RegisteredApp[];
 };
 
 /** Thrown when a bundled app cannot be used. The message is meant to be shown as is. */
@@ -40,7 +54,7 @@ export class AppRegistryError extends Error {
       [
         "Hearth cannot start: a mini-app in this build is not valid.",
         ...problems.map((problem) => `  - ${problem}`),
-        "Fix the app's manifest.ts, or take its folder out, and build again.",
+        "Fix the app's manifest.ts or server.ts, or take its folder out, and build again.",
       ].join("\n"),
     );
     this.name = "AppRegistryError";
@@ -49,14 +63,15 @@ export class AppRegistryError extends Error {
 }
 
 /**
- * Checks every bundled app and returns the registry. Throws AppRegistryError
- * naming everything that is wrong, so that a server with a bad app never
- * starts: the deploy tries a new release before switching to it, and keeps
- * the old one when the trial fails.
+ * Checks every bundled app, its manifest and what its server file exports,
+ * and returns the registry. Throws AppRegistryError naming everything that
+ * is wrong, so that a server with a bad app never starts: the deploy tries a
+ * new release before switching to it, and keeps the old one when the trial
+ * fails.
  */
 export function createRegistry(apps: readonly BundledApp[]): Registry {
   const problems: string[] = [];
-  const byId = new Map<string, BundledApp>();
+  const byId = new Map<string, RegisteredApp>();
 
   apps.forEach((app, index) => {
     const label = typeof app.id === "string" && app.id !== "" ? `"${app.id}"` : `at position ${index}`;
@@ -79,7 +94,16 @@ export function createRegistry(apps: readonly BundledApp[]): Registry {
       problems.push(`App ${label} is in this build twice. App IDs must be unique across all apps folders.`);
       return;
     }
-    byId.set(manifest.id, { ...app, manifest });
+    const registered: RegisteredApp = { id: app.id, manifest, hasPage: app.hasPage };
+    if (app.server !== undefined) {
+      const faults = checkServer(app.server, manifest);
+      if (faults.length > 0) {
+        problems.push(...faults.map((fault) => `App ${label}: ${fault}`));
+        return;
+      }
+      registered.server = app.server as ServerDefinition;
+    }
+    byId.set(manifest.id, registered);
   });
 
   if (problems.length > 0) throw new AppRegistryError(problems);

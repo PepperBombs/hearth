@@ -27,6 +27,9 @@ export const SDK_VERSION: string = "0.1.0";
 /** Text in every supported language. Content typed by users is never one of these. */
 export type Localized = { en: string; zh: string };
 
+/** A language the interface is written in. */
+export type Locale = keyof Localized;
+
 /** What an app's ID, and therefore its folder name, must look like. */
 export const APP_ID_PATTERN = /^[a-z][a-z0-9-]{1,30}$/;
 
@@ -143,11 +146,12 @@ export function defineApp<
 }
 
 /**
- * The manifest behind `A`. Today `A` is always a manifest. When the SDK gains
- * `defineServer`, an app's server joins here, so that `SettingsOf` and the
- * message types below also accept `typeof server`.
+ * The manifest behind `A`, which is a manifest or what an app's `server.ts`
+ * exports (`defineServer(manifest, ...).routes(...)` in `@hearth/sdk/server`,
+ * which carries its manifest). `SettingsOf` and the message types below
+ * therefore take `typeof manifest` and `typeof server` alike.
  */
-type ManifestOf<A> = A;
+type ManifestOf<A> = A extends { readonly manifest: infer M; readonly routes: unknown } ? M : A;
 
 type SettingValue<F> = F extends { type: "text" }
   ? string

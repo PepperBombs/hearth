@@ -1,14 +1,16 @@
 /**
  * The routes for one app in one space (docs/mini-app-contract.md, section
- * A8). So far: add or bring back, remove, and delete the data. The request
- * shapes are in `@hearth/shared`. None of them answers with a body: the web
+ * A8). So far: add or bring back, remove, delete the data, and the app's
+ * own queries and mutations. The request shapes are in `@hearth/shared`.
+ * Only a query or mutation answers with a body; after the others the web
  * app reloads the session to see what changed.
  */
-import { addAppRequestSchema, deleteAppDataRequestSchema } from "@hearth/shared";
+import { addAppRequestSchema, appCallRequestSchema, deleteAppDataRequestSchema } from "@hearth/shared";
 import type { Hono } from "hono";
 import type { Db } from "../db/database";
 import { readBody } from "../http/body";
 import type { Env, RequireMember } from "../http/env";
+import { callApp } from "./calls";
 import { addApp, deleteAppData, removeApp } from "./installs";
 import type { Registry } from "./registry";
 
@@ -40,4 +42,17 @@ export function registerAppRoutes(app: Hono<Env>, options: AppRoutesOptions): vo
     deleteAppData(db, registry, { userId: c.get("user").id, spaceId, appId, confirm });
     return c.body(null, 204);
   });
+
+  // An app's own routes: a query reads and needs view, a mutation changes
+  // data and needs edit. Both are POST, because both carry their input in
+  // the body. The kind is part of the address, so that a route which
+  // changes data can never be reached as one that only reads.
+  for (const [segment, kind] of [["q", "query"], ["m", "mutation"]] as const) {
+    app.post(`/api/spaces/:spaceId/apps/:appId/${segment}/:name`, requireMember, async (c) => {
+      const { input } = await readBody(c, appCallRequestSchema);
+      const { spaceId, appId, name } = c.req.param();
+      const answer = callApp(db, registry, { user: c.get("user"), spaceId, appId, kind, name, input });
+      return c.body(answer, 200, { "content-type": "application/json" });
+    });
+  }
 }

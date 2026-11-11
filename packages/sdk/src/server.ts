@@ -1,0 +1,271 @@
+/**
+ * @hearth/sdk/server: what a mini-app's `server.ts` is written with.
+ *
+ * An app's server file says which collections of rows the app keeps and
+ * which queries and mutations it answers:
+ *
+ * ```ts
+ * import { defineServer, z } from "@hearth/sdk/server";
+ * import manifest from "./manifest";
+ *
+ * const app = defineServer(manifest, {
+ *   items: z.object({ name: z.string().trim().min(1).max(80), done: z.boolean().default(false) }),
+ * });
+ *
+ * export default app.routes({
+ *   list: app.query({ description: "Lists every item, oldest first." }, (ctx) => ctx.db.items.list()),
+ *   add: app.mutation(
+ *     { description: "Adds an item to the list.", input: z.object({ name: z.string() }) },
+ *     (ctx, input) => ctx.db.items.insert({ ...input, done: false }),
+ *   ),
+ * });
+ * ```
+ *
+ * This file holds types, one error class and functions that only package up
+ * what they are given. The framework does the work (packages/server/src/apps):
+ * it decides who may call a route, opens the transaction and hands the
+ * handler a `ctx` whose `db` reaches the rows of this app in this space and
+ * no others. A mini-app never sees a database handle or a space ID.
+ *
+ * The design is docs/mini-app-contract.md, section A3, with the owner's
+ * decision 7 (every route says what it does).
+ */
+import { z } from "zod";
+import type { Locale, Manifest, SettingsOf, SpaceKind } from "./index";
+
+/** The one zod that mini-apps use, so that an app declares no dependency of its own. */
+export { z };
+
+/**
+ * A value that survives being sent as JSON. An object may leave a property
+ * undefined; it is then left out, as `JSON.stringify` does.
+ */
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly Json[]
+  | { readonly [key: string]: Json | undefined };
+
+/** The names every row has besides its own fields. A collection may not use them for a field. */
+export const ROW_FIELDS = ["id", "createdBy", "updatedBy", "createdAt", "updatedAt"] as const;
+
+/**
+ * A stored row: the collection's fields, plus what the framework records.
+ * `createdBy` and `updatedBy` are user IDs; the two times are ISO strings.
+ */
+export type Row<T> = T & {
+  id: string;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ListOptions<T> = {
+  /**
+   * Only rows whose fields equal these. A value is text, a number, true,
+   * false or null. A key the collection does not have, a value of another
+   * kind and an undefined value are errors: leave a key out to match all.
+   */
+  where?: Partial<T>;
+  /** Only rows the caller created. */
+  mine?: boolean;
+  /** A field of the collection, or when the row was created or last changed. Default: `createdAt`. */
+  orderBy?: Extract<keyof T, string> | "createdAt" | "updatedAt";
+  /** Last first. Rows that tie are in the order they were inserted, reversed with `desc`. */
+  desc?: boolean;
+  /** At most this many rows. Default 1000; more than 5000 is an error. */
+  limit?: number;
+};
+
+/** What a query may do with a collection: read. All of it is limited to this app in this space. */
+export interface ReadCollection<T> {
+  /** The row with this ID, or null. A row of another space or another app is not found. */
+  get(id: string): Row<T> | null;
+  list(options?: ListOptions<T>): Row<T>[];
+  count(where?: Partial<T>): number;
+}
+
+/** What a mutation may do with a collection: read and write. */
+export interface Collection<T> extends ReadCollection<T> {
+  /**
+   * Stores a row. The value is checked against the collection's schema; one
+   * that does not fit throws `AppError("invalid_request")`, so a route need
+   * not repeat the collection's rules in its input schema.
+   */
+  insert(value: T): Row<T>;
+  /**
+   * Replaces the given top-level fields of a row; a field given as undefined
+   * is left as it is. The result is checked like an insert. An unknown ID
+   * throws `AppError("not_found")`.
+   */
+  update(id: string, patch: Partial<T>): Row<T>;
+  /** Deletes the row with this ID. An unknown ID is not an error. */
+  remove(id: string): void;
+  /** Deletes the rows whose fields equal these, as in `list`, and says how many went. `{}` deletes all. */
+  removeWhere(where: Partial<T>): number;
+}
+
+/** The collections of an app: a zod object schema for each, by name. */
+export type Collections = Record<string, z.ZodObject>;
+
+type BaseCtx<M> = {
+  /** The person the request is from. */
+  readonly user: { readonly id: string; readonly name: string };
+  /** The language that person reads. */
+  readonly locale: Locale;
+  /** The space the app is in. A personal space has an empty name. There is no ID: nothing in the SDK takes one. */
+  readonly space: { readonly kind: SpaceKind; readonly name: string };
+  /** What the caller may do. A mutation only ever runs with "edit". */
+  readonly access: "view" | "edit";
+  /** The space's values, the caller's own values, and defaults where nothing was saved. */
+  readonly settings: SettingsOf<M>;
+  /** When the request arrived. Rows written during it carry this time. */
+  readonly now: Date;
+};
+
+/** What a query's handler receives. Its `db` has no way to write. */
+export type QueryCtx<M, C extends Collections> = BaseCtx<M> & {
+  readonly db: { readonly [K in keyof C]: ReadCollection<z.output<C[K]>> };
+};
+
+/** What a mutation's handler receives. */
+export type MutationCtx<M, C extends Collections> = BaseCtx<M> & {
+  readonly db: { readonly [K in keyof C]: Collection<z.output<C[K]>> };
+};
+
+/**
+ * A route as the framework reads it: mini-apps make these with `app.query`
+ * and `app.mutation` and never look inside.
+ */
+export type RouteDefinition = {
+  readonly kind: "query" | "mutation";
+  /** One English sentence saying what the route does. */
+  readonly description: string;
+  /** Checks what the caller sent. Absent for a route that takes nothing. */
+  readonly input?: z.ZodType;
+  readonly run: (ctx: never, input: never) => unknown;
+};
+
+/**
+ * A query: reads and never changes data. `I` is what a caller sends (`void`
+ * for nothing) and `O` what comes back; `__types` only carries those two for
+ * the type checker and is never set.
+ */
+export type Query<I, O> = RouteDefinition & {
+  readonly kind: "query";
+  readonly __types?: { readonly input: I; readonly output: O };
+};
+
+/** A mutation: changes data, and needs edit access. */
+export type Mutation<I, O> = RouteDefinition & {
+  readonly kind: "mutation";
+  readonly __types?: { readonly input: I; readonly output: O };
+};
+
+/** What a caller sends to a route: `void` when it takes nothing. */
+export type InputOf<R> = R extends { readonly __types?: { readonly input: infer I } } ? I : never;
+/** What a route answers with. */
+export type OutputOf<R> = R extends { readonly __types?: { readonly output: infer O } } ? O : never;
+
+/**
+ * What every route says about itself.
+ *
+ * `description` is one English sentence saying what the route does, written
+ * for a reader who has not seen the app: "Adds an item to the shopping
+ * list." A later assistant picks routes by it, so it is required.
+ */
+export type RouteAbout = { description: string; input?: undefined };
+/** The same for a route that takes input: `input` checks, and may reshape, what the caller sent. */
+export type RouteAboutWithInput<I extends z.ZodType> = { description: string; input: I };
+
+/** What an app's `server.ts` default-exports. Only the framework looks inside. */
+export type AppServer<M, C, R> = {
+  readonly manifest: M;
+  readonly collections: C;
+  readonly routes: R;
+};
+
+/** What `defineServer` returns. The names `job`, `search`, `files`, `exporter` and `upgrades` are reserved. */
+export interface ServerBuilder<M, C extends Collections> {
+  /**
+   * A route that reads. Anyone who can see the app may call it. The handler
+   * must not be `async`: it runs inside one database transaction together
+   * with the check of who is asking, and a handler that returns a promise is
+   * refused. What it returns is sent as JSON.
+   */
+  query<O extends Json>(about: RouteAbout, run: (ctx: QueryCtx<M, C>) => O): Query<void, O>;
+  query<I extends z.ZodType, O extends Json>(
+    about: RouteAboutWithInput<I>,
+    run: (ctx: QueryCtx<M, C>, input: z.output<I>) => O,
+  ): Query<z.input<I>, O>;
+
+  /**
+   * A route that changes data. Only someone with edit access may call it.
+   * Everything it writes is kept, or nothing is: an error thrown by the
+   * handler undoes what it did. The same rule about `async` applies.
+   */
+  mutation<O extends Json | void>(about: RouteAbout, run: (ctx: MutationCtx<M, C>) => O): Mutation<void, O>;
+  mutation<I extends z.ZodType, O extends Json | void>(
+    about: RouteAboutWithInput<I>,
+    run: (ctx: MutationCtx<M, C>, input: z.output<I>) => O,
+  ): Mutation<z.input<I>, O>;
+
+  /**
+   * The app's routes by name. A name is letters, digits and underscores,
+   * starting with a letter. The result is the file's default export.
+   */
+  routes<R extends Record<string, Query<any, any> | Mutation<any, any>>>(routes: R): AppServer<M, C, R>; // eslint-disable-line @typescript-eslint/no-explicit-any -- any input, any output
+}
+
+/**
+ * Starts an app's server file: the manifest, and the app's collections.
+ *
+ * A collection is a zod object schema. Rows are checked against it when
+ * they are written and again when they are read, so:
+ * - give every field added later a `.default()`, or old rows stop being
+ *   readable and the app's queries fail until that is put right;
+ * - the schema must accept what it produces (a transform that cannot be
+ *   applied twice does not belong in a collection);
+ * - field names are plain identifiers, and none is one of ROW_FIELDS.
+ */
+export function defineServer<M extends Manifest, const C extends Collections>(
+  manifest: M,
+  collections: C,
+): ServerBuilder<M, C> {
+  const route =
+    (kind: RouteDefinition["kind"]) =>
+    (about: { description: string; input?: z.ZodType }, run: RouteDefinition["run"]): RouteDefinition => ({
+      kind,
+      description: about.description,
+      ...(about.input === undefined ? {} : { input: about.input }),
+      run,
+    });
+  return {
+    query: route("query"),
+    mutation: route("mutation"),
+    routes: (routes) => ({ manifest, collections, routes }),
+  } as ServerBuilder<M, C>;
+}
+
+/** The ways a handler may turn a request down. Each becomes the HTTP answer of the same name. */
+export const APP_ERROR_CODES = ["invalid_request", "not_found", "conflict"] as const;
+export type AppErrorCode = (typeof APP_ERROR_CODES)[number];
+
+/**
+ * Thrown by a handler to turn a request down: 400 `invalid_request`, 404
+ * `not_found` or 409 `conflict`. Whatever the mutation wrote is undone. The
+ * message is in English, for logs and network traces; it reaches the caller,
+ * so it must not say what the caller may not know. Any other error thrown by
+ * a handler is a fault: it is logged and answered with 500.
+ */
+export class AppError extends Error {
+  readonly code: AppErrorCode;
+  constructor(code: AppErrorCode, message: string) {
+    super(message);
+    this.name = "AppError";
+    this.code = code;
+  }
+}
