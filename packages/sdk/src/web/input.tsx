@@ -1,5 +1,5 @@
 import { useId, type InputHTMLAttributes, type ReactNode } from "react";
-import { cx } from "../../lib/cx";
+import { cx } from "./cx";
 
 /** A single-line text box. On phones it is 44px tall and uses 16px text so iOS does not zoom in. */
 export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {

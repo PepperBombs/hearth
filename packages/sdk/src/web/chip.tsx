@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes } from "react";
-import { cx } from "../../lib/cx";
+import { cx } from "./cx";
 
 /** The chip look as a class string, for links: mark the current one with aria-current="page". */
 export function chipClass(className?: string): string {

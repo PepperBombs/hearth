@@ -1,5 +1,5 @@
 import type { HTMLAttributes } from "react";
-import { cx } from "../../lib/cx";
+import { cx } from "./cx";
 
 /**
  * A small label that marks something, such as the space an app belongs to. Not clickable.

@@ -1,4 +1,4 @@
-import { cx } from "../../lib/cx";
+import { cx } from "./cx";
 
 export type SegmentedOption<T extends string> = {
   value: T;

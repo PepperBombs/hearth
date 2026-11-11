@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes } from "react";
-import { cx } from "../../lib/cx";
+import { cx } from "./cx";
 
 export type SwitchProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onChange" | "role" | "aria-checked"> & {
   checked: boolean;

@@ -1,4 +1,4 @@
-import { cx } from "../../lib/cx";
+import { cx } from "../lib/cx";
 
 /** The first character of a name, upper-cased. Works for Chinese names and for emoji. */
 export function initialOf(name: string): string {

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { cx } from "../../lib/cx";
+import { cx } from "./cx";
 
 export type EmptyStateProps = {
   /** A 20px icon, shown in a soft round badge. */

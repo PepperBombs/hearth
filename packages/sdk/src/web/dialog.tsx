@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, type MouseEvent, type ReactNode } from "react";
-import { cx } from "../../lib/cx";
+import { cx } from "./cx";
 
 export type DialogProps = {
   open: boolean;
