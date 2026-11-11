@@ -17,3 +17,9 @@ data/
 *.log
 playwright-report/
 test-results/
+
+# Written by `hearth-apps sync` before every build and `pnpm dev`: the
+# mini-apps this build holds. Their types (*.generated.d.ts) are in Git.
+packages/server/src/apps/registry.generated.js
+packages/web/src/apps/registry.generated.js
+packages/web/src/apps/sources.generated.css

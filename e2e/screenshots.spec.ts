@@ -5,7 +5,7 @@
  */
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
-import { sessionWithApps, test } from "./fixtures.ts";
+import { FAMILY_SPACE, ownAFamily, sessionWithApps, sessionWithSampleApps, test } from "./fixtures.ts";
 
 /** Animations are run to their end first, so a dialog is never caught half faded in. */
 const shot = (page: Page, path: string) => page.screenshot({ path, animations: "disabled" });
@@ -60,6 +60,48 @@ test.describe("screenshots", () => {
             await page.getByRole("dialog").waitFor();
             await page.getByRole("combobox").fill(locale === "zh" ? "购物" : "gro");
             await shot(page, file("sample-switcher"));
+          });
+
+          test("with the apps this build holds", async ({ page, api }) => {
+            api.setSession(sessionWithSampleApps({ theme, locale }));
+            await page.goto("/");
+            await page.getByTestId("widget-grid").getByRole("checkbox").first().waitFor();
+            await shot(page, file("widgets"));
+            await page.goto(`/apps/${FAMILY_SPACE}/checklist`);
+            await page.getByRole("main").getByRole("checkbox").first().waitFor();
+            await shot(page, file("app-page"));
+            await page.getByRole("banner").getByRole("button", { name: /Checklist|清单/ }).click();
+            await page.getByRole("dialog").getByRole("switch").waitFor();
+            await shot(page, file("app-settings"));
+            await page.keyboard.press("Escape");
+            await page.goto("/apps");
+            await page.getByRole("main").getByRole("switch").first().waitFor();
+            await shot(page, file("apps-manage"));
+            await page.getByRole("main").getByRole("button", { name: /Add an app|添加应用/ }).first().click();
+            await page.getByRole("dialog").getByRole("radio").first().waitFor();
+            await shot(page, file("apps-add"));
+            await page.keyboard.press("Escape");
+            await page.getByRole("main").getByRole("button", { name: /^(Move Feed|移动动态)$/ }).click();
+            await page.getByRole("dialog").getByRole("radio").first().waitFor();
+            await shot(page, file("apps-move"));
+            await page.getByRole("dialog").getByRole("button", { name: /^(Move|移动)$/ }).click();
+            await page.getByRole("main").getByText(/Feed was moved here|动态已移到这里/).waitFor();
+            await shot(page, file("apps-moved"));
+          });
+
+          test("a family in Settings", async ({ page, api }) => {
+            ownAFamily(api, { theme, locale });
+            await page.goto("/settings");
+            const family = page.getByRole("main").getByRole("region", { name: "Family" });
+            await family.getByRole("table").waitFor();
+            await family.screenshot({ path: file("group-card"), animations: "disabled" });
+            await family.getByRole("button", { name: /Add a person|添加成员/ }).click();
+            await page.getByRole("dialog").getByRole("textbox").waitFor();
+            await shot(page, file("group-add"));
+            await page.keyboard.press("Escape");
+            await family.getByRole("button", { name: /Lin Example/ }).click();
+            await page.getByRole("dialog").getByRole("switch").waitFor();
+            await shot(page, file("group-member"));
           });
         });
       }

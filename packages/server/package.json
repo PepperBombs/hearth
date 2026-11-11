@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@hearth/sdk": "workspace:*",
     "@hearth/shared": "workspace:*",
     "@hono/node-server": "^2.1.6",
     "better-sqlite3": "^13.0.3",

@@ -13,6 +13,7 @@
     "icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
+    "@hearth/sdk": "workspace:*",
     "@hearth/shared": "workspace:*",
     "@tanstack/react-query": "^5.107.1",
     "cmdk": "^1.1.1",

@@ -5,6 +5,7 @@ import {
   deleteInvitation,
   findUserByEmail,
   hasInvitation,
+  joinInvitedSpaces,
 } from "./db/people";
 import { normaliseEmail } from "./email";
 
@@ -37,6 +38,10 @@ export function localeFromAcceptLanguage(header: string | null | undefined): Loc
  * if they are the owner or hold an invitation. Returns null for everyone
  * else: they are signed in, but not a member of this server. An address
  * Hearth does not accept (see normaliseEmail) is nobody's.
+ *
+ * Someone created here also joins every group they were invited to while
+ * they were not on the server yet (`space_invitations`), in the same
+ * transaction, with the role each invitation names.
  */
 export function resolveMember(
   db: Db,
@@ -60,6 +65,7 @@ export function resolveMember(
         email,
         locale: localeFromAcceptLanguage(input.acceptLanguage),
       });
+      joinInvitedSpaces(db, user);
       deleteInvitation(db, email);
       return user;
     })

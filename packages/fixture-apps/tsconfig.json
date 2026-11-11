@@ -1,0 +1,1 @@
+{ "extends": "@hearth/sdk/tsconfig.app.json", "include": ["*/**/*.ts", "*/**/*.tsx"] }

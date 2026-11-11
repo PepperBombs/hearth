@@ -1,5 +1,7 @@
 import { serve } from "@hono/node-server";
 import { createApp } from "./app";
+import { AppRegistryError, createRegistry } from "./apps/registry";
+import { apps } from "./apps/registry.generated.js";
 import { ConfigError, isLoopbackHost, loadConfig, type Config } from "./config";
 import { migrate, openDatabase } from "./db/database";
 
@@ -15,13 +17,36 @@ function readConfig(): Config {
   }
 }
 
+// `apps` are the mini-apps this build holds. `hearth-apps sync` wrote the
+// list before the build, from the folders named in HEARTH_APPS_DIR at that
+// moment (docs/mini-app-contract.md, section A7). A running server reads no
+// apps folder: this file is the only one that imports the list.
+
+/**
+ * Stops the process when a bundled app is not valid, so that the deploy's
+ * trial of a new release fails and the old release keeps running. It runs
+ * before the database is opened: a build with a bad app changes nothing.
+ */
+function checkApps(): void {
+  try {
+    createRegistry(apps);
+  } catch (error) {
+    if (error instanceof AppRegistryError) {
+      console.error(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
 const config = readConfig();
+checkApps();
 const db = openDatabase(config.dbPath);
 for (const migration of migrate(db)) {
   console.log(`Applied database migration ${migration.id} (${migration.name}).`);
 }
 
-const app = createApp({ config, db });
+const app = createApp({ config, db, apps });
 
 const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info) => {
   const host = info.family === "IPv6" ? `[${info.address}]` : info.address;

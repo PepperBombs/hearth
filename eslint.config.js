@@ -10,10 +10,10 @@
  * out on purpose: they are slower, and the type checker already runs in
  * `pnpm typecheck`.
  */
-import path from "node:path";
 import js from "@eslint/js";
 import { defineConfig, globalIgnores } from "eslint/config";
 import globals from "globals";
+import { miniAppBoundary } from "./packages/sdk/tools/eslint-boundary.mjs";
 
 const SCRIPTS = ["**/*.{js,mjs,cjs}"];
 const TYPESCRIPT = ["**/*.{ts,tsx,mts,cts}"];
@@ -60,132 +60,20 @@ const tseslint = await loadTypescriptEslint();
 /* -------------------------------------------------------------------------
  * "A mini-app uses only the SDK" (AGENTS.md)
  *
- * Mini-apps do not exist yet. This is where the automated check for that
- * rule lives, ready for the step that adds the mini-app contract:
+ * The check itself belongs to the SDK (packages/sdk/tools/eslint-boundary.mjs),
+ * because every repository of mini-apps needs it: hearth-stones gets it
+ * through "@hearth/sdk/eslint". It says what a file of an app may import,
+ * which globals it may not touch, and that no comment switches a rule off.
  *
- *  - In this repository it applies to every folder directly inside one of
- *    MINI_APP_ROOTS (for example the template app). Nothing is there today,
- *    so the rule matches no file. Change MINI_APP_ROOTS when the real
- *    location is decided.
- *  - The hearth-stones repository lints itself. Its eslint.config.js imports
- *    `miniAppBoundary` from this file (the two repositories are checked out
- *    side by side) and calls it with the folder that holds its apps:
+ * In this repository it applies to every folder directly inside one of
+ * MINI_APP_ROOTS: the framework's own sample apps, which tests run against
+ * and `hearth-apps new` copies the template from.
  *
- *        import { miniAppBoundary } from "../hearth/eslint.config.js";
- *        export default [...miniAppBoundary({ roots: ["."] })];
- *
- *    Once the SDK is a package, this block should move into it so that
- *    hearth-stones imports it from "@hearth/sdk" instead of by path.
- *
- * Inside a mini-app (one folder directly inside a root) an import may name:
- *  - a file inside the same mini-app folder, by relative path;
- *  - a package listed in `allow`, by default only "@hearth/sdk" and anything
- *    below it ("@hearth/sdk/ui").
- * Everything else is an error: framework packages, files outside the folder
- * (another mini-app, the framework's source), Node's built-in modules, and
- * any other package. If the mini-app contract decides that mini-apps may
- * import something else directly, add it to MINI_APP_ALLOWED_PACKAGES.
+ * It is imported by path, not as "@hearth/sdk/eslint": that entry point is a
+ * whole configuration and loads typescript-eslint, which this file must be
+ * able to do without (see above).
  * ---------------------------------------------------------------------- */
-const MINI_APP_ROOTS = ["apps"];
-const MINI_APP_ALLOWED_PACKAGES = ["@hearth/sdk"];
-
-/** The folder of the mini-app that `file` belongs to, or null. */
-function miniAppFolder(file, roots) {
-  for (const root of roots) {
-    const inside = path.relative(root, file);
-    if (inside.startsWith("..") || path.isAbsolute(inside)) continue;
-    const parts = inside.split(path.sep);
-    if (parts.length >= 2 && parts[0]) return path.join(root, parts[0]);
-  }
-  return null;
-}
-
-/** @type {import("eslint").Rule.RuleModule} */
-const miniAppImportsRule = {
-  meta: {
-    type: "problem",
-    docs: { description: "A mini-app imports only the SDK and its own files." },
-    schema: [
-      {
-        type: "object",
-        properties: {
-          roots: { type: "array", items: { type: "string" } },
-          allow: { type: "array", items: { type: "string" } },
-        },
-        additionalProperties: false,
-      },
-    ],
-    messages: {
-      outside:
-        'A mini-app may only import its own files and the SDK. "{{source}}" is a file outside this mini-app\'s folder.',
-      notAllowed:
-        'A mini-app may only import its own files and the SDK ({{allowed}}). "{{source}}" is neither.',
-    },
-  },
-  create(context) {
-    const options = context.options[0] ?? {};
-    const roots = (options.roots ?? MINI_APP_ROOTS).map((root) => path.resolve(context.cwd, root));
-    const allow = options.allow ?? MINI_APP_ALLOWED_PACKAGES;
-    const file = context.physicalFilename;
-    const folder = miniAppFolder(file, roots);
-    if (!folder) return {};
-
-    function check(node) {
-      if (!node || node.type !== "Literal" || typeof node.value !== "string") return;
-      const source = node.value;
-      if (source.startsWith(".")) {
-        const target = path.resolve(path.dirname(file), source);
-        const inside = path.relative(folder, target);
-        if (inside.startsWith("..") || path.isAbsolute(inside)) {
-          context.report({ node, messageId: "outside", data: { source } });
-        }
-        return;
-      }
-      if (allow.some((name) => source === name || source.startsWith(`${name}/`))) return;
-      const absolute = path.isAbsolute(source) || /^[a-z]:[\\/]/i.test(source) || source.startsWith("file:");
-      context.report({
-        node,
-        messageId: absolute ? "outside" : "notAllowed",
-        data: { source, allowed: allow.join(", ") },
-      });
-    }
-
-    return {
-      ImportDeclaration: (node) => check(node.source),
-      ExportNamedDeclaration: (node) => check(node.source),
-      ExportAllDeclaration: (node) => check(node.source),
-      ImportExpression: (node) => check(node.source),
-      CallExpression(node) {
-        if (node.callee.type === "Identifier" && node.callee.name === "require") {
-          check(node.arguments[0]);
-        }
-      },
-    };
-  },
-};
-
-const hearthPlugin = { rules: { "mini-app-imports": miniAppImportsRule } };
-
-/**
- * The configuration that enforces "a mini-app uses only the SDK".
- *
- * @param {{ roots?: string[], allow?: string[] }} [options]
- *   roots: folders whose direct children are mini-apps, relative to where
- *   ESLint runs. allow: package names a mini-app may import.
- */
-export function miniAppBoundary(options = {}) {
-  const roots = options.roots ?? MINI_APP_ROOTS;
-  const allow = options.allow ?? MINI_APP_ALLOWED_PACKAGES;
-  const extensions = "{js,mjs,cjs,jsx,ts,tsx,mts,cts}";
-  return [
-    {
-      name: "hearth/mini-app-boundary",
-      files: roots.map((root) => path.posix.join(root, "*", "**", `*.${extensions}`)),
-      plugins: { hearth: hearthPlugin },
-      rules: { "hearth/mini-app-imports": ["error", { roots, allow }] },
-    },
-  ];
-}
+const MINI_APP_ROOTS = ["packages/fixture-apps"];
 
 /* -------------------------------------------------------------------------
  * Boundaries between the framework's own packages
@@ -208,6 +96,11 @@ const NOT_THE_WEB_APP = [
   "The web app and the server share only @hearth/shared, the contract between them.",
 ];
 
+const NOT_THE_FRAMEWORK = [
+  "^@hearth/(server|web|shared)($|/)|/packages/(server|web|shared)/|^(\\.\\./)+(server|web|shared)/src/",
+  "The SDK is what mini-apps are written against, also in other repositories. It stands alone and imports no framework package.",
+];
+
 export default defineConfig([
   globalIgnores([
     "**/node_modules/",
@@ -216,6 +109,8 @@ export default defineConfig([
     "**/coverage/",
     "playwright-report/",
     "test-results/",
+    // Written by `hearth-apps sync`; see packages/sdk/tools/sync.mjs.
+    "**/*.generated.{js,css}",
   ]),
 
   { name: "hearth/recommended", files: [...SCRIPTS, ...TYPESCRIPT], extends: [js.configs.recommended] },
@@ -256,6 +151,9 @@ export default defineConfig([
       "*.config.{js,ts}",
       "packages/*/*.config.{js,ts}",
       "packages/*/scripts/**",
+      "packages/sdk/bin/**",
+      "packages/sdk/tools/**",
+      "packages/sdk/eslint.js",
       "packages/server/**",
       "e2e/**",
     ],
@@ -263,7 +161,7 @@ export default defineConfig([
   },
   {
     name: "hearth/browser-globals",
-    files: ["packages/web/src/**", "packages/web/public/**"],
+    files: ["packages/web/src/**", "packages/web/public/**", "packages/sdk/src/web/**"],
     languageOptions: { globals: globals.browser },
   },
   {
@@ -278,6 +176,11 @@ export default defineConfig([
     rules: { "no-restricted-imports": forbidImports(NOT_THE_SERVER, NOT_THE_WEB_APP) },
   },
   {
+    name: "hearth/sdk-boundary",
+    files: ["packages/sdk/src/**"],
+    rules: { "no-restricted-imports": forbidImports(NOT_THE_FRAMEWORK) },
+  },
+  {
     name: "hearth/web-boundary",
     files: ["packages/web/src/**"],
     rules: { "no-restricted-imports": forbidImports(NOT_THE_SERVER) },
@@ -288,5 +191,5 @@ export default defineConfig([
     rules: { "no-restricted-imports": forbidImports(NOT_THE_WEB_APP) },
   },
 
-  ...miniAppBoundary(),
+  ...miniAppBoundary({ roots: MINI_APP_ROOTS, base: import.meta.dirname }),
 ]);

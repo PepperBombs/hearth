@@ -51,7 +51,14 @@ describe("resolveMember", () => {
       theme: "system",
     });
     expect(listSpacesForUser(db, user!.id)).toEqual([
-      { id: expect.any(String), kind: "personal", name: "", role: "owner" },
+      {
+        id: expect.any(String),
+        kind: "personal",
+        name: "",
+        role: "owner",
+        canAddApps: true,
+        members: [{ id: user!.id, name: "owner", role: "owner" }],
+      },
     ]);
   });
 
@@ -84,11 +91,76 @@ describe("resolveMember", () => {
     expect(hasInvitation(db, "lin@example.com")).toBe(false);
 
     const spaces = listSpacesForUser(db, lin.id);
-    expect(spaces).toEqual([{ id: expect.any(String), kind: "personal", name: "", role: "owner" }]);
+    expect(spaces).toEqual([
+      {
+        id: expect.any(String),
+        kind: "personal",
+        name: "",
+        role: "owner",
+        canAddApps: true,
+        // Their own space holds them alone: the owner of the server is not in it.
+        members: [{ id: lin.id, name: "lin", role: "owner" }],
+      },
+    ]);
     expect(spaces[0]!.id).not.toBe(listSpacesForUser(db, owner.id)[0]!.id);
 
     // Still a member once the invitation is gone.
     expect(resolveMember(db, { email: "lin@example.com", ownerEmail: OWNER_EMAIL })).toEqual(lin);
+  });
+
+  it("makes an invited person a member of the groups that invited them, as each invitation says", () => {
+    const owner = resolveMember(db, { email: OWNER_EMAIL, ownerEmail: OWNER_EMAIL })!;
+    const group = (id: string, name: string) => {
+      db.prepare("INSERT INTO spaces (id, kind, name, created_by, created_at) VALUES (?, 'group', ?, ?, ?)").run(
+        id,
+        name,
+        owner.id,
+        "2026-01-01T00:00:00.000Z",
+      );
+      db.prepare("INSERT INTO space_members (space_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)").run(
+        id,
+        owner.id,
+        "2026-01-01T00:00:00.000Z",
+      );
+    };
+    group("family", "Family");
+    group("team", "Team");
+    const invite = db.prepare(
+      `INSERT INTO space_invitations (space_id, email, role, can_add_apps, invited_by, created_at)
+       VALUES (?, ?, ?, ?, ?, '2026-01-02T00:00:00.000Z')`,
+    );
+    invite.run("family", "lin@example.com", "member", 1, owner.id);
+    invite.run("team", "lin@example.com", "owner", 0, owner.id);
+    invite.run("team", "kim@example.com", "member", 0, owner.id);
+    addInvitation(db, { email: "lin@example.com", invitedBy: owner.id });
+
+    const lin = resolveMember(db, { email: "LIN@example.com", ownerEmail: OWNER_EMAIL })!;
+    expect(listSpacesForUser(db, lin.id).map((space) => [space.kind, space.name, space.role, space.canAddApps])).toEqual([
+      ["personal", "", "owner", true],
+      ["group", "Family", "member", true],
+      ["group", "Team", "owner", true],
+    ]);
+    // Lin's invitations are used up; Kim's is untouched.
+    expect(db.prepare("SELECT email FROM space_invitations").all()).toEqual([{ email: "kim@example.com" }]);
+    expect(hasInvitation(db, "lin@example.com")).toBe(false);
+  });
+
+  it("does not let a group's invitation alone in: the server's own invitation decides", () => {
+    const owner = resolveMember(db, { email: OWNER_EMAIL, ownerEmail: OWNER_EMAIL })!;
+    db.prepare("INSERT INTO spaces (id, kind, name, created_by, created_at) VALUES ('family', 'group', 'Family', ?, ?)").run(
+      owner.id,
+      "2026-01-01T00:00:00.000Z",
+    );
+    db.prepare("INSERT INTO space_members (space_id, user_id, role, created_at) VALUES ('family', ?, 'owner', ?)").run(
+      owner.id,
+      "2026-01-01T00:00:00.000Z",
+    );
+    db.prepare(
+      `INSERT INTO space_invitations (space_id, email, invited_by, created_at)
+       VALUES ('family', 'lin@example.com', ?, '2026-01-02T00:00:00.000Z')`,
+    ).run(owner.id);
+    expect(resolveMember(db, { email: "lin@example.com", ownerEmail: OWNER_EMAIL })).toBeNull();
+    expect(count("users")).toBe(1);
   });
 
   it("treats the two ways of writing an accented letter as one person", () => {

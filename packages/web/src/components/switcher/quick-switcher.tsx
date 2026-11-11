@@ -2,13 +2,13 @@ import { Command } from "cmdk";
 import { ArrowRight, Globe, Search, SunMoon, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
+import { Dialog } from "@hearth/sdk/web";
 import type { PlainMessageKey } from "../../i18n";
 import { HTML_LANG } from "../../i18n/locale";
 import { useI18n, usePreferences } from "../../session/preferences";
 import { useSession } from "../../session/session";
 import { AppIcon } from "../app-icon";
 import { useSwitcher } from "../shell/switcher-state";
-import { Dialog } from "../ui";
 import { buildSwitcherItems, type SwitcherGroup, type SwitcherItem } from "./items";
 import { matchScore } from "./match";
 

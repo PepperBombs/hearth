@@ -1,10 +1,13 @@
 import { ArrowRight, LayoutDashboard } from "lucide-react";
 import { useMemo } from "react";
 import { Link } from "react-router";
-import type { AppSummary } from "@hearth/shared";
+import type { AppSummary, WidgetSize } from "@hearth/shared";
+import { EmptyState, Tag, buttonClass } from "@hearth/sdk/web";
+import { AppView } from "../apps/app-view";
+import { AppSettingsButton } from "../apps/manage";
 import { AppIcon } from "../components/app-icon";
 import { Page } from "../components/shell/page";
-import { Card, CardFooter, CardHeader, EmptyState, Tag } from "../components/ui";
+import { Card, CardFooter, CardHeader } from "../components/card";
 import { pickLocalized } from "../i18n";
 import { formatToday } from "../lib/date";
 import { useToday } from "../lib/use-today";
@@ -21,6 +24,18 @@ const GRID =
   "grid grid-flow-dense auto-rows-[minmax(200px,auto)] grid-cols-4 gap-[var(--hearth-gap)] " +
   "@max-[844px]/main:grid-cols-2 @max-[560px]/main:auto-rows-auto @max-[560px]/main:grid-cols-1";
 
+/**
+ * The room a card takes, which its app chose in the manifest: 1x1, 2x1, 1x2
+ * or 2x2 cells. Where there are two columns a wide card fills the row; in a
+ * single column every card is one cell, as tall as what it holds.
+ */
+const SIZE: Record<WidgetSize, string> = {
+  small: "",
+  wide: "col-span-2 @max-[560px]/main:col-span-1",
+  tall: "row-span-2 @max-[560px]/main:row-span-1",
+  large: "col-span-2 row-span-2 @max-[560px]/main:col-span-1 @max-[560px]/main:row-span-1",
+};
+
 export function Dashboard() {
   const session = useSession();
   const { locale, t } = useI18n();
@@ -32,7 +47,16 @@ export function Dashboard() {
     <Page title={t("dashboard.title")} note={<span className="num">{today}</span>}>
       {apps.length === 0 ? (
         <Card className="min-h-[320px] justify-center">
-          <EmptyState icon={<LayoutDashboard size={20} />} title={t("dashboard.emptyTitle")}>
+          <EmptyState
+            icon={<LayoutDashboard size={20} />}
+            title={t("dashboard.emptyTitle")}
+            action={
+              // Apps are added, and switched back on, on the Apps page.
+              <Link to="/apps" className={buttonClass({ variant: "primary" })}>
+                {t("dashboard.goToApps")}
+              </Link>
+            }
+          >
             {t("dashboard.emptyBody")}
           </EmptyState>
         </Card>
@@ -47,26 +71,38 @@ export function Dashboard() {
   );
 }
 
-/** Stands in for an app's widget until apps can supply their own. */
+/**
+ * One app's card. The shell draws the frame: icon, name, the space's tag,
+ * the button for the app's settings and the link to the app's page. What is
+ * inside is the app's own widget.
+ *
+ * The same app can be on the dashboard twice, in the personal space and in
+ * a group. The tag tells the two apart on screen; for a screen reader the
+ * card and its link are named with the group too, so that a list of links
+ * or of regions does not hold the same name twice for different places.
+ */
 function AppCard({ app }: { app: AppSummary }) {
   const session = useSession();
   const { locale, t } = useI18n();
   const space = session.spaces.find((candidate) => candidate.id === app.spaceId);
   const name = pickLocalized(app.name, locale);
+  const group = space?.kind === "group" ? space.name : null;
+  const fullName = group === null ? name : t("dashboard.appInSpace", { app: name, space: group });
   return (
-    <Card>
+    <Card className={SIZE[app.widgetSize]} data-widget={app.id} aria-label={fullName}>
       <CardHeader
         icon={<AppIcon icon={app.icon} color={app.color} />}
         title={name}
-        tag={space?.kind === "group" ? <Tag>{space.name}</Tag> : undefined}
+        tag={group === null ? undefined : <Tag>{group}</Tag>}
+        aside={<AppSettingsButton app={app} className="-my-2 -mr-1.5" />}
       />
-      <p className="text-fg-2">{pickLocalized(app.description, locale) || t("dashboard.noDescription")}</p>
+      <AppView app={app} part="widget" />
       {app.hasPage ? (
         <CardFooter>
           <Link to={appPath(app)} className="inline-flex items-center gap-1 font-medium text-accent hover:underline">
             <span>
               {t("dashboard.open")}
-              <span className="sr-only"> {name}</span>
+              <span className="sr-only"> {fullName}</span>
             </span>
             <ArrowRight size={16} aria-hidden="true" />
           </Link>

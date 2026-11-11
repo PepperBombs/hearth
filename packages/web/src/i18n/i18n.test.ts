@@ -35,6 +35,16 @@ describe("dictionaries", () => {
     }
   });
 
+  it("marks at most one link, in [brackets], and the same in every language", () => {
+    // LinkedText (src/components/linked-text.tsx) draws the bracketed words as a link.
+    const marks = (text: string) => (text.match(/[[\]]/g) ?? []).join("");
+    for (const key of keys) {
+      const expected = marks(dictionaries.en[key]);
+      expect(["", "[]"], key).toContain(expected);
+      expect(marks(dictionaries.zh[key]), key).toBe(expected);
+    }
+  });
+
   it("actually translates: Chinese text contains Chinese", () => {
     // A few strings are the same in both languages by design (symbols only); none are today.
     for (const key of keys) expect(dictionaries.zh[key], key).toMatch(/[一-鿿]/);

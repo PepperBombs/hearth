@@ -40,6 +40,16 @@ sudo -u hearth git clone https://github.com/YOUR-ORG/hearth-stones.git /opt/hear
 `hearth-data` is private and is only needed once notes exist; it will need a
 deploy key with write access.
 
+Which mini-apps a release holds is decided when the release is built: the
+deploy script copies `main` of `hearth-stones` (`APPS_REPO` in
+`deploy.conf`) into the release beside the framework, links it to that
+release's SDK with `pnpm install --offline` (its lockfile holds nothing but
+that link, so nothing is downloaded) and builds the two together. There is
+no setting for it in `hearth.env`: an older one may still have a
+`HEARTH_APPS_DIR` line, which the server ignores and you can delete. With
+`APPS_REPO` empty, releases hold no mini-apps: they disappear from the site,
+and their data stays in the database until they come back.
+
 ## 4. Write the settings
 
 ```sh
@@ -73,6 +83,12 @@ nothing else, so deployments need no root access. The deploy script restarts
 the service to switch releases, and stops it for the moment it copies the
 database or puts it back.
 
+The deploy script does not update itself. When a release brings a newer
+one, the journal says so after the switch ("deploy/hearth-deploy.sh in this
+release differs from the installed copy"): install it again with the same
+`install` line. A copy from before mini-apps were built in keeps building
+every release without them.
+
 ## 6. Cloudflare Access, then the tunnel
 
 Do these in this order, so the site is never reachable without sign-in.
@@ -86,8 +102,12 @@ Do these in this order, so the site is never reachable without sign-in.
    `http://127.0.0.1:4310`.
 
 To let a family member in later, they need both an entry in the Access policy
-and an invitation in Hearth. Inviting from the interface does not exist yet;
-it arrives with a later step.
+and an invitation in Hearth. For the invitation, create a group in Hearth's
+Settings (for example "Family") and add their email address to it: they are
+listed as invited until they first open Hearth, and join the group then.
+Only you, the server's owner, can create groups and invite people who are
+not on the server yet; `HEARTH_GROUP_POLICY=everyone` in `hearth.env` would
+open both to everyone on the server.
 
 ## 7. First deployment
 
@@ -97,9 +117,11 @@ journalctl -u hearth-deploy.service -n 50
 sudo systemctl enable --now hearth-deploy.timer
 ```
 
-The first run builds a release, tries it on a spare port, points
-`/opt/hearth/current` at it and starts the service. After that, every push to
-`main` is picked up within about a minute.
+The first run builds a release, with the mini-apps of `hearth-stones` in it,
+tries it on a spare port, points `/opt/hearth/current` at it and starts the
+service. The journal names the mini-apps the release holds ("The build holds
+..."). After that, every push to `main` of either repository is picked up
+within about a minute.
 
 ### When a deployment fails
 
@@ -110,6 +132,20 @@ build output is in `/opt/hearth/logs`.
   The trial start runs against a copy of the database (`DATABASE` in
   `/etc/hearth/deploy.conf`), so a migration that fails on your real data
   fails here. The same commits are tried again after `RETRY_AFTER_MINUTES`.
+- **The mini-apps were written for another version of the SDK.** The build
+  stops at once, and the lines after the error name the version each side
+  has. The running release is untouched. This is expected between merging a
+  new SDK version into `hearth` and the matching change into
+  `hearth-stones` (in either order): the same commits are not built again,
+  and the next commit of either repository is built at once. To deploy a
+  framework fix before the two match, empty `APPS_REPO` in `deploy.conf`
+  for a while, at the cost described in step 3.
+- **The mini-apps cannot be linked to the SDK.** `pnpm install --offline`
+  failed in the release's copy of `hearth-stones`, for example because its
+  `pnpm-lock.yaml` is out of date or names a package the server does not
+  already have: it must hold nothing but the link to the SDK. Fix it there.
+  The running release is untouched, and the same commits are tried again
+  after `RETRY_AFTER_MINUTES`.
 - **The new release fails as the live service.** The script stops the
   service, puts the database back as it was just before the switch, points
   `current` at the previous release and starts it. The database has to go

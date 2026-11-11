@@ -4,14 +4,21 @@ import {
   type Session,
   type User,
 } from "@hearth/shared";
-import { Hono, type MiddlewareHandler } from "hono";
+import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
+import { listAppsForUser } from "./apps/installs";
+import { createRegistry, type BundledApp } from "./apps/registry";
+import { registerAppRoutes } from "./apps/routes";
 import { identifyFromConfig, type Identify } from "./auth";
 import type { Config } from "./config";
 import type { Db } from "./db/database";
 import { listSpacesForUser, updatePreferences } from "./db/people";
-import { apiError } from "./http/errors";
+import { groupRights } from "./groups/policy";
+import { registerGroupRoutes } from "./groups/routes";
+import { readBody } from "./http/body";
+import type { Env, RequireMember } from "./http/env";
+import { apiError, NOTHING_HERE, Refusal } from "./http/errors";
 import { loopbackOnly, noStore, sameOrigin, securityHeaders } from "./http/security";
 import { serveWebApp } from "./http/static";
 import { resolveMember } from "./membership";
@@ -19,24 +26,31 @@ import { resolveMember } from "./membership";
 export type AppOptions = {
   config: Config;
   db: Db;
+  /**
+   * The mini-apps this build holds. Each manifest is checked here, and a bad
+   * one throws AppRegistryError before anything is served.
+   */
+  apps: readonly BundledApp[];
   /** Defaults to the login method named by the configuration. */
   identify?: Identify;
   /** Receives unexpected errors. Defaults to the console. Nothing of them reaches the client. */
   logError?: (error: unknown) => void;
 };
 
-type Env = { Variables: { user: User } };
-
 const MAX_BODY_BYTES = 64 * 1024;
 
-/** Builds the application without listening, so tests can call it directly. */
+/**
+ * Builds the application without listening, so tests can call it directly.
+ * Throws AppRegistryError when one of the given mini-apps is not valid.
+ */
 export function createApp(options: AppOptions): Hono<Env> {
   const { config, db } = options;
+  const registry = createRegistry(options.apps);
   const identify = options.identify ?? identifyFromConfig(config.auth);
   const logError = options.logError ?? ((error: unknown) => console.error(error));
 
   /** Lets members through and puts the user on the context. */
-  const requireMember: MiddlewareHandler<Env> = async (c, next) => {
+  const requireMember: RequireMember = async (c, next) => {
     const identity = await identify(c.req.raw);
     if (!identity) {
       return apiError(c, 401, "unauthenticated", "This request carries no valid sign-in.");
@@ -79,44 +93,33 @@ export function createApp(options: AppOptions): Hono<Env> {
     const body: Session = {
       user,
       spaces: listSpacesForUser(db, user.id),
-      // Mini-apps arrive with the mini-app contract.
-      apps: [],
+      apps: listAppsForUser(db, registry, user.id),
+      // The same answer the routes that create a group or invite someone ask for.
+      ...groupRights(config, user),
       version: config.version,
     };
     return c.json(body);
   });
 
   app.patch("/api/me", requireMember, async (c) => {
-    let input: unknown;
-    try {
-      input = await c.req.json();
-    } catch {
-      return apiError(c, 400, "invalid_request", "The request body must be JSON.");
-    }
-    const patch = preferencesPatchSchema.safeParse(input);
-    if (!patch.success) {
-      const issue = patch.error.issues[0];
-      const where = issue && issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
-      return apiError(
-        c,
-        400,
-        "invalid_request",
-        issue ? `${where}${issue.message}` : "The request is not valid.",
-      );
-    }
-    const user = updatePreferences(db, c.get("user").id, patch.data);
+    const patch = await readBody(c, preferencesPatchSchema);
+    const user = updatePreferences(db, c.get("user").id, patch);
     if (!user) throw new Error("The signed-in user disappeared while being updated.");
     return c.json(user satisfies User);
   });
 
-  app.all("/api", (c) => apiError(c, 404, "not_found", "There is nothing at this address."));
-  app.all("/api/*", (c) => apiError(c, 404, "not_found", "There is nothing at this address."));
+  registerGroupRoutes(app, { db, config, requireMember });
+  registerAppRoutes(app, { db, registry, requireMember });
+
+  app.all("/api", (c) => apiError(c, 404, "not_found", NOTHING_HERE));
+  app.all("/api/*", (c) => apiError(c, 404, "not_found", NOTHING_HERE));
 
   app.get("*", serveWebApp(config.webDist));
 
-  app.notFound((c) => apiError(c, 404, "not_found", "There is nothing at this address."));
+  app.notFound((c) => apiError(c, 404, "not_found", NOTHING_HERE));
 
   app.onError((error, c) => {
+    if (error instanceof Refusal) return apiError(c, error.status, error.code, error.message);
     if (error instanceof HTTPException && error.status < 500) {
       return apiError(c, error.status, "invalid_request", "The request could not be handled.");
     }

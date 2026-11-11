@@ -1,7 +1,8 @@
 import { Compass } from "lucide-react";
 import { Link } from "react-router";
+import { EmptyState, buttonClass } from "@hearth/sdk/web";
 import { Page } from "../components/shell/page";
-import { Card, EmptyState, buttonClass } from "../components/ui";
+import { Card } from "../components/card";
 import { useI18n } from "../session/preferences";
 
 export function NotFound() {

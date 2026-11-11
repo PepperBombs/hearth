@@ -5,6 +5,9 @@
 HEARTH_BASE=/opt/hearth
 
 # Clones the script fetches from. It never writes to them.
+# Each release is built with the mini-apps of APPS_REPO's main branch at the
+# same moment. Left empty, releases hold no mini-apps: they disappear from
+# the site, and their data stays in the database until they come back.
 FRAMEWORK_REPO=/opt/hearth/repos/hearth
 APPS_REPO=/opt/hearth/repos/hearth-stones
 

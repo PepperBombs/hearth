@@ -1,0 +1,44 @@
+{
+  "name": "@hearth/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "exports": {
+    ".": "./src/index.ts",
+    "./manifest-schema": "./src/manifest-schema.ts",
+    "./server": "./src/server.ts",
+    "./web": "./src/web/index.ts",
+    "./web/scope": "./src/web/scope.ts",
+    "./testing": "./src/testing.ts",
+    "./testing/host": "./src/testing-host.ts",
+    "./eslint": "./eslint.js",
+    "./tsconfig.app.json": "./tsconfig.app.json"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p src/web/tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/react": "^19.3.0",
+    "eslint": "^10.14.0",
+    "lucide-react": "^1.71.0",
+    "react": "^19.3.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.2",
+    "vitest": "^5.1.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^26.6.6",
+    "@types/react-dom": "^19.3.0",
+    "jsdom": "^31.0.0",
+    "react-dom": "^19.3.1"
+  },
+  "bin": {
+    "hearth-apps": "./bin/hearth-apps.mjs"
+  }
+}

@@ -5,8 +5,9 @@
  */
 import { CircleAlert, RefreshCw, UserRoundX } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
+import { Button, EmptyState, buttonClass } from "@hearth/sdk/web";
 import { BrandMark } from "../components/app-icon";
-import { Button, Card, EmptyState, buttonClass } from "../components/ui";
+import { Card } from "../components/card";
 import type { PlainMessageKey } from "../i18n";
 import { HTML_LANG, LOCALE_NAMES, otherLocale } from "../i18n/locale";
 import { usePreferences } from "../session/preferences";

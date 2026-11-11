@@ -2,6 +2,21 @@
 @import "./tokens.css";
 
 /*
+ * The UI kit lives in the SDK, outside this package, where Tailwind does not
+ * look by itself. Without this line the classes its components use would be
+ * missing from the stylesheet.
+ */
+@source "../../../sdk/src/web";
+
+/*
+ * The mini-apps this build holds are outside this package too. The build
+ * writes one @source line for each app's folder into this file
+ * (`hearth-apps sync`, run by `pnpm build` and `pnpm dev`); it is not in
+ * Git, and it is empty when the build holds no apps.
+ */
+@import "../apps/sources.generated.css";
+
+/*
  * Tailwind theme. The default palette, type scale, radii, shadows and
  * breakpoints are cleared so that only Hearth's tokens can be used.
  */

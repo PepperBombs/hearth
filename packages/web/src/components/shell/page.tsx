@@ -1,8 +1,8 @@
 import { Search } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
+import { IconButton } from "@hearth/sdk/web";
 import { cx } from "../../lib/cx";
 import { useI18n } from "../../session/preferences";
-import { IconButton } from "../ui";
 import { useSwitcher } from "./switcher-state";
 
 export type PageProps = {
@@ -10,13 +10,21 @@ export type PageProps = {
   title: string;
   /** A short note next to the title, hidden on phones. */
   note?: ReactNode;
+  /**
+   * A tag right after the title, on phones too, such as the group an app's
+   * page belongs to. It gets the room the title leaves, and is cut short if
+   * that is not enough.
+   */
+  tag?: ReactNode;
+  /** Buttons at the right end of the top bar, on phones too, such as an app's settings. */
+  actions?: ReactNode;
   children: ReactNode;
   /** Classes for the scrolling content area. */
   className?: string;
 };
 
 /** A screen inside the shell: the top bar with its title, then the scrolling content. */
-export function Page({ title, note, children, className }: PageProps) {
+export function Page({ title, note, tag, actions, children, className }: PageProps) {
   const { t } = useI18n();
   const switcher = useSwitcher();
 
@@ -35,10 +43,15 @@ export function Page({ title, note, children, className }: PageProps) {
         )}
       >
         <h1 className="clip min-w-0 text-xl font-semibold">{title}</h1>
+        {/* Starting from no width, this takes what is left and never squeezes the title. */}
+        {tag ? <span className="flex min-w-7 flex-1">{tag}</span> : null}
         {note ? <span className="flex-none text-xs text-fg-3 max-md:hidden">{note}</span> : null}
-        <IconButton label={t("topbar.search")} className="ml-auto md:hidden" onClick={() => switcher.setOpen(true)}>
-          <Search size={20} aria-hidden="true" />
-        </IconButton>
+        <div className="ml-auto flex flex-none items-center gap-1">
+          {actions}
+          <IconButton label={t("topbar.search")} className="md:hidden" onClick={() => switcher.setOpen(true)}>
+            <Search size={20} aria-hidden="true" />
+          </IconButton>
+        </div>
       </header>
       <main
         id="content"
