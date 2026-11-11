@@ -21,10 +21,29 @@ export const FAMILY_SPACE = "space-family";
 
 /** A member whose Hearth has no apps yet: what the shell looks like today. */
 export function emptySession(overrides: Partial<Session["user"]> = {}): Session {
+  const user: Session["user"] = {
+    id: "user-1",
+    email: "sam@example.com",
+    name: "Sam Example",
+    locale: "en",
+    theme: "light",
+    ...overrides,
+  };
   return {
-    user: { id: "user-1", email: "sam@example.com", name: "Sam Example", locale: "en", theme: "light", ...overrides },
-    spaces: [{ id: PERSONAL_SPACE, kind: "personal", name: "", role: "owner" }],
+    user,
+    spaces: [
+      {
+        id: PERSONAL_SPACE,
+        kind: "personal",
+        name: "",
+        role: "owner",
+        canAddApps: true,
+        members: [{ id: user.id, name: user.name, role: "owner" }],
+      },
+    ],
     apps: [],
+    canCreateGroups: false,
+    canInvitePeople: false,
     version: "a1b2c3d",
   };
 }
@@ -47,6 +66,8 @@ function app(
     description: { en: enDescription, zh: zhDescription },
     icon,
     color,
+    widgetSize: "small",
+    access: "edit",
     enabled: true,
     pinned: false,
     hasPage: true,
@@ -59,7 +80,20 @@ export function sessionWithApps(overrides: Partial<Session["user"]> = {}): Sessi
   const session = emptySession(overrides);
   return {
     ...session,
-    spaces: [...session.spaces, { id: FAMILY_SPACE, kind: "group", name: "Family", role: "owner" }],
+    spaces: [
+      ...session.spaces,
+      {
+        id: FAMILY_SPACE,
+        kind: "group",
+        name: "Family",
+        role: "owner",
+        canAddApps: true,
+        members: [
+          { id: session.user.id, name: session.user.name, role: "owner" },
+          { id: "user-2", name: "Lin Example", role: "member" },
+        ],
+      },
+    ],
     apps: [
       app("grocery", FAMILY_SPACE, "Grocery", "购物清单", "Shared shopping list", "全家共用的购物清单", "shopping-bag", "green", {
         pinned: true,

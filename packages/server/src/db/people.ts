@@ -3,7 +3,7 @@
  * request is from and which spaces they may see. Data rows added by later
  * steps are scoped to one of these spaces.
  */
-import type { Locale, PreferencesPatch, Space, Theme, User } from "@hearth/shared";
+import type { Locale, PreferencesPatch, Space, SpaceMember, Theme, User } from "@hearth/shared";
 import { normaliseEmail } from "../email";
 import type { Db } from "./database";
 import { newId } from "./ids";
@@ -65,17 +65,44 @@ export function createUserWithPersonalSpace(
   return user;
 }
 
-/** The spaces a person belongs to, personal space first, then groups from oldest to newest. */
+/**
+ * The spaces a person belongs to, personal space first, then groups from
+ * oldest to newest, each with everyone in it in the order they joined.
+ */
 export function listSpacesForUser(db: Db, userId: string): Space[] {
-  return db
+  const spaces = db
     .prepare(
-      `SELECT s.id, s.kind, s.name, m.role
+      `SELECT s.id, s.kind, s.name, m.role, m.can_add_apps AS canAddApps
          FROM space_members m
          JOIN spaces s ON s.id = m.space_id
         WHERE m.user_id = ?
         ORDER BY CASE s.kind WHEN 'personal' THEN 0 ELSE 1 END, s.created_at, s.id`,
     )
-    .all(userId) as Space[];
+    .all(userId) as (Pick<Space, "id" | "kind" | "name" | "role"> & { canAddApps: 0 | 1 })[];
+
+  // Only the members of spaces this person is in: the join starts from their own memberships.
+  const members = db
+    .prepare(
+      `SELECT m.space_id AS spaceId, u.id, u.name, m.role
+         FROM space_members mine
+         JOIN space_members m ON m.space_id = mine.space_id
+         JOIN users u ON u.id = m.user_id
+        WHERE mine.user_id = ?
+        ORDER BY m.created_at, u.id`,
+    )
+    .all(userId) as (SpaceMember & { spaceId: string })[];
+
+  return spaces.map((space) => ({
+    id: space.id,
+    kind: space.kind,
+    name: space.name,
+    role: space.role,
+    // Owners may always add apps; for a member it is the owners' choice.
+    canAddApps: space.role === "owner" || space.canAddApps === 1,
+    members: members
+      .filter((member) => member.spaceId === space.id)
+      .map(({ id, name, role }) => ({ id, name, role })),
+  }));
 }
 
 /** Changes the given preferences and returns the user as they now are. */

@@ -79,8 +79,12 @@ export function createApp(options: AppOptions): Hono<Env> {
     const body: Session = {
       user,
       spaces: listSpacesForUser(db, user.id),
-      // Mini-apps arrive with the mini-app contract.
+      // The server does not know about mini-apps yet (docs/mini-app-contract.md, step 4).
       apps: [],
+      // Groups cannot be created or added to yet. Who may is decided in one
+      // place when they can (step 10): for now, the server's owner alone.
+      canCreateGroups: false,
+      canInvitePeople: false,
       version: config.version,
     };
     return c.json(body);

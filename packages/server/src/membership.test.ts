@@ -51,7 +51,14 @@ describe("resolveMember", () => {
       theme: "system",
     });
     expect(listSpacesForUser(db, user!.id)).toEqual([
-      { id: expect.any(String), kind: "personal", name: "", role: "owner" },
+      {
+        id: expect.any(String),
+        kind: "personal",
+        name: "",
+        role: "owner",
+        canAddApps: true,
+        members: [{ id: user!.id, name: "owner", role: "owner" }],
+      },
     ]);
   });
 
@@ -84,7 +91,17 @@ describe("resolveMember", () => {
     expect(hasInvitation(db, "lin@example.com")).toBe(false);
 
     const spaces = listSpacesForUser(db, lin.id);
-    expect(spaces).toEqual([{ id: expect.any(String), kind: "personal", name: "", role: "owner" }]);
+    expect(spaces).toEqual([
+      {
+        id: expect.any(String),
+        kind: "personal",
+        name: "",
+        role: "owner",
+        canAddApps: true,
+        // Their own space holds them alone: the owner of the server is not in it.
+        members: [{ id: lin.id, name: "lin", role: "owner" }],
+      },
+    ]);
     expect(spaces[0]!.id).not.toBe(listSpacesForUser(db, owner.id)[0]!.id);
 
     // Still a member once the invitation is gone.

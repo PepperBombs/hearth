@@ -10,8 +10,8 @@ import { Shell } from "../shell/shell";
 const session: Session = {
   user: { id: "u1", email: "sam@example.com", name: "Sam Example", locale: "en", theme: "light" },
   spaces: [
-    { id: "p", kind: "personal", name: "", role: "owner" },
-    { id: "f", kind: "group", name: "Family", role: "owner" },
+    { id: "p", kind: "personal", name: "", role: "owner", canAddApps: true, members: [{ id: "u1", name: "Sam Example", role: "owner" }] },
+    { id: "f", kind: "group", name: "Family", role: "owner", canAddApps: true, members: [{ id: "u1", name: "Sam Example", role: "owner" }] },
   ],
   apps: [
     {
@@ -21,11 +21,15 @@ const session: Session = {
       description: { en: "Shared shopping list", zh: "全家共用的购物清单" },
       icon: "shopping-bag",
       color: "green",
+      widgetSize: "tall",
+      access: "edit",
       enabled: true,
       pinned: false,
       hasPage: true,
     },
   ],
+  canCreateGroups: false,
+  canInvitePeople: false,
   version: "dev",
 };
 

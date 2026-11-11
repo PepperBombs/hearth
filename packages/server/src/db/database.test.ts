@@ -52,7 +52,19 @@ describe("migrate", () => {
     const db = openDatabase(":memory:");
     const ran = migrate(db);
     expect(ran.map((migration) => migration.id)).toEqual(MIGRATIONS.map((m) => m.id));
-    expect(tables(db)).toEqual(["invitations", "migrations", "space_members", "spaces", "users"]);
+    expect(tables(db)).toEqual([
+      "app_access",
+      "app_prefs",
+      "app_rows",
+      "app_settings",
+      "invitations",
+      "migrations",
+      "space_apps",
+      "space_invitations",
+      "space_members",
+      "spaces",
+      "users",
+    ]);
     const recorded = db.prepare("SELECT id, name FROM migrations ORDER BY id").all();
     expect(recorded).toEqual(MIGRATIONS.map(({ id, name }) => ({ id, name })));
   });

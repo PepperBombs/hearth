@@ -29,6 +29,14 @@ that are not built yet are marked in section B.
    a clash fails the build and names both folders. Nothing else is built for
    this now: no marketplace, no runtime loading, no sandbox. Apps remain
    trusted code that the server owner chooses to check out.
+7. **An AI assistant will later manage data across apps.** It will call each
+   app's queries and mutations as tools, acting as the signed-in person with
+   exactly their access. To make that possible without touching every app
+   again, every query and mutation a mini-app defines carries a short
+   `description` (one English sentence saying what it does, written for a
+   reader who has not seen the app) next to its input schema, and a query
+   never changes data. The check fails an app whose query or mutation has no
+   description. Nothing else is built for the assistant now.
 
 ## A. The contract
 

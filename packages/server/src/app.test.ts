@@ -2,6 +2,8 @@ import {
   apiErrorSchema,
   healthSchema,
   sessionSchema,
+  spaceMemberSchema,
+  spaceSchema,
   userSchema,
   type ApiErrorCode,
 } from "@hearth/shared";
@@ -120,7 +122,10 @@ describe("GET /api/session", () => {
     const session = sessionSchema
       .extend({
         user: userSchema.strict(),
-        spaces: sessionSchema.shape.spaces.element.strict().array(),
+        spaces: spaceSchema
+          .extend({ members: spaceMemberSchema.strict().array() })
+          .strict()
+          .array(),
       })
       .strict()
       .parse(body);
@@ -132,8 +137,20 @@ describe("GET /api/session", () => {
         locale: "en",
         theme: "system",
       },
-      spaces: [{ id: expect.any(String), kind: "personal", name: "", role: "owner" }],
+      spaces: [
+        {
+          id: expect.any(String),
+          kind: "personal",
+          name: "",
+          role: "owner",
+          canAddApps: true,
+          members: [{ id: session.user.id, name: "owner", role: "owner" }],
+        },
+      ],
       apps: [],
+      // Nobody can yet: the routes for groups do not exist.
+      canCreateGroups: false,
+      canInvitePeople: false,
       version: "test",
     });
   });
