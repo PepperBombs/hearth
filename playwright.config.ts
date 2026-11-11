@@ -82,10 +82,10 @@ export default defineConfig({
       ? [
           {
             name: "server",
-            // One command for both copies, so the server is built once before either starts.
+            // Builds the server, then starts the copy that treats every request as the owner.
             // The server reads the web app's folder on each request, so it does not matter
-            // whether the web build above has finished when these start.
-            command: `pnpm --filter @hearth/server build && (${realServer(GUEST_PORT, GUEST_EMAIL)} & ${realServer(OWNER_PORT, OWNER_EMAIL)})`,
+            // whether the web build above has finished when this starts.
+            command: `pnpm --filter @hearth/server build && ${realServer(OWNER_PORT, OWNER_EMAIL)}`,
             url: `${OWNER_URL}/api/health`,
             reuseExistingServer,
             timeout: 120_000,
@@ -94,11 +94,15 @@ export default defineConfig({
           },
           {
             name: "server as a stranger",
-            // Started by the command above; this entry only waits for it.
-            command: `node -e "setInterval(() => {}, 60000)"`,
+            // Playwright starts these entries one after another, so the build above is done.
+            // Each copy needs its own entry: with reuseExistingServer off (as in CI),
+            // Playwright refuses an address that something else already answers on.
+            command: realServer(GUEST_PORT, GUEST_EMAIL),
             url: `${GUEST_URL}/api/health`,
             reuseExistingServer,
             timeout: 120_000,
+            stdout: "ignore" as const,
+            stderr: "pipe" as const,
           },
         ]
       : []),
