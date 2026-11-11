@@ -40,8 +40,9 @@ export function Checkbox({ checked, onChange, children, label, className, ...res
           checked={checked}
           aria-label={label}
           onChange={(event) => onChange(event.currentTarget.checked)}
+          // Positioned, so that it lies above the margin before it and a press lands on the box itself.
           className={cx(
-            "peer size-full appearance-none rounded-check border border-fg-3 bg-surface",
+            "peer relative size-full appearance-none rounded-check border border-fg-3 bg-surface",
             "checked:border-accent checked:bg-accent",
           )}
           {...rest}

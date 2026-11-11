@@ -124,14 +124,21 @@ test("the built server answers the routes for apps in a space, with 404 for an a
   }
 });
 
-test("the build holds the sample apps: each can be added to a space, used and removed", async ({ page, request }) => {
+test("the build holds the sample apps: each can be added to a space, used in its widget and on its page, and removed", async ({
+  page,
+  request,
+}) => {
   type Listed = { id: string; spaceId: string; name: { en: string; zh: string }; widgetSize: string; hasPage: boolean };
+  type Item = { id: string; name: string; section: string; done: boolean };
   const sessionNow = async () =>
     (await (await request.get("/api/session")).json()) as { spaces: { id: string; kind: string }[]; apps: Listed[] };
   const personal = (await sessionNow()).spaces.find((space) => space.kind === "personal");
   expect(personal).toBeDefined();
   const checklist = `/api/spaces/${personal?.id}/apps/checklist`;
   const feed = `/api/spaces/${personal?.id}/apps/feed`;
+  const listItems = async () =>
+    ((await (await request.post(`${checklist}/q/list`, { data: {} })).json()) as { output: Item[] }).output;
+  const problems = watchForProblems(page);
 
   try {
     // Adding an app the server holds is a saved setting: no rebuild, no restart.
@@ -141,25 +148,53 @@ test("the build holds the sample apps: each can be added to a space, used and re
     // The session describes each from its manifest, which the build read from the app's folder.
     const listed = (await sessionNow()).apps.map((app) => [app.id, app.name.en, app.name.zh, app.widgetSize, app.hasPage]);
     expect(listed).toHaveLength(2);
-    expect(listed).toContainEqual(["checklist", "Checklist", "清单", "tall", false]);
+    expect(listed).toContainEqual(["checklist", "Checklist", "清单", "tall", true]);
     expect(listed).toContainEqual(["feed", "Feed", "动态", "wide", false]);
+
+    // Removing an app keeps its rows, so an earlier run against the same server may have left some: start empty.
+    for (const item of await listItems()) {
+      if (!item.done) await request.post(`${checklist}/m/tick`, { data: { input: { id: item.id, done: true } } });
+    }
+    expect((await request.post(`${checklist}/m/clearTicked`, { data: {} })).status()).toBe(200);
 
     // The checklist's server file was built in: its mutation writes, its query reads.
     const name = `Water the plants ${Date.now()}`;
     const added = await request.post(`${checklist}/m/add`, { data: { input: { name } } });
     expect(added.status()).toBe(200);
-    const items = (await (await request.post(`${checklist}/q/list`, { data: {} })).json()) as { output: unknown[] };
-    expect(items.output).toContainEqual(expect.objectContaining({ name, section: "", done: false }));
+    expect(await listItems()).toEqual([expect.objectContaining({ name, section: "", done: false })]);
 
     // The feed has no server file, so nothing to call; its settings come from its manifest.
     expect((await request.post(`${feed}/q/list`, { data: {} })).status()).toBe(404);
     expect(await (await request.get(`${feed}/settings`)).json()).toEqual({ space: {}, user: { topics: [], period: "day" } });
 
-    // The dashboard has a card for each.
+    // The dashboard draws each app's own widget, fetched from the server's own origin,
+    // which is all the Content-Security-Policy allows.
     await page.goto("/");
     const grid = page.getByTestId("widget-grid");
-    await expect(grid.getByRole("heading", { name: "Checklist" })).toBeVisible();
-    await expect(grid.getByRole("heading", { name: "Feed" })).toBeVisible();
+    const card = (title: string) => grid.locator("section", { has: page.getByRole("heading", { level: 2, name: title }) });
+    await expect(card("Feed").getByText("Following every topic")).toBeVisible();
+    const box = card("Checklist").getByRole("checkbox", { name });
+    await expect(box).not.toBeChecked();
+    await expect(card("Checklist").getByText("1 left")).toBeVisible();
+
+    // The widgets' own classes reached the stylesheet, although no file of the web app uses them.
+    const minHeight = (selector: string) => page.locator(selector).first().evaluate((el) => getComputedStyle(el).minHeight);
+    expect(await minHeight('[data-app-part="checklist"] > div')).toBe("88px");
+    expect(await minHeight('[data-app-part="feed"] > div')).toBe("72px");
+
+    // Ticking in the widget is saved by the server ...
+    await box.click();
+    await expect(card("Checklist").getByText("Nothing to do.")).toBeVisible();
+    expect(await listItems()).toEqual([expect.objectContaining({ name, done: true })]);
+
+    // ... and the app's page, drawn by its own page.tsx, shows it ticked.
+    await card("Checklist").getByRole("link", { name: "Open Checklist" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Checklist" })).toBeVisible();
+    await expect(page.getByRole("main").getByRole("checkbox", { name })).toBeChecked();
+    // A reload on the page's address is answered with the app, and the page comes back.
+    await page.reload();
+    await expect(page.getByRole("main").getByRole("checkbox", { name })).toBeChecked();
+    expect(problems).toEqual([]);
   } finally {
     // Removing keeps the data; it leaves the dashboard empty for whoever runs next.
     await request.delete(checklist);
@@ -168,41 +203,21 @@ test("the build holds the sample apps: each can be added to a space, used and re
   expect((await sessionNow()).apps).toEqual([]);
 });
 
-test("the web app carries each sample app's widget and its styles, and fetches a widget only when asked", async ({ page, request }) => {
+test("the web app carries each sample app's widget and page, and fetches them only when asked", async ({ page, request }) => {
   const problems = watchForProblems(page);
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 
-  // The entry script names one file for each app's widget.
+  // The entry script names one file for each app's widget, and one for the checklist's page.
   const entry = await page.locator('script[type="module"][src]').first().getAttribute("src");
   expect(entry).toBeTruthy();
   const script = await (await request.get(entry ?? "")).text();
-  const chunks = [...new Set(script.match(/widget-[\w-]+\.js/g) ?? [])];
-  expect(chunks).toHaveLength(2);
+  expect(new Set(script.match(/\/widget-[\w-]+\.js/g)).size).toBe(2);
+  expect(new Set(script.match(/\/page-[\w-]+\.js/g)).size).toBe(1);
 
-  // A dashboard without widgets has fetched neither.
+  // A dashboard without widgets has fetched none of them.
   const fetched = await page.evaluate(() => performance.getEntriesByType("resource").map((entry) => entry.name));
-  expect(fetched.filter((url) => url.includes("/assets/widget-"))).toEqual([]);
-
-  // Each loads from the server's own origin, which is all the Content-Security-Policy
-  // allows, and brings a component. The sample widgets take no props and use no hooks
-  // yet, so calling one gives what it would draw; its classes are in the stylesheet
-  // although no file of the web app itself uses them.
-  const heights: string[] = [];
-  for (const chunk of chunks) {
-    heights.push(
-      await page.evaluate(async (url) => {
-        const module = (await import(url)) as { default: () => { props: { className: string } } };
-        const box = document.createElement("div");
-        box.className = module.default().props.className;
-        document.body.append(box);
-        const height = getComputedStyle(box).minHeight;
-        box.remove();
-        return height;
-      }, `/assets/${chunk}`),
-    );
-  }
-  expect(heights.sort()).toEqual(["72px", "88px"]);
+  expect(fetched.filter((url) => /\/assets\/(widget|page)-/.test(url))).toEqual([]);
   expect(problems).toEqual([]);
 });
 
@@ -226,6 +241,7 @@ test.describe("installed", () => {
     expect(cached.filter((url) => url.startsWith("/api"))).toEqual([]);
     // The widgets of the apps this build holds are part of the shell, so they work offline too.
     expect(cached.filter((url) => url.startsWith("/assets/widget-"))).toHaveLength(2);
+    expect(cached.filter((url) => url.startsWith("/assets/page-"))).toHaveLength(1);
 
     const session = page.waitForResponse((response) => response.url().endsWith("/api/session"));
     await page.reload();

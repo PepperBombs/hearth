@@ -153,6 +153,8 @@ describe("the types of an app's hooks", () => {
     // @ts-expect-error: nor is a route by itself
     appHooks<Server["routes"]["list"]>();
     expect(appHooks<Server>()).toBe(appHooks<typeof manifest>());
+    // One set of hooks serves every app: what tells them apart is only the type argument.
+    expect(server.manifest).toBe(manifest);
   });
 });
 

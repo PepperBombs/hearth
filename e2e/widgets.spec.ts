@@ -41,11 +41,12 @@ test.describe("widgets on the dashboard", () => {
     const span = (name: string) =>
       card(page, name).evaluate((el) => {
         const style = getComputedStyle(el);
-        return [style.gridColumnEnd, style.gridRowEnd];
+        // A card without a span of its own takes one cell.
+        return [style.gridColumnEnd, style.gridRowEnd].map((end) => (end === "auto" ? "span 1" : end));
       });
     await expect(card(page, "Feed").getByText("Following every topic")).toBeVisible();
-    expect(await span("Checklist")).toEqual(["auto", "span 2"]);
-    expect(await span("Feed")).toEqual(["span 2", "auto"]);
+    expect(await span("Checklist")).toEqual(["span 1", "span 2"]);
+    expect(await span("Feed")).toEqual(["span 2", "span 1"]);
     const tall = (await card(page, "Checklist").boundingBox())!;
     const wide = (await card(page, "Feed").boundingBox())!;
     expect(tall.height).toBeGreaterThan(wide.height * 1.9);
@@ -62,7 +63,7 @@ test.describe("widgets on the dashboard", () => {
     await page.goto("/");
     const checklist = card(page, "Checklist");
 
-    await checklist.getByRole("checkbox", { name: "Water the plants" }).check();
+    await checklist.getByRole("checkbox", { name: "Water the plants" }).click();
     await expect(checklist.getByRole("checkbox")).toHaveCount(1);
     await expect(checklist.getByText("1 left")).toBeVisible();
     expect(api.items.find((item) => item.name === "Water the plants")?.done).toBe(true);
