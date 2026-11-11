@@ -122,6 +122,11 @@ describe("loadConfig", () => {
       expect(load({ ...dev, HOST: "::1" }).host).toBe("::1");
     });
 
+    it("takes an IPv6 address written in brackets, and stores the form a socket can listen on", () => {
+      expect(load({ ...dev, HOST: "[::1]" }).host).toBe("::1");
+      expect(problemsOf({ ...dev, HOST: "[::]" })).toContain("HOST must be a loopback address");
+    });
+
     it("still needs the owner", () => {
       expect(problemsOf({ HEARTH_AUTH: "dev" })).toContain("HEARTH_OWNER_EMAIL is required");
     });
@@ -129,6 +134,14 @@ describe("loadConfig", () => {
 
   it("allows a public address behind Cloudflare Access when asked for", () => {
     expect(load({ ...cloudflare, HOST: "0.0.0.0" }).host).toBe("0.0.0.0");
+    expect(load({ ...cloudflare, HOST: "[::]" }).host).toBe("::");
+  });
+
+  it("refuses an owner address with a character that only looks like a letter", () => {
+    // U+212A, the Kelvin sign, lower-cases to "k".
+    expect(problemsOf({ ...cloudflare, HEARTH_OWNER_EMAIL: "mi\u212ae@example.com" })).toContain(
+      "HEARTH_OWNER_EMAIL must be an email address",
+    );
   });
 
   describe("config file", () => {

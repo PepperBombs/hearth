@@ -7,6 +7,7 @@ import { Page } from "../components/shell/page";
 import { Card, CardFooter, CardHeader, EmptyState, Tag } from "../components/ui";
 import { pickLocalized } from "../i18n";
 import { formatToday } from "../lib/date";
+import { useToday } from "../lib/use-today";
 import { useI18n } from "../session/preferences";
 import { appPath, enabledApps, useSession } from "../session/session";
 
@@ -24,7 +25,8 @@ export function Dashboard() {
   const session = useSession();
   const { locale, t } = useI18n();
   const apps = enabledApps(session);
-  const today = useMemo(() => formatToday(new Date(), locale), [locale]);
+  const date = useToday();
+  const today = useMemo(() => formatToday(date, locale), [date, locale]);
 
   return (
     <Page title={t("dashboard.title")} note={<span className="num">{today}</span>}>

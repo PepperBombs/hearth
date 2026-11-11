@@ -20,6 +20,13 @@ changes. `HEARTH_AUTH=dev` switches sign-in off: every request is treated as
 `HEARTH_DEV_USER` (by default the owner). The database is created at
 `packages/server/data/hearth.db`, which Git ignores.
 
+Because nobody is asked who they are, a server in this mode answers only
+requests addressed to this machine itself: the `Host` header must name
+`localhost`, `127.0.0.1` (any `127.x.x.x`) or `::1`. Everything else gets
+`403`, pages included, and so does a request that carries a proxy's headers
+(`X-Forwarded-For`, `Cf-Connecting-Ip` and the like). Open it as
+`http://localhost:5173` or `http://127.0.0.1:4310`, not under another name.
+
 The web app has its own dev server, which passes `/api` on to this one.
 `pnpm dev` at the repository root starts both; give it the same two variables.
 
@@ -47,9 +54,9 @@ is missing or wrong, the server prints what and exits before listening.
 | Setting | Default | Meaning |
 |---|---|---|
 | `HEARTH_CONFIG` | none | Path of a JSON file of settings. Environment only. |
-| `HOST` | `127.0.0.1` | Address to listen on. Leave it on loopback unless something on another machine must connect. |
+| `HOST` | `127.0.0.1` | Address to listen on. Leave it on loopback unless something on another machine must connect. An IPv6 address may be written with or without brackets (`::1` or `[::1]`). |
 | `PORT` | `4310` | Port to listen on. |
-| `HEARTH_DB` | `./data/hearth.db` | Path of the SQLite file. Its folder is created if needed. |
+| `HEARTH_DB` | `./data/hearth.db` | Path of the SQLite file. Its folder is created if needed. A folder or file created here is readable by the server's own account only. |
 | `HEARTH_APPS_DIR` | none | Folder of the `hearth-stones` checkout. Stored for a later step; not used yet. |
 | `HEARTH_DATA_DIR` | none | Folder of the `hearth-data` checkout. Stored for a later step; not used yet. |
 | `HEARTH_WEB_DIST` | `../web/dist`, from this package | Folder holding the built web app. |
@@ -92,6 +99,14 @@ The server has no login page. "Who is this request from?" is one function,
   expiry, and takes the email address from it. Plain headers that merely state
   an email address are never read.
 - `dev` answers with the configured address, unchecked.
+
+An address has one spelling: it is trimmed, lower-cased, and accented letters
+are put in composed form (NFC), so the same mailbox is the same person however
+the identity provider writes it. An address with a character outside ASCII
+that stands for an ASCII one, such as the Kelvin sign (which lower-cases to
+"k") or a full-width letter, is not accepted at all: it would otherwise be
+taken for someone else's address. `normaliseEmail` in `src/email.ts` is the
+one place this is decided.
 
 Then, for the verified address:
 
@@ -163,6 +178,10 @@ does that.
   tunnel does by default. With `HEARTH_AUTH=dev`, origins on the same machine
   at another port are also accepted, so the web dev server works however it
   proxies.
+- With `HEARTH_AUTH=dev`, every request must be addressed to a loopback name
+  and must not have passed through a proxy; see "Run it in development".
+  Listening on loopback alone would not stop a web page that points its own
+  host name at `127.0.0.1` (DNS rebinding), nor a tunnel on the same machine.
 - Answers under `/api` are sent with `Cache-Control: no-store`.
 - Request bodies over 64 KB are refused.
 
@@ -178,6 +197,12 @@ database that a newer build has migrated.
 Tables so far: `users`, `spaces`, `space_members`, `invitations`. Back the
 database up with SQLite's own backup command, not by copying the file while
 the server runs.
+
+The file holds everyone's data. When the server creates it, the file is
+readable and writable by the server's account only (mode 600), in a folder
+only that account can enter (700) if the server created the folder too.
+SQLite gives the `-wal` and `-shm` files beside it the same permissions. A
+file or folder that already exists is left as it is.
 
 ## Commands
 

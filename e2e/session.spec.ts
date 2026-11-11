@@ -27,6 +27,23 @@ test("someone who is signed in but not invited sees the not-a-member screen", as
   await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
 });
 
+test("a language picked before being let in is kept, and saved once there is a session", async ({ page, api }) => {
+  api.failSession(403, "not_a_member");
+  await page.goto("/");
+  await page.getByRole("button", { name: /中文/ }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "你还不是成员" })).toBeVisible();
+  expect(api.saved).toEqual([]);
+
+  // The server made the new member with English, from the browser's languages.
+  api.setSession(api.session);
+  expect(api.session.user.locale).toBe("en");
+  await page.getByRole("button", { name: "重试" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "仪表盘" })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "zh-Hans");
+  await expect.poll(() => api.saved).toEqual([{ locale: "zh" }]);
+  expect(await page.evaluate(() => localStorage.getItem("hearth.locale"))).toBe("zh");
+});
+
 test("a server failure shows an error screen with a way to try again", async ({ page, api }) => {
   api.failSession(500, "internal");
   await page.goto("/settings");

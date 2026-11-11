@@ -95,6 +95,37 @@ test("a failed save is reported and can be sent again", async ({ page, api }) =>
   expect(api.saved).toEqual([{ theme: "dark" }]);
 });
 
+test("a choice that could not be saved is kept on this device and sent again on the next visit", async ({ page, api }) => {
+  // The server has "light" stored, and keeps it: the save fails.
+  await page.goto("/");
+  api.failSaves = true;
+  await page.getByRole("button", { name: "Dark mode" }).click();
+  await expect(page.getByText("Your choice could not be saved to the server. It is still applied on this device.")).toBeVisible();
+  expect(api.session.user.theme).toBe("light");
+
+  // Still dark after a reload, as the message promised, although the server says light.
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.getByRole("button", { name: "Light mode" })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("hearth.theme"))).toBe("dark");
+  expect(api.saved).toEqual([]);
+
+  // Once the server takes it, it is sent without being asked for, exactly once.
+  api.failSaves = false;
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect.poll(() => api.saved).toEqual([{ theme: "dark" }]);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("hearth.unsaved"))).toBeNull();
+  await expect(page.getByText("Your choice could not be saved to the server.")).toBeHidden();
+
+  // From here on the server's value wins again, for example after a change on another device.
+  api.setSession({ ...api.session, user: { ...api.session.user, theme: "light" } });
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  expect(api.saved).toEqual([{ theme: "dark" }]);
+});
+
 test("motion is switched off for people who ask for less of it", async ({ page, api }) => {
   void api;
   await page.emulateMedia({ reducedMotion: "reduce" });

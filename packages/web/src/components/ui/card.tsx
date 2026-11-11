@@ -18,7 +18,10 @@ export type CardHeaderProps = {
   /** A 16px icon shown before the title. */
   icon?: ReactNode;
   title: ReactNode;
-  /** A tag shown right after the title, such as the space an app belongs to. */
+  /**
+   * A tag shown right after the title, such as the space an app belongs to.
+   * The title comes first: the tag gets the room the title leaves, and is cut short if that is not enough.
+   */
   tag?: ReactNode;
   /** A short note pushed to the right edge. */
   aside?: ReactNode;
@@ -40,7 +43,8 @@ export function CardHeader({ icon, title, tag, aside, level = 2, className }: Ca
       >
         {title}
       </Heading>
-      {tag}
+      {/* Starting from no width, this takes what is left and never squeezes the title. */}
+      {tag ? <span className="flex min-w-7 flex-1">{tag}</span> : null}
       {aside ? <span className="ml-auto flex-none text-xs text-fg-3">{aside}</span> : null}
     </div>
   );

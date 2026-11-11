@@ -35,6 +35,15 @@ export function Dialog({ open, onClose, label, children, layoutClassName = DEFAU
     if (!open && dialog.open) dialog.close();
   }, [open]);
 
+  /**
+   * The browser reports a close a moment after it happens. If the dialog has
+   * been opened again in that moment, the report is about the earlier close
+   * and must not close the new one.
+   */
+  const closedByBrowser = () => {
+    if (!ref.current?.open) onClose();
+  };
+
   /** A click on the backdrop lands on the <dialog> element itself, never on its content. */
   const closeOnBackdrop = (event: MouseEvent<HTMLDialogElement>) => {
     if (event.target === event.currentTarget) onClose();
@@ -44,7 +53,7 @@ export function Dialog({ open, onClose, label, children, layoutClassName = DEFAU
     <dialog
       ref={ref}
       aria-label={label}
-      onClose={onClose}
+      onClose={closedByBrowser}
       onClick={closeOnBackdrop}
       className={cx(
         "overflow-hidden border-line bg-surface p-0 text-fg shadow-pop backdrop:bg-overlay",

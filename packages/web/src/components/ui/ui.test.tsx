@@ -105,4 +105,24 @@ describe("Dialog", () => {
     expect(dialog.open).toBe(false);
     expect(screen.queryByText("Move")).toBeNull();
   });
+
+  it("is not closed by the browser's late report of an earlier close", () => {
+    const onClose = vi.fn();
+    render(
+      <Dialog open onClose={onClose} label="Move app">
+        <button type="button">Move</button>
+      </Dialog>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Move app" }) as HTMLDialogElement;
+
+    // The browser sends "close" a moment after a dialog closes. This one was
+    // closed and opened again in that moment: the report is about the past.
+    fireEvent(dialog, new Event("close"));
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Escape: the browser closes the dialog itself, then reports it.
+    dialog.removeAttribute("open");
+    fireEvent(dialog, new Event("close"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

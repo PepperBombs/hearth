@@ -64,7 +64,9 @@ function AccountCard() {
   const [name, setName] = useState(user.name);
   const [status, setStatus] = useState<NameStatus>("idle");
 
-  // Follow the saved name when it changes underneath, for example after a failed save is undone.
+  // Follow the saved name when it changes underneath. It changes only when a
+  // save succeeds, so after a failed save the field keeps what was typed and
+  // Enter, or leaving the field, sends it again.
   useEffect(() => setName(user.name), [user.name]);
 
   const commit = async () => {

@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { normaliseEmail } from "./email";
 
 export const AUTH_MODES = ["cloudflare-access", "dev"] as const;
 export type AuthMode = (typeof AUTH_MODES)[number];
@@ -15,6 +16,7 @@ export type AuthConfig =
   | { mode: "dev"; devUser: string };
 
 export type Config = {
+  /** The address to listen on. An IPv6 address has no brackets. */
   host: string;
   port: number;
   /** Absolute path of the SQLite file, or ":memory:". */
@@ -26,7 +28,7 @@ export type Config = {
   /** Absolute path of the folder holding the built web app. */
   webDist: string;
   auth: AuthConfig;
-  /** Lower-case. */
+  /** As normaliseEmail leaves it. */
   ownerEmail: string;
   version: string;
 };
@@ -64,10 +66,11 @@ const SETTING_NAMES = [
 ] as const;
 type SettingName = (typeof SETTING_NAMES)[number];
 
+// The same spelling the sign-in check produces, so the owner is recognised.
+// Text normaliseEmail refuses goes on unchanged and fails the check after it.
 const email = z
   .string()
-  .trim()
-  .toLowerCase()
+  .transform((value) => normaliseEmail(value) ?? value.trim())
   .pipe(z.email({ error: "must be an email address, for example you@example.com" }));
 
 const settingsSchema = z.object({
@@ -196,6 +199,9 @@ export function loadConfig(
   }
   const settings = parsed.data;
   const problems: string[] = [];
+  // An IPv6 address is written in brackets in a URL, and the start-up line
+  // prints it that way, but the address to listen on is the bare form.
+  const host = settings.HOST.replace(/^\[(.*)\]$/, "$1");
 
   if (!settings.HEARTH_OWNER_EMAIL) {
     problems.push(
@@ -226,9 +232,9 @@ export function loadConfig(
       auth = { mode: "cloudflare-access", teamDomain, audience: settings.HEARTH_CF_AUDIENCE };
     }
   } else {
-    if (!isLoopbackHost(settings.HOST)) {
+    if (!isLoopbackHost(host)) {
       problems.push(
-        `HEARTH_AUTH is "dev", which signs everyone in without checking, so HOST must be a loopback address (127.0.0.1, ::1 or localhost), not ${settings.HOST}.`,
+        `HEARTH_AUTH is "dev", which signs everyone in without checking, so HOST must be a loopback address (127.0.0.1, ::1 or localhost), not ${host}.`,
       );
     }
     const devUser = settings.HEARTH_DEV_USER ?? settings.HEARTH_OWNER_EMAIL;
@@ -241,7 +247,7 @@ export function loadConfig(
 
   const optionalPath = (value: string | undefined) => (value ? resolve(cwd, value) : null);
   return {
-    host: settings.HOST,
+    host,
     port: settings.PORT,
     dbPath: settings.HEARTH_DB === ":memory:" ? ":memory:" : resolve(cwd, settings.HEARTH_DB),
     appsDir: optionalPath(settings.HEARTH_APPS_DIR),

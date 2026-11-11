@@ -17,6 +17,9 @@ EnvironmentFile=-/opt/hearth/current/release.env
 Environment=NODE_ENV=production
 Environment=HOST=127.0.0.1
 ExecStart=/usr/bin/env node dist/main.js
+# The database holds everyone's data: files the server creates are readable
+# by this user only.
+UMask=0077
 Restart=on-failure
 RestartSec=3
 

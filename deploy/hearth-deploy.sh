@@ -8,13 +8,26 @@
 #      mini-apps repository;
 #   2. stops there, silently, if neither has a new commit;
 #   3. otherwise builds a fresh release in a new folder named after the time;
-#   4. starts that build on a spare port and checks that it answers;
-#   5. points the "current" link at it (one atomic rename) and restarts the
-#      service, then checks the running service;
+#   4. starts that build on a spare port, against a copy of the database, and
+#      checks that it answers. A migration that fails on the real data fails
+#      here, before anything live is touched;
+#   5. stops the service for a moment, copies the database as it then is,
+#      points the "current" link at the new release (one atomic rename) and
+#      starts the service, then checks the running service;
 #   6. keeps the newest few releases and deletes the rest.
 #
-# If any step fails, the release that was running keeps running, the reason
-# is logged, and the exit status is not zero.
+# If a step up to and including 4 fails, the release that was running keeps
+# running and nothing of it was touched. If the new release fails in step 5,
+# the script goes back: it stops the service, puts the database back as it
+# was just before the switch, and starts the previous release. An older build
+# refuses a database that a newer build has migrated, which is why the
+# database has to go back too. Either way the reason is logged and the exit
+# status is not zero.
+#
+# Commits that failed before the switch are tried again after
+# RETRY_AFTER_MINUTES. Commits that failed as the live service are not tried
+# again by themselves, because every try interrupts the site: they wait for a
+# new commit, or for state/failed to be deleted.
 #
 # Layout under HEARTH_BASE (default /opt/hearth):
 #
@@ -27,11 +40,24 @@
 #   current -> releases/...           the release the service runs
 #   logs/                             build output, one file per attempt
 #   state/                            notes this script leaves for itself
+#       failed                        the commits that failed, and at which stage
+#       restart-pending               "current" was switched; restart not confirmed
 #   pnpm-store/                       pnpm's package store
 #   deploy.lock                       held while a run is in progress
 #
+# Next to the database (DATABASE, default /var/lib/hearth/hearth.db), readable
+# by this user only:
+#
+#   hearth-deploy-before-<release>.db   the database just before the switch to
+#                                       that release; the newest one is kept
+#   hearth-deploy-failed-<release>.db   the database a failed release left
+#                                       behind, kept for a look; newest only
+#   hearth-deploy-trial-<release>.db    the copy the trial start runs against;
+#                                       deleted when the trial ends
+#
 # Secrets: this script never reads the service's secrets file. The build and
 # the trial start get a clean environment, so nothing secret can reach a log.
+# The trial start reads a copy of the database; none of its rows are logged.
 #
 # Usage: hearth-deploy [CONFIG_FILE]
 #   The config file defaults to $HEARTH_DEPLOY_CONFIG, then
@@ -53,9 +79,13 @@ BRANCH=main
 KEEP_RELEASES=5
 SERVICE=hearth.service
 LIVE_URL=http://127.0.0.1:4310
+DATABASE=/var/lib/hearth/hearth.db
 HEALTH_PORT=4319
 HEALTH_TIMEOUT=30
 RETRY_AFTER_MINUTES=15
+
+# How often a later run restarts a service that did not come up. Not a setting.
+RESTART_TRIES=3
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -76,9 +106,11 @@ redact() {
 
 # State shared with die() and the exit handler.
 attempt_key=""      # "<framework commit> <apps commit>" once a build starts
+attempt_stage=build # "live" once the running service has been touched
 new_release=""      # folder of the release being built
 activated=no        # yes once "current" points at the new release
 health_pid=""       # the trial server, while it runs
+trial_db=""         # the copy of the database the trial server uses
 build_log=""
 previous_note="Nothing was changed."
 
@@ -91,7 +123,7 @@ die() {
     tail -n 40 -- "$build_log" | redact | sed 's/^/    /' >&2
   fi
   if [[ -n $attempt_key ]]; then
-    mkdir -p -- "$state_dir" && printf '%s\n' "$attempt_key" >"$state_dir/failed"
+    mkdir -p -- "$state_dir" && printf '%s %s\n' "$attempt_stage" "$attempt_key" >"$state_dir/failed"
   fi
   log "$previous_note" >&2
   exit 1
@@ -105,10 +137,18 @@ stop_health_server() {
   fi
 }
 
+remove_trial_database() {
+  if [[ -n $trial_db ]]; then
+    rm -f -- "$trial_db" "$trial_db-wal" "$trial_db-shm" || true
+    trial_db=""
+  fi
+}
+
 on_exit() {
   local status=$?
   trap - EXIT
   stop_health_server
+  remove_trial_database
   if [[ -n $new_release && $activated != yes && -d $new_release ]]; then
     rm -rf -- "$new_release" || true
   fi
@@ -138,7 +178,7 @@ load_config() {
     fi
     case $name in
       HEARTH_BASE | FRAMEWORK_REPO | APPS_REPO | REMOTE | BRANCH | KEEP_RELEASES | \
-        SERVICE | LIVE_URL | HEALTH_PORT | HEALTH_TIMEOUT | RETRY_AFTER_MINUTES)
+        SERVICE | LIVE_URL | DATABASE | HEALTH_PORT | HEALTH_TIMEOUT | RETRY_AFTER_MINUTES)
         printf -v "$name" '%s' "$value"
         ;;
       *) die "$file, line $number: $name is not a setting this script knows." ;;
@@ -162,6 +202,7 @@ check_settings() {
   number_between "$RETRY_AFTER_MINUTES" 0 100000 || die "RETRY_AFTER_MINUTES must be a number of minutes."
   [[ -z $SERVICE || $SERVICE =~ ^[A-Za-z0-9:_.@-]+\.service$ ]] || die "SERVICE must be a unit name such as hearth.service, or empty."
   [[ -z $SERVICE || $LIVE_URL =~ ^http://[^/[:space:]]+$ ]] || die "LIVE_URL must look like http://127.0.0.1:4310, with no path."
+  [[ -z $DATABASE || ($DATABASE == /* && $DATABASE != */) ]] || die "DATABASE must be the absolute path of the database file (HEARTH_DB of the service), or empty."
 }
 
 # ---------------------------------------------------------------------------
@@ -278,9 +319,11 @@ point_current() {
   mv -T -- "$HEARTH_BASE/.current.new" "$HEARTH_BASE/current"
 }
 
-restart_service() {
+# service_command VERB: "restart" or "stop". Restarting also starts a service
+# that is not running.
+service_command() {
   local output
-  if ! output=$(timeout 90 systemctl --no-ask-password restart "$SERVICE" 2>&1); then
+  if ! output=$(timeout 90 systemctl --no-ask-password "$1" "$SERVICE" 2>&1); then
     [[ -z $output ]] || printf '%s\n' "$output" | sed 's/^/    /' >&2
     return 1
   fi
@@ -289,11 +332,77 @@ restart_service() {
 # Restarts the service and waits for it to report VERSION.
 restart_and_check() {
   local version=$1
-  if ! restart_service; then
+  if ! service_command restart; then
     probe_reason="systemctl could not restart $SERVICE (may this user restart it? see docs/self-hosting.md)"
     return 1
   fi
   wait_healthy "$LIVE_URL" "$version" api
+}
+
+# snapshot_database FROM TO: writes a complete, consistent copy of the SQLite
+# database FROM into the new file TO. It is safe while a server has FROM
+# open, and it includes what is still in the write-ahead log. It uses the
+# SQLite library of the release being built, so the server needs no extra
+# tool. The copy is readable by this user only.
+snapshot_database() {
+  (cd -- "$server_dir" && umask 077 && clean_env node -e '
+    const Database = require("better-sqlite3");
+    const [from, to] = process.argv.slice(1);
+    const db = new Database(from, { readonly: true, fileMustExist: true, timeout: 10000 });
+    try {
+      db.prepare("VACUUM INTO ?").run(to);
+    } finally {
+      db.close();
+    }
+  ' "$1" "$2")
+}
+
+# restore_database BACKUP: puts BACKUP in the place of the database. The
+# service must be stopped. What was there is moved aside, not deleted, and its
+# path is left in $failed_copy.
+failed_copy=""
+restore_database() {
+  local backup=$1 suffix
+  failed_copy=$database_dir/hearth-deploy-failed-$stamp.db
+  if ! (umask 077 && cp -- "$backup" "$DATABASE.restoring"); then
+    rm -f -- "$DATABASE.restoring"
+    return 1
+  fi
+  if [[ -e $DATABASE ]] && ! mv -- "$DATABASE" "$failed_copy"; then
+    rm -f -- "$DATABASE.restoring"
+    return 1
+  fi
+  # The write-ahead log belongs to the database just moved aside. Left next
+  # to the restored file, SQLite would apply it to the wrong database.
+  for suffix in -wal -shm; do
+    [[ ! -e $DATABASE$suffix ]] ||
+      mv -- "$DATABASE$suffix" "$failed_copy$suffix" || rm -f -- "$DATABASE$suffix"
+  done
+  mv -T -- "$DATABASE.restoring" "$DATABASE"
+}
+
+# After the service was stopped but "current" was not switched: starts the
+# release "current" still points at.
+resume_previous() {
+  [[ -n $previous_name ]] || return 0
+  if restart_and_check "$(release_value "$HEARTH_BASE/current/RELEASE" version)"; then
+    rm -f -- "$state_dir/restart-pending"
+    previous_note="Release $previous_name is running again."
+  else
+    previous_note="\"current\" points at release $previous_name, but $SERVICE could not be confirmed on it: $probe_reason. Check: systemctl status $SERVICE"
+  fi
+}
+
+# Keeps the newest "before" copy and the newest "failed" copy of the database.
+prune_database_copies() {
+  local kind name
+  [[ -n $database_dir ]] || return 0
+  for kind in before failed; do
+    find "$database_dir" -maxdepth 1 -type f -name "hearth-deploy-$kind-*.db" -printf '%f\n' 2>/dev/null |
+      sort | head -n -1 | while IFS= read -r name; do
+      rm -f -- "$database_dir/$name" "$database_dir/$name-wal" "$database_dir/$name-shm"
+    done
+  done
 }
 
 prune_releases() {
@@ -317,6 +426,7 @@ prune_releases() {
     # Packages that no release uses any more.
     clean_env pnpm store prune --store-dir "$HEARTH_BASE/pnpm-store" >/dev/null 2>&1 || true
   fi
+  prune_database_copies
   # Build logs: keep the newest 20.
   find "$HEARTH_BASE/logs" -maxdepth 1 -type f -name '*.log' -printf '%f\n' 2>/dev/null |
     sort | head -n -20 | while IFS= read -r name; do
@@ -344,6 +454,14 @@ done
 
 mkdir -p -- "$HEARTH_BASE/releases" "$HEARTH_BASE/logs" "$state_dir"
 
+# The database, if there is one yet. The first deployment creates it.
+database_dir=""
+if [[ -n $DATABASE && -f $DATABASE ]]; then
+  database_dir=$(dirname -- "$DATABASE")
+  [[ -r $DATABASE && -w $database_dir ]] ||
+    die "This user cannot read $DATABASE or cannot write to $database_dir, so the database cannot be copied before a switch. Fix the permissions, or set DATABASE to nothing to deploy without that safety net."
+fi
+
 # One run at a time. A second run leaves at once; the next timer tick retries.
 exec 9>"$HEARTH_BASE/deploy.lock"
 if ! flock -n 9; then
@@ -360,20 +478,42 @@ for dir in "$HEARTH_BASE"/releases/*/; do
     rm -rf -- "${dir%/}"
   fi
 done
+if [[ -n $database_dir ]]; then
+  rm -f -- "$database_dir"/hearth-deploy-trial-*.db "$database_dir"/hearth-deploy-trial-*.db-wal \
+    "$database_dir"/hearth-deploy-trial-*.db-shm "$DATABASE.restoring"
+fi
 
 # A run that switched "current" but could not confirm the restart leaves a
-# note. Finish that job before looking for anything new.
+# note. Finish that job first. If it cannot be finished, carry on all the
+# same: a newer commit may be the fix, and it must not wait for a person.
+pending_failure=""
 if [[ -n $SERVICE && -e $state_dir/restart-pending && -n $current_name ]]; then
   pending_version=$(release_value "$HEARTH_BASE/current/RELEASE" version)
-  log "An earlier run switched to release $current_name but could not confirm the restart. Trying again."
-  if restart_and_check "$pending_version"; then
+  pending_tries=$(<"$state_dir/restart-pending")
+  [[ $pending_tries =~ ^[0-9]{1,3}$ ]] || pending_tries=0
+  if probe_reason=$(probe "$LIVE_URL" "$pending_version" api 2>&1); then
+    # It is running after all. Restarting it again would only interrupt it.
     rm -f -- "$state_dir/restart-pending"
-    log "$SERVICE now runs release $current_name (version $pending_version)."
+    log "$SERVICE runs release $current_name (version $pending_version); an earlier run could not confirm that."
+  elif ((pending_tries >= RESTART_TRIES)); then
+    pending_failure="$probe_reason; it was restarted $pending_tries times without success and is not restarted again"
   else
-    previous_note="\"current\" points at $current_name, but $SERVICE is not running it. Check: systemctl status $SERVICE"
-    die "$SERVICE did not come up on release $current_name: $probe_reason."
+    log "An earlier run switched to release $current_name but could not confirm the restart. Trying again."
+    printf '%s\n' "$((pending_tries + 1))" >"$state_dir/restart-pending"
+    if restart_and_check "$pending_version"; then
+      rm -f -- "$state_dir/restart-pending"
+      log "$SERVICE now runs release $current_name (version $pending_version)."
+    else
+      pending_failure=$probe_reason
+    fi
   fi
 fi
+
+# Says what is wrong with the release "current" points at, and stops.
+die_pending() {
+  previous_note="\"current\" points at $current_name, but $SERVICE is not running it. Check: systemctl status $SERVICE"
+  die "$SERVICE did not come up on release $current_name: $pending_failure."
+}
 
 # ---------------------------------------------------------------------------
 # 1. Fetch, and decide whether there is anything to do
@@ -389,15 +529,31 @@ fi
 deployed_framework=$(release_value "$HEARTH_BASE/current/RELEASE" framework)
 deployed_apps=$(release_value "$HEARTH_BASE/current/RELEASE" apps)
 if [[ $framework_commit == "$deployed_framework" && $apps_commit == "$deployed_apps" ]]; then
+  [[ -z $pending_failure ]] || die_pending
   [[ -z ${HEARTH_DEPLOY_VERBOSE:-} ]] || log "Nothing new: $BRANCH is already deployed."
   exit 0
 fi
 
 wanted="$framework_commit $apps_commit"
 failed_file=$state_dir/failed
-if [[ -e $failed_file && $(<"$failed_file") == "$wanted" ]]; then
-  if [[ -z $(find "$failed_file" -mmin "+$RETRY_AFTER_MINUTES" 2>/dev/null) ]]; then
-    log "ERROR: the newest commits (framework ${framework_commit:0:12}, mini-apps ${apps_commit:0:12}) failed to deploy earlier. Trying again $RETRY_AFTER_MINUTES minutes after that attempt, or at once after a new commit, or after deleting $failed_file." >&2
+if [[ -e $failed_file ]]; then
+  failed_stage="" failed_key=""
+  read -r failed_stage failed_key <"$failed_file" || true
+  if [[ $failed_stage != build && $failed_stage != live ]]; then
+    # Written by an earlier version of this script: the commits only.
+    failed_key="$failed_stage $failed_key"
+    failed_stage=build
+  fi
+  retry_note=""
+  if [[ $failed_key == "$wanted" && $failed_stage == live ]]; then
+    # Trying again would stop the running service again, for the same result.
+    retry_note="They built, but did not come up as the live service, so they are not tried again by themselves. Push a new commit, or delete $failed_file to try these once more."
+  elif [[ $failed_key == "$wanted" && -z $(find "$failed_file" -mmin "+$RETRY_AFTER_MINUTES" 2>/dev/null) ]]; then
+    retry_note="Trying again $RETRY_AFTER_MINUTES minutes after that attempt, or at once after a new commit, or after deleting $failed_file."
+  fi
+  if [[ -n $retry_note ]]; then
+    log "ERROR: the newest commits (framework ${framework_commit:0:12}, mini-apps ${apps_commit:0:12}) failed to deploy earlier. $retry_note" >&2
+    [[ -z $pending_failure ]] || die_pending
     exit 1
   fi
 fi
@@ -408,7 +564,10 @@ fi
 version=$(git -C "$FRAMEWORK_REPO" rev-parse --short "$framework_commit")
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 previous_name=$current_name
-if [[ -n $previous_name ]]; then
+if [[ -n $pending_failure ]]; then
+  log "ERROR: $SERVICE did not come up on release $current_name: $pending_failure. Trying the newer commits instead." >&2
+  previous_note="\"current\" still points at release $previous_name, which $SERVICE is not running. Check: systemctl status $SERVICE"
+elif [[ -n $previous_name ]]; then
   previous_note="Release $previous_name is still the one in use."
 else
   previous_note="There is no earlier release; nothing is running yet."
@@ -449,23 +608,39 @@ server_dir=$new_release/hearth/packages/server
 # ---------------------------------------------------------------------------
 # 3. Start the new build on a spare port and check it
 # ---------------------------------------------------------------------------
-# It runs with made-up settings and a database that exists only in memory,
-# so it touches neither the real data nor the secrets file. Sign-in stays on,
-# so it would let nobody in even if something could reach it.
+# It runs with made-up settings, so it does not touch the secrets file, and
+# against a fresh copy of the database, so its migrations meet the real rows
+# without changing them. Sign-in stays on, so it would let nobody in even if
+# something could reach it.
 log "Checking the new build on port $HEALTH_PORT."
 if port_in_use "$HEALTH_PORT"; then
   die "Port $HEALTH_PORT is already in use, so the new build cannot be checked there. Free it or change HEALTH_PORT."
 fi
-(cd -- "$server_dir" && exec env -i PATH="$PATH" NODE_ENV=production \
-  HOST=127.0.0.1 PORT="$HEALTH_PORT" HEARTH_DB=":memory:" \
+trial_database=":memory:"
+if [[ -n $database_dir ]]; then
+  trial_db=$database_dir/hearth-deploy-trial-$stamp.db
+  snapshot_database "$DATABASE" "$trial_db" >>"$build_log" 2>&1 ||
+    die "Could not copy the database $DATABASE for the trial start."
+  trial_database=$trial_db
+elif [[ -n $DATABASE ]]; then
+  log "There is no database at $DATABASE yet, so the new build is checked with an empty one."
+else
+  log "DATABASE is not set: the new build is checked with an empty database, and a failed switch cannot put the database back."
+fi
+(cd -- "$server_dir" && umask 077 && exec env -i PATH="$PATH" NODE_ENV=production \
+  HOST=127.0.0.1 PORT="$HEALTH_PORT" HEARTH_DB="$trial_database" \
   HEARTH_AUTH=cloudflare-access HEARTH_CF_TEAM_DOMAIN=health-check.example.com \
   HEARTH_CF_AUDIENCE=health-check HEARTH_OWNER_EMAIL=health-check@example.com \
   HEARTH_VERSION="$version" node dist/main.js) >>"$build_log" 2>&1 9>&- &
 health_pid=$!
 if ! wait_healthy "http://127.0.0.1:$HEALTH_PORT" "$version" page "$health_pid"; then
+  if [[ -n $trial_db ]]; then
+    die "The new build failed its check on port $HEALTH_PORT, running against a copy of the database: $probe_reason."
+  fi
   die "The new build failed its check on port $HEALTH_PORT: $probe_reason."
 fi
 stop_health_server
+remove_trial_database
 log "The new build answers correctly."
 
 {
@@ -479,9 +654,31 @@ printf 'HEARTH_VERSION=%s\n' "$version" >"$new_release/release.env"
 # ---------------------------------------------------------------------------
 # 4. Switch over and restart
 # ---------------------------------------------------------------------------
-[[ -z $SERVICE ]] || : >"$state_dir/restart-pending"
-point_current "$stamp" || die "Could not point \"current\" at the new release."
+backup_file=""
+if [[ -n $SERVICE ]]; then
+  : >"$state_dir/restart-pending"
+  if [[ -n $database_dir ]]; then
+    # Stopped first, so the copy holds every change the old release made and
+    # going back loses nothing of them.
+    log "Stopping $SERVICE for a moment to copy the database before the switch."
+    service_command stop ||
+      die "systemctl could not stop $SERVICE (may this user stop it? see docs/self-hosting.md)."
+    # From here on a failure has interrupted the site, so it is not retried on a timer.
+    attempt_stage=live
+    backup_file=$database_dir/hearth-deploy-before-$stamp.db
+    if ! snapshot_database "$DATABASE" "$backup_file" >>"$build_log" 2>&1; then
+      rm -f -- "$backup_file"
+      resume_previous
+      die "Could not copy the database $DATABASE before the switch."
+    fi
+  fi
+fi
+if ! point_current "$stamp"; then
+  [[ -z $backup_file ]] || resume_previous
+  die "Could not point \"current\" at the new release."
+fi
 activated=yes
+attempt_stage=live
 build_log="" # from here on a failure is not about the build
 
 if [[ -z $SERVICE ]]; then
@@ -491,14 +688,26 @@ elif restart_and_check "$version"; then
 elif [[ -n $previous_name ]]; then
   failure=$probe_reason
   log "ERROR: $SERVICE did not come up on release $stamp: $failure. Going back to release $previous_name." >&2
+  # The failed release may have migrated the database, and the previous
+  # release refuses a database with a migration it does not know.
+  database_note=""
+  if [[ -n $backup_file ]]; then
+    if service_command stop && restore_database "$backup_file"; then
+      database_note=" The database is as it was just before the switch; what release $stamp left is kept in $failed_copy."
+    else
+      database_note=" The database could NOT be put back. If release $previous_name refuses it, stop $SERVICE and copy $backup_file over $DATABASE by hand; see docs/self-hosting.md."
+    fi
+  elif [[ -z $DATABASE ]]; then
+    database_note=" The database was not put back, because DATABASE is not set. If release $previous_name refuses it, see docs/self-hosting.md."
+  fi
   point_current "$previous_name"
   activated=no
   previous_version=$(release_value "$HEARTH_BASE/current/RELEASE" version)
   if restart_and_check "$previous_version"; then
     rm -f -- "$state_dir/restart-pending"
-    previous_note="Release $previous_name is running again."
+    previous_note="Release $previous_name is running again.$database_note"
   else
-    previous_note="\"current\" points at release $previous_name again, but $SERVICE could not be confirmed on it: $probe_reason. Check: systemctl status $SERVICE"
+    previous_note="\"current\" points at release $previous_name again, but $SERVICE could not be confirmed on it: $probe_reason.$database_note Check: systemctl status $SERVICE"
   fi
   die "Release $stamp was built but did not start as the service: $failure."
 else

@@ -48,6 +48,61 @@ export function noStore(): MiddlewareHandler {
   };
 }
 
+/** Headers that a proxy or tunnel adds to what it passes on. */
+const FORWARDED_HEADERS = [
+  "cf-connecting-ip",
+  "cf-ray",
+  "cdn-loop",
+  "forwarded",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-real-ip",
+];
+
+/** The name or address in a Host header, without the port. Null if it cannot be read. */
+function hostnameOf(host: string): string | null {
+  try {
+    return new URL(`http://${host}`).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * For dev mode, where every request is signed in without a check. Listening
+ * on a loopback address is not enough protection by itself:
+ *
+ * - A web page anywhere can point its own host name at 127.0.0.1 (DNS
+ *   rebinding). The browser then treats that page and this server as one
+ *   site, so the page could read and change everything. Such a request still
+ *   names the page's host in its Host header, so only requests addressed to
+ *   a loopback name are answered.
+ * - A tunnel or reverse proxy on this machine also connects over loopback,
+ *   on behalf of anyone. Requests that carry a proxy's headers are refused.
+ */
+export function loopbackOnly(): MiddlewareHandler {
+  return async (c, next) => {
+    const hostname = hostnameOf(c.req.header("host") ?? new URL(c.req.url).host);
+    if (hostname === null || !isLoopbackHost(hostname)) {
+      return apiError(
+        c,
+        403,
+        "invalid_request",
+        "Sign-in is switched off (HEARTH_AUTH=dev), so this server answers only requests addressed to this machine, for example http://localhost or http://127.0.0.1.",
+      );
+    }
+    if (FORWARDED_HEADERS.some((name) => c.req.header(name) !== undefined)) {
+      return apiError(
+        c,
+        403,
+        "invalid_request",
+        "Sign-in is switched off (HEARTH_AUTH=dev), so this server does not answer requests passed on by a proxy or tunnel.",
+      );
+    }
+    return next();
+  };
+}
+
 const SAFE_METHODS = new Set(["GET", "HEAD"]);
 
 export type SameOriginOptions = {

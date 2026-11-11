@@ -90,4 +90,29 @@ describe("resolveMember", () => {
     // Still a member once the invitation is gone.
     expect(resolveMember(db, { email: "lin@example.com", ownerEmail: OWNER_EMAIL })).toEqual(lin);
   });
+
+  it("treats the two ways of writing an accented letter as one person", () => {
+    const composed = "jos\u00e9@example.com";
+    const decomposed = "jose\u0301@example.com";
+    const owner = resolveMember(db, { email: OWNER_EMAIL, ownerEmail: OWNER_EMAIL })!;
+    addInvitation(db, { email: composed, invitedBy: owner.id });
+
+    const first = resolveMember(db, { email: decomposed, ownerEmail: OWNER_EMAIL });
+    expect(first).toMatchObject({ email: composed });
+    expect(resolveMember(db, { email: composed, ownerEmail: OWNER_EMAIL })).toEqual(first);
+    expect(count("users")).toBe(2);
+  });
+
+  it("does not take a look-alike of the owner's address for the owner", () => {
+    const ownerEmail = "mike@example.com";
+    // U+212A, the Kelvin sign, lower-cases to "k".
+    const lookAlike = "mi\u212ae@example.com";
+    expect(resolveMember(db, { email: lookAlike, ownerEmail })).toBeNull();
+    expect(count("users")).toBe(0);
+
+    const owner = resolveMember(db, { email: ownerEmail, ownerEmail })!;
+    expect(resolveMember(db, { email: lookAlike, ownerEmail })).toBeNull();
+    expect(() => addInvitation(db, { email: lookAlike, invitedBy: owner.id })).toThrow();
+    expect(count("users")).toBe(1);
+  });
 });

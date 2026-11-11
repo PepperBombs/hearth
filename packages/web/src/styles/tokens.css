@@ -1,7 +1,7 @@
 /*
  * Hearth design tokens: look "A · Clean", light and dark.
- * Values are ported from the approved mockup (hearth.css). The mapping from
- * the mockup's short names to these is listed in packages/web/README.md.
+ * Values are ported from the approved mockup, which is not kept in this
+ * repository.
  *
  * These custom properties are the theming surface for the shell and, later,
  * for mini-apps. Components never use raw colours, only these.

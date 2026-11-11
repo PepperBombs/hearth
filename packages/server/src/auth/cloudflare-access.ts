@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, errors, jwtVerify, type JWTVerifyGetKey } from "jose";
+import { normaliseEmail } from "../email";
 import type { Identify } from "./identify";
 
 export type CloudflareAccessOptions = {
@@ -74,7 +75,7 @@ export function cloudflareAccess(options: CloudflareAccessOptions): Identify {
 
     // Service tokens carry no email; they are not people and are not let in.
     if (typeof email !== "string") return null;
-    const normalised = email.trim().toLowerCase();
-    return /^[^\s@]+@[^\s@]+$/.test(normalised) ? { email: normalised } : null;
+    const normalised = normaliseEmail(email);
+    return normalised ? { email: normalised } : null;
   };
 }

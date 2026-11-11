@@ -70,7 +70,7 @@ The database file and secrets live in none of them.
 | `packages/server` | Hono server: config, SQLite and migrations, identity, membership, `/api` routes, static files. |
 | `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/components/ui` (the future shared UI kit). |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). |
-| `deploy` | Pull-based deploy script, systemd units, example config. Not yet tested on a real server. |
+| `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
 | `docs` | `architecture.md` and `self-hosting.md`. |
 
 Commands, from the repository root (Node 22, pnpm 10):
@@ -79,7 +79,7 @@ Commands, from the repository root (Node 22, pnpm 10):
 |---|---|
 | `pnpm install` | Install dependencies. |
 | `HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@example.com pnpm dev` | Run server (port 4310) and web dev server (port 5173) with sign-in switched off. |
-| `pnpm check` | Type checking, lint and unit tests. Run before every push. |
+| `pnpm check` | Type checking (the three packages and `e2e`), lint, unit tests and the deploy script's tests. Run before every push. |
 | `pnpm build` | Build shared, web, then server. |
 | `pnpm e2e` | End-to-end tests against the built app. Run `pnpm build` first. |
 | `pnpm start` | Start the built server. |
@@ -91,5 +91,13 @@ Things that bite:
   `zh.ts`; a missing key is a type error.
 - The server's Content-Security-Policy allows scripts from its own origin
   only: no inline scripts, no outside hosts, no outside fonts.
+- With `HEARTH_AUTH=dev` the server answers only requests addressed to this
+  machine (`localhost`, `127.0.0.1`, `::1`) and refuses any that a proxy or
+  tunnel passed on. Reach it by one of those names, also in tests.
+- Every email address goes through `normaliseEmail` in
+  `packages/server/src/email.ts` before it is compared or stored.
+- The deploy script stops the service for a moment at each switch to copy the
+  database, and puts that copy back if the new release does not come up. A
+  migration must therefore work on a copy of the real data in the trial start.
 - Mini-apps do not exist yet. The session lists no apps; pages show empty
   states.

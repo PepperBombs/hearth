@@ -146,7 +146,8 @@ function SwitcherPanel({ close }: { close: () => void }) {
                   <span className="clip min-w-0 flex-1" lang={item.labelLang ? HTML_LANG[item.labelLang] : undefined}>
                     {item.label}
                   </span>
-                  <span className="flex-none text-xs text-fg-3">{item.note}</span>
+                  {/* The note can be a space's name, which people choose: it never takes more than half the row. */}
+                  <span className="clip max-w-[50%] flex-none text-xs text-fg-3">{item.note}</span>
                 </Command.Item>
               ))}
             </Command.Group>

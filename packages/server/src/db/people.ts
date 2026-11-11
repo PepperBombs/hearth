@@ -4,6 +4,7 @@
  * steps are scoped to one of these spaces.
  */
 import type { Locale, PreferencesPatch, Space, Theme, User } from "@hearth/shared";
+import { normaliseEmail } from "../email";
 import type { Db } from "./database";
 import { newId } from "./ids";
 
@@ -11,14 +12,19 @@ type UserRow = { id: string; email: string; name: string; locale: Locale; theme:
 
 const USER_COLUMNS = "id, email, name, locale, theme";
 
-export function normaliseEmail(email: string): string {
-  return email.trim().toLowerCase();
+/** For writes: an address that cannot be stored is a mistake in the caller. */
+function acceptedEmail(email: string): string {
+  const normalised = normaliseEmail(email);
+  if (!normalised) throw new Error("This is not an email address Hearth accepts.");
+  return normalised;
 }
 
 export function findUserByEmail(db: Db, email: string): User | null {
-  const row = db
-    .prepare(`SELECT ${USER_COLUMNS} FROM users WHERE email = ?`)
-    .get(normaliseEmail(email)) as UserRow | undefined;
+  const normalised = normaliseEmail(email);
+  if (!normalised) return null;
+  const row = db.prepare(`SELECT ${USER_COLUMNS} FROM users WHERE email = ?`).get(normalised) as
+    | UserRow
+    | undefined;
   return row ?? null;
 }
 
@@ -34,7 +40,7 @@ export function createUserWithPersonalSpace(
   db: Db,
   input: { email: string; locale: Locale },
 ): User {
-  const email = normaliseEmail(input.email);
+  const email = acceptedEmail(input.email);
   const user: User = {
     id: newId(),
     email,
@@ -93,15 +99,16 @@ export function updatePreferences(db: Db, userId: string, patch: PreferencesPatc
 export function addInvitation(db: Db, input: { email: string; invitedBy: string }): void {
   db.prepare(
     "INSERT INTO invitations (email, invited_by, created_at) VALUES (?, ?, ?) ON CONFLICT (email) DO NOTHING",
-  ).run(normaliseEmail(input.email), input.invitedBy, new Date().toISOString());
+  ).run(acceptedEmail(input.email), input.invitedBy, new Date().toISOString());
 }
 
 export function hasInvitation(db: Db, email: string): boolean {
-  return (
-    db.prepare("SELECT 1 FROM invitations WHERE email = ?").get(normaliseEmail(email)) !== undefined
-  );
+  const normalised = normaliseEmail(email);
+  if (!normalised) return false;
+  return db.prepare("SELECT 1 FROM invitations WHERE email = ?").get(normalised) !== undefined;
 }
 
 export function deleteInvitation(db: Db, email: string): void {
-  db.prepare("DELETE FROM invitations WHERE email = ?").run(normaliseEmail(email));
+  const normalised = normaliseEmail(email);
+  if (normalised) db.prepare("DELETE FROM invitations WHERE email = ?").run(normalised);
 }

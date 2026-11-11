@@ -11,6 +11,8 @@ import { CONTENT_SECURITY_POLICY } from "./http/security";
 import { as, OWNER_EMAIL, testApp, testConfig } from "./testing";
 
 const BASE = "http://hearth.example.com";
+/** Dev mode answers only requests addressed to this machine. */
+const LOCAL = "http://127.0.0.1:4310";
 
 async function expectError(response: Response, status: number, code: ApiErrorCode) {
   expect(response.status).toBe(status);
@@ -90,7 +92,7 @@ describe("membership", () => {
       config: testConfig({ auth: { mode: "dev", devUser: OWNER_EMAIL } }),
       identify: "from-config",
     });
-    const response = await app.request(`${BASE}/api/session`);
+    const response = await app.request(`${LOCAL}/api/session`);
     expect(sessionSchema.parse(await response.json()).user.email).toBe(OWNER_EMAIL);
   });
 
@@ -256,12 +258,97 @@ describe("requests from another site", () => {
       config: testConfig({ auth: { mode: "dev", devUser: OWNER_EMAIL } }),
       identify: "from-config",
     });
+    const patch = (origin: string) =>
+      app.request(`${LOCAL}/api/me`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", origin },
+        body: JSON.stringify({ theme: "dark" }),
+      });
     for (const origin of ["http://localhost:5173", "http://127.0.0.1:5173", "http://[::1]:5173"]) {
-      expect((await patchMe(app, { theme: "dark" }, { origin })).status).toBe(200);
+      expect((await patch(origin)).status).toBe(200);
     }
-    expect(
-      (await patchMe(app, { theme: "dark" }, { origin: "https://evil.example.net" })).status,
-    ).toBe(403);
+    expect((await patch("https://evil.example.net")).status).toBe(403);
+  });
+});
+
+describe("dev mode, where nobody is asked to sign in", () => {
+  const devApp = () =>
+    testApp({
+      config: testConfig({ auth: { mode: "dev", devUser: OWNER_EMAIL } }),
+      identify: "from-config",
+    });
+
+  it.each([
+    "127.0.0.1:4310",
+    "localhost:5173",
+    "LOCALHOST",
+    "[::1]:4310",
+    "127.0.0.1",
+  ])("answers a request addressed to %s", async (host) => {
+    const { app } = devApp();
+    const response = await app.request(`${LOCAL}/api/session`, { headers: { host } });
+    expect(response.status).toBe(200);
+  });
+
+  // A page on any site can point its own name at 127.0.0.1 (DNS rebinding).
+  it.each([
+    "attacker.example:4310",
+    "hearth.example.com",
+    "127.0.0.1.attacker.example",
+    "localhost.attacker.example:4310",
+    "192.168.1.20:4310",
+    "0.0.0.0:4310",
+    "",
+  ])("refuses a request addressed to another name: %j", async (host) => {
+    const { app, db } = devApp();
+    await expectError(
+      await app.request(`${LOCAL}/api/session`, { headers: { host } }),
+      403,
+      "invalid_request",
+    );
+    // Reading pages is refused too, and so is a write whose Origin matches that Host.
+    expect((await app.request(`${LOCAL}/`, { headers: { host } })).status).toBe(403);
+    await expectError(
+      await app.request(`${LOCAL}/api/me`, {
+        method: "PATCH",
+        headers: { host, origin: `http://${host}`, "content-type": "application/json" },
+        body: JSON.stringify({ name: "changed by another site" }),
+      }),
+      403,
+      "invalid_request",
+    );
+    expect(db.prepare("SELECT count(*) AS n FROM users").get()).toEqual({ n: 0 });
+  });
+
+  it("goes by the address in the URL when there is no Host header", async () => {
+    const { app } = devApp();
+    expect((await app.request(`${LOCAL}/api/session`)).status).toBe(200);
+    await expectError(await app.request(`${BASE}/api/session`), 403, "invalid_request");
+  });
+
+  it.each([
+    ["Cf-Connecting-Ip", "203.0.113.9"],
+    ["Cf-Ray", "8f1e2d3c4b5a6978-LHR"],
+    ["X-Forwarded-For", "203.0.113.9"],
+    ["X-Forwarded-Host", "hearth.example.com"],
+    ["Forwarded", "for=203.0.113.9"],
+    ["X-Real-Ip", "203.0.113.9"],
+  ])("refuses a request passed on by a proxy or tunnel (%s)", async (name, value) => {
+    const { app, db } = devApp();
+    await expectError(
+      await app.request(`${LOCAL}/api/session`, { headers: { [name]: value } }),
+      403,
+      "invalid_request",
+    );
+    expect(db.prepare("SELECT count(*) AS n FROM users").get()).toEqual({ n: 0 });
+  });
+
+  it("does not restrict the Host when sign-in is on", async () => {
+    const { app } = testApp();
+    const response = await app.request(`${LOCAL}/api/session`, {
+      headers: as(OWNER_EMAIL, { host: "hearth.example.com", "cf-connecting-ip": "203.0.113.9" }),
+    });
+    expect(response.status).toBe(200);
   });
 });
 

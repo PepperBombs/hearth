@@ -1,14 +1,26 @@
-import { mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { MIGRATIONS, type Migration } from "./migrations";
 
 export type Db = Database.Database;
 
-/** Opens the SQLite file (creating its folder), or an in-memory database for ":memory:". */
+/**
+ * Opens the SQLite file (creating its folder), or an in-memory database for
+ * ":memory:".
+ *
+ * The file holds everyone's data. A folder and a file created here are
+ * readable by the account that runs the server and by nobody else, whatever
+ * the process's umask. SQLite gives the write-ahead log and its index the
+ * same permissions as the database file.
+ */
 export function openDatabase(path: string): Db {
-  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+  const inMemory = path === ":memory:";
+  const isNew = !inMemory && !existsSync(path);
+  if (!inMemory) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new Database(path);
+  // Before the first pragma: switching to WAL creates the log files.
+  if (isNew) chmodSync(path, 0o600);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.pragma("foreign_keys = ON");

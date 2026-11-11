@@ -1,5 +1,6 @@
 /** The application behind a real listening socket, as main.ts runs it. */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import { OWNER_EMAIL, testApp, testConfig } from "./testing";
 
 let server: ServerType;
 let base: string;
+let port: number;
 let folder: string;
 const script = `console.log(${JSON.stringify("x".repeat(200_000))});`;
 
@@ -25,7 +27,8 @@ beforeAll(async () => {
   const address = await new Promise<AddressInfo>((resolve) => {
     server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, resolve);
   });
-  base = `http://127.0.0.1:${address.port}`;
+  port = address.port;
+  base = `http://127.0.0.1:${port}`;
 });
 
 afterAll(async () => {
@@ -66,5 +69,26 @@ describe("over HTTP", () => {
       });
     expect((await patch(base)).status).toBe(200);
     expect((await patch("https://evil.example.net")).status).toBe(403);
+  });
+
+  it("in dev mode, refuses a request that reached this machine under another host name", async () => {
+    // What the server sees after DNS rebinding: its own address, another site's name.
+    const statusFor = (headers: Record<string, string>) =>
+      new Promise<number>((resolve, reject) => {
+        const request = httpRequest(
+          { host: "127.0.0.1", port, path: "/api/session", headers },
+          (response) => {
+            response.resume();
+            resolve(response.statusCode ?? 0);
+          },
+        );
+        request.on("error", reject);
+        request.end();
+      });
+    expect(await statusFor({ host: `attacker.example:${port}` })).toBe(403);
+    expect(await statusFor({ host: `localhost:${port}` })).toBe(200);
+    expect(await statusFor({ host: `127.0.0.1:${port}`, "x-forwarded-for": "203.0.113.9" })).toBe(
+      403,
+    );
   });
 });

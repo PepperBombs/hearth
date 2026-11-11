@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -25,6 +25,26 @@ describe("openDatabase", () => {
       db.close();
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "creates the folder and the files so that only this account can read them",
+    () => {
+      const folder = join(mkdtempSync(join(tmpdir(), "hearth-db-")), "data");
+      const path = join(folder, "hearth.db");
+      const db = openDatabase(path);
+      try {
+        migrate(db);
+        const othersCanReach = (file: string) => statSync(file).mode & 0o077;
+        expect(othersCanReach(folder)).toBe(0);
+        expect(othersCanReach(path)).toBe(0);
+        // The write-ahead log holds the newest rows before they reach the main file.
+        expect(othersCanReach(`${path}-wal`)).toBe(0);
+        expect(othersCanReach(`${path}-shm`)).toBe(0);
+      } finally {
+        db.close();
+      }
+    },
+  );
 });
 
 describe("migrate", () => {

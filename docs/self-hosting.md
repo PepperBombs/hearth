@@ -23,7 +23,12 @@ and never goes into a repository.
 sudo useradd --system --create-home --home-dir /opt/hearth --shell /usr/sbin/nologin hearth
 sudo mkdir -p /opt/hearth/repos /var/lib/hearth /etc/hearth
 sudo chown -R hearth:hearth /opt/hearth /var/lib/hearth
+sudo chmod 700 /var/lib/hearth
 ```
+
+`/var/lib/hearth` holds the database, so only the `hearth` user may look
+inside it. The service also creates its files there readable by that user
+only (`UMask=0077` in `hearth.service`).
 
 ## 3. Check out the repositories side by side
 
@@ -44,7 +49,13 @@ sudo chown root:hearth /etc/hearth/hearth.env && sudo chmod 640 /etc/hearth/hear
 ```
 
 Edit `/etc/hearth/hearth.env`: your email address as owner, and the two
-Cloudflare values from step 6.
+Cloudflare values from step 6. Leave `HEARTH_AUTH=cloudflare-access` as it
+is: `dev` signs nobody in and is for a developer's own machine only.
+
+`/etc/hearth/deploy.conf` works as it is for the layout in this guide. If you
+move the database (`HEARTH_DB` in `hearth.env`), give `DATABASE` in
+`deploy.conf` the same path: the deploy script copies that file before every
+switch.
 
 ## 5. Install the service and the deploy timer
 
@@ -57,8 +68,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable hearth.service
 ```
 
-The polkit rule lets the `hearth` user restart `hearth.service` and nothing
-else, so deployments need no root access.
+The polkit rule lets the `hearth` user restart and stop `hearth.service` and
+nothing else, so deployments need no root access. The deploy script restarts
+the service to switch releases, and stops it for the moment it copies the
+database or puts it back.
 
 ## 6. Cloudflare Access, then the tunnel
 
@@ -86,8 +99,37 @@ sudo systemctl enable --now hearth-deploy.timer
 
 The first run builds a release, tries it on a spare port, points
 `/opt/hearth/current` at it and starts the service. After that, every push to
-`main` is picked up within about a minute. A failed build leaves the running
-release untouched; the reason is in the journal and in `/opt/hearth/logs`.
+`main` is picked up within about a minute.
+
+### When a deployment fails
+
+The reason is always in the journal (`journalctl -u hearth-deploy.service`);
+build output is in `/opt/hearth/logs`.
+
+- **The build or the trial start fails.** The running release is untouched.
+  The trial start runs against a copy of the database (`DATABASE` in
+  `/etc/hearth/deploy.conf`), so a migration that fails on your real data
+  fails here. The same commits are tried again after `RETRY_AFTER_MINUTES`.
+- **The new release fails as the live service.** The script stops the
+  service, puts the database back as it was just before the switch, points
+  `current` at the previous release and starts it. The database has to go
+  back because an older build refuses a database that a newer build has
+  migrated. What the failed release left is kept beside the database as
+  `hearth-deploy-failed-<release>.db`. These commits are not tried again by
+  themselves, because every try interrupts the site: push a fix, or delete
+  `/opt/hearth/state/failed` to try the same commits once more.
+- **The previous release does not come back either.** `current` points at
+  it and the note `/opt/hearth/state/restart-pending` stays. Later runs
+  restart the service up to three times, and keep fetching: a newer commit on
+  `main` is still built and tried. Look at `systemctl status hearth.service`.
+  If the service says the database has a migration it does not know, the
+  database was not put back: stop the service, copy the newest
+  `/var/lib/hearth/hearth-deploy-before-<release>.db` over
+  `/var/lib/hearth/hearth.db`, delete `hearth.db-wal` and `hearth.db-shm` if
+  they exist, and start the service.
+
+The copies beside the database (`hearth-deploy-before-…`, one is kept) exist
+for going back after a failed switch. They are not a backup: see step 9.
 
 ## 8. Check that it works
 

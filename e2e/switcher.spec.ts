@@ -116,10 +116,13 @@ test.describe("quick switcher", () => {
     const input = dialog.getByRole("combobox");
     await expect(input).toBeFocused();
 
-    // Drive a real input-method composition through the browser: "shezhi" becomes "设置".
+    // Drive a real input-method composition through the browser. The text being
+    // composed must already match something: with an empty list Enter does
+    // nothing either way, and this test could not fail.
     const client = await page.context().newCDPSession(page);
-    await client.send("Input.imeSetComposition", { text: "shezhi", selectionStart: 6, selectionEnd: 6 });
-    await expect(input).toHaveValue("shezhi");
+    await client.send("Input.imeSetComposition", { text: "设置", selectionStart: 2, selectionEnd: 2 });
+    await expect(input).toHaveValue("设置");
+    await expect(dialog.getByRole("option").first()).toContainText("Settings");
     // The key press that picks the candidate, as the browser reports it mid-composition.
     await input.dispatchEvent("keydown", { key: "Enter", code: "Enter", keyCode: 229, isComposing: true, bubbles: true });
     await expect(dialog).toBeVisible();

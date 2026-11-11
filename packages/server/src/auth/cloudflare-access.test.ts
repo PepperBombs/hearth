@@ -68,6 +68,21 @@ describe("cloudflareAccess", () => {
     });
   });
 
+  it("gives one spelling to an accented letter, however the provider sent it", async () => {
+    const jwt = await token({ claims: { email: "Jose\u0301@example.com" } });
+    expect(await identify(request({ "Cf-Access-Jwt-Assertion": jwt }))).toEqual({
+      email: "jos\u00e9@example.com",
+    });
+  });
+
+  it("refuses an address with a character that only looks like an ASCII letter", async () => {
+    // U+212A, the Kelvin sign, lower-cases to "k": this is not mike@example.com.
+    for (const email of ["mi\u212ae@example.com", "\uff4dike@example.com"]) {
+      const jwt = await token({ claims: { email } });
+      expect(await identify(request({ "Cf-Access-Jwt-Assertion": jwt }))).toBeNull();
+    }
+  });
+
   it("falls back to the CF_Authorization cookie", async () => {
     const result = await identify(
       request({ Cookie: `theme=dark; CF_Authorization=${await token()}; other=1` }),

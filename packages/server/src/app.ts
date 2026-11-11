@@ -12,7 +12,7 @@ import type { Config } from "./config";
 import type { Db } from "./db/database";
 import { listSpacesForUser, updatePreferences } from "./db/people";
 import { apiError } from "./http/errors";
-import { noStore, sameOrigin, securityHeaders } from "./http/security";
+import { loopbackOnly, noStore, sameOrigin, securityHeaders } from "./http/security";
 import { serveWebApp } from "./http/static";
 import { resolveMember } from "./membership";
 
@@ -56,6 +56,8 @@ export function createApp(options: AppOptions): Hono<Env> {
   const app = new Hono<Env>();
 
   app.use(securityHeaders());
+  // Dev mode signs everyone in, so it answers this machine only: pages too, not just /api.
+  if (config.auth.mode === "dev") app.use(loopbackOnly());
 
   app.use("/api/*", noStore());
   app.use("/api/*", sameOrigin({ allowLoopbackOrigins: config.auth.mode === "dev" }));
