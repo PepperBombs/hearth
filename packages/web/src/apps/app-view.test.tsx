@@ -382,6 +382,25 @@ describe("a widget on the dashboard", () => {
     expect(server.count("GET /api/session")).toBe(2);
     expect(screen.getByRole("heading", { level: 2, name: "Feed" })).toBeTruthy();
     expect(server.items[0]?.done).toBe(false);
+    // An app that went is not asked for its list again: that would only find it gone once more.
+    expect(server.count("/checklist/q/list")).toBe(1);
+  });
+
+  it("reads the list again after the session when the not_found was about a row, and the app is still there", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([checklistApp()]);
+    start(server);
+    const checklist = await card("Checklist");
+    const box = await within(checklist).findByRole("checkbox", { name: "Water the plants" });
+
+    // Someone else deleted the item a moment ago.
+    server.items = server.items.filter((item) => item.id !== "i1");
+    fireEvent.click(box);
+
+    await waitFor(() => expect(within(checklist).queryByRole("checkbox", { name: "Water the plants" })).toBeNull());
+    expect(server.count("GET /api/session")).toBe(2);
+    expect(server.count("/checklist/q/list")).toBe(2);
+    expect(within(checklist).getByRole("checkbox", { name: "Book the dentist" })).toBeTruthy();
   });
 
   it("does the same when it is a query that finds the app gone", async () => {

@@ -146,6 +146,7 @@ app.
 | `PUT /api/spaces/:spaceId/apps/:appId` | yes | Adds the app to the space, or brings a removed one back with its data. Takes `{ memberAccess? }`. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/apps/:appId` | yes | Removes the app from the space and keeps its data. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/apps/:appId/data` | yes | Deletes the data of a removed app for good. Takes `{ confirm }`, the app's ID. Answers `204`. |
+| `PATCH /api/spaces/:spaceId/apps/:appId/me` | yes | The caller's own switch and pin for the app: `{ enabled?, pinned? }`. Answers `204`. Needs view access. |
 | `GET /api/spaces/:spaceId/apps/:appId/settings` | yes | The app's settings in this space: `{ space, user }`, the values everyone shares and the caller's own, defaults filled in. Needs view access. |
 | `PATCH /api/spaces/:spaceId/apps/:appId/settings` | yes | Saves the settings named in `{ space?, user? }`; answers like the `GET`. `space` needs edit access, `user` only view. |
 | `POST /api/spaces/:spaceId/apps/:appId/q/:name` | yes | Runs the app's query of that name. Takes `{ input? }`; answers `{ output }`. Needs view access. |
@@ -214,6 +215,11 @@ which passes the check does not stop a server from starting.
   for good. Owners only (`403` for any other member), `confirm` must be the
   app's ID (`400`), and the app must have been removed or its code be gone
   (`409` otherwise).
+- `PATCH .../apps/:appId/me` (`setAppPrefs`) sets the caller's own switch
+  and pin in `app_prefs`, and nobody else's. Anyone who can see the app may,
+  view access included; `404` for anyone it is hidden from. What the request
+  leaves out stays as it is, and `{}` writes nothing. No row means switched
+  on and not pinned. Nobody's access changes.
 
 **Who may use an app** is `resolveInstall` in `src/apps/installs.ts`: `null`,
 `"view"` or `"edit"`. An owner of the space has edit; a member has their

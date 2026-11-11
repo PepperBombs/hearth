@@ -203,6 +203,83 @@ test("the build holds the sample apps: each can be added to a space, used in its
   expect((await sessionNow()).apps).toEqual([]);
 });
 
+test("on the Apps page an app is added without a rebuild, pinned, given settings in both languages and switched off", async ({
+  page,
+  request,
+}) => {
+  type Listed = { id: string; spaceId: string; enabled: boolean; pinned: boolean };
+  const sessionNow = async () =>
+    (await (await request.get("/api/session")).json()) as { spaces: { id: string; kind: string }[]; apps: Listed[] };
+  const personal = (await sessionNow()).spaces.find((space) => space.kind === "personal");
+  expect(personal).toBeDefined();
+  const checklist = `/api/spaces/${personal?.id}/apps/checklist`;
+  const settingsNow = async () => (await (await request.get(`${checklist}/settings`)).json()) as unknown;
+  const problems = watchForProblems(page);
+  const spaceCard = (name: string) => page.getByRole("main").getByRole("region", { name });
+
+  try {
+    await page.goto("/apps");
+    // Nothing is in the personal space yet, and the build holds two apps to choose from.
+    const mine = spaceCard("Personal");
+    await mine.getByRole("button", { name: "Add an app" }).click();
+    const add = page.getByRole("dialog", { name: "Add an app to your personal space" });
+    await add.getByRole("radio", { name: /Checklist/ }).check();
+    await add.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(add).toBeHidden();
+    await expect(mine.getByRole("switch", { name: "Show Checklist" })).toBeChecked();
+    expect((await sessionNow()).apps).toEqual([expect.objectContaining({ id: "checklist", enabled: true })]);
+
+    // Pinned: kept by the server, so a reload still shows it.
+    await mine.getByRole("button", { name: "Pin Checklist" }).click();
+    await expect(page.getByRole("region", { name: "Pinned" }).getByRole("link", { name: "Checklist" })).toBeVisible();
+    await page.reload();
+    await expect(mine.getByRole("button", { name: "Pin Checklist" })).toHaveAttribute("aria-pressed", "true");
+    expect((await sessionNow()).apps).toEqual([expect.objectContaining({ id: "checklist", pinned: true })]);
+
+    // A setting of the space and one of this person's own, in English.
+    await mine.getByRole("button", { name: "Settings of Checklist" }).click();
+    let dialog = page.getByRole("dialog", { name: "Checklist settings" });
+    await dialog.getByRole("textbox", { name: "New entry in Sections" }).fill("Garden");
+    await dialog.getByRole("button", { name: "Add", exact: true }).click();
+    await dialog.getByRole("switch", { name: "Hide ticked items" }).click();
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog).toBeHidden();
+    expect(await settingsNow()).toEqual({ space: { sections: ["Garden"] }, user: { hideDone: true } });
+
+    // And in Chinese.
+    await savePreferences(page, () => page.getByRole("button", { name: /Switch language/ }).click());
+    await expect(page.getByRole("heading", { level: 1, name: "应用" })).toBeVisible();
+    await spaceCard("个人").getByRole("button", { name: "清单的设置" }).click();
+    dialog = page.getByRole("dialog", { name: "清单设置" });
+    await dialog.getByRole("textbox", { name: "分组的新条目" }).fill("厨房");
+    await dialog.getByRole("button", { name: "添加", exact: true }).click();
+    await dialog.getByRole("switch", { name: "隐藏已勾选的事项" }).click();
+    await dialog.getByRole("button", { name: "保存" }).click();
+    await expect(dialog).toBeHidden();
+    expect(await settingsNow()).toEqual({ space: { sections: ["Garden", "厨房"] }, user: { hideDone: false } });
+
+    // The page draws the sections the space now has.
+    await page.goto(`/apps/${personal?.id}/checklist`);
+    await expect(page.getByRole("main").getByRole("button", { name: "厨房" })).toBeVisible();
+
+    // Switched off, it leaves this person's dashboard, and stays listed on the Apps page.
+    await page.goto("/apps");
+    await spaceCard("个人").getByRole("switch", { name: "显示清单" }).click();
+    await expect(spaceCard("个人").getByRole("switch", { name: "显示清单" })).not.toBeChecked();
+    expect((await sessionNow()).apps).toEqual([expect.objectContaining({ id: "checklist", enabled: false, pinned: true })]);
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: "还没有小组件" })).toBeVisible();
+    expect(problems).toEqual([]);
+  } finally {
+    // Removing keeps settings, switches and pins, so put them back for whoever adds the app next.
+    await request.patch(`${checklist}/me`, { data: { enabled: true, pinned: false } });
+    await request.patch(`${checklist}/settings`, { data: { space: { sections: [] }, user: { hideDone: false } } });
+    await request.delete(checklist);
+    await request.patch("/api/me", { data: { locale: "en" } });
+  }
+  expect((await sessionNow()).apps).toEqual([]);
+});
+
 test("the web app carries each sample app's widget and page, and fetches them only when asked", async ({ page, request }) => {
   const problems = watchForProblems(page);
   await page.goto("/");

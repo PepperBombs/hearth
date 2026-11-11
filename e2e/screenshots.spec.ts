@@ -70,6 +70,16 @@ test.describe("screenshots", () => {
             await page.goto(`/apps/${FAMILY_SPACE}/checklist`);
             await page.getByRole("main").getByRole("checkbox").first().waitFor();
             await shot(page, file("app-page"));
+            await page.getByRole("banner").getByRole("button", { name: /Checklist|清单/ }).click();
+            await page.getByRole("dialog").getByRole("switch").waitFor();
+            await shot(page, file("app-settings"));
+            await page.keyboard.press("Escape");
+            await page.goto("/apps");
+            await page.getByRole("main").getByRole("switch").first().waitFor();
+            await shot(page, file("apps-manage"));
+            await page.getByRole("main").getByRole("button", { name: /Add an app|添加应用/ }).first().click();
+            await page.getByRole("dialog").getByRole("radio").first().waitFor();
+            await shot(page, file("apps-add"));
           });
         });
       }

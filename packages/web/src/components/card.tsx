@@ -23,7 +23,7 @@ export type CardHeaderProps = {
    * The title comes first: the tag gets the room the title leaves, and is cut short if that is not enough.
    */
   tag?: ReactNode;
-  /** A short note pushed to the right edge. */
+  /** A short note, or a small button, pushed to the right edge. */
   aside?: ReactNode;
   /** Heading level of the title. Cards usually sit under the page's h1. */
   level?: 2 | 3;
@@ -45,7 +45,7 @@ export function CardHeader({ icon, title, tag, aside, level = 2, className }: Ca
       </Heading>
       {/* Starting from no width, this takes what is left and never squeezes the title. */}
       {tag ? <span className="flex min-w-7 flex-1">{tag}</span> : null}
-      {aside ? <span className="ml-auto flex-none text-xs text-fg-3">{aside}</span> : null}
+      {aside ? <span className="ml-auto flex flex-none items-center text-xs text-fg-3">{aside}</span> : null}
     </div>
   );
 }

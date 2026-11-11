@@ -14,9 +14,21 @@ export function useSession(): Session {
 
 export type SpaceWithApps = { space: Space; apps: AppSummary[] };
 
-/** Apps a person has switched on, which is what every screen lists. */
+/**
+ * The apps in the order every screen lists them: those the person pinned
+ * first, then the rest, each part in the order the server sent them.
+ */
+export function pinnedFirst(apps: readonly AppSummary[]): AppSummary[] {
+  return [...apps.filter((app) => app.pinned), ...apps.filter((app) => !app.pinned)];
+}
+
+/**
+ * Apps a person has switched on, which is what every screen lists, pinned
+ * ones first. Only the Apps page lists the others, so that they can be
+ * switched back on.
+ */
 export function enabledApps(session: Session): AppSummary[] {
-  return session.apps.filter((app) => app.enabled);
+  return pinnedFirst(session.apps.filter((app) => app.enabled));
 }
 
 /**

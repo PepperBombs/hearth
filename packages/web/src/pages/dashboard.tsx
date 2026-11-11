@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import type { AppSummary, WidgetSize } from "@hearth/shared";
 import { EmptyState, Tag } from "@hearth/sdk/web";
 import { AppView } from "../apps/app-view";
+import { AppSettingsButton } from "../apps/manage";
 import { AppIcon } from "../components/app-icon";
 import { Page } from "../components/shell/page";
 import { Card, CardFooter, CardHeader } from "../components/card";
@@ -62,8 +63,9 @@ export function Dashboard() {
 }
 
 /**
- * One app's card. The shell draws the frame: icon, name, the space's tag
- * and the link to the app's page. What is inside is the app's own widget.
+ * One app's card. The shell draws the frame: icon, name, the space's tag,
+ * the button for the app's settings and the link to the app's page. What is
+ * inside is the app's own widget.
  *
  * The same app can be on the dashboard twice, in the personal space and in
  * a group. The tag tells the two apart on screen; for a screen reader the
@@ -83,6 +85,7 @@ function AppCard({ app }: { app: AppSummary }) {
         icon={<AppIcon icon={app.icon} color={app.color} />}
         title={name}
         tag={group === null ? undefined : <Tag>{group}</Tag>}
+        aside={<AppSettingsButton app={app} className="-my-2 -mr-1.5" />}
       />
       <AppView app={app} part="widget" />
       {app.hasPage ? (

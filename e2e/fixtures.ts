@@ -5,13 +5,17 @@
  * PATCH /api/me from memory, checks both against the shared contract, and
  * remembers what was saved, so a reload sees it. It also answers for the
  * framework's two sample apps (packages/fixture-apps), which the tested
- * build holds: the checklist's routes, from a list kept here, and both
- * apps' settings. All names and addresses are made up.
+ * build holds: the checklist's routes, from a list kept here, both apps'
+ * settings, adding either to a space, removing an app, and each person's
+ * switch and pin. All names and addresses are made up.
  */
 import { expect, test as base, type Page, type Route } from "@playwright/test";
 import {
+  addAppRequestSchema,
   appCallRequestSchema,
   appCallResponseSchema,
+  appPrefsPatchSchema,
+  appSettingsPatchSchema,
   appSettingsSchema,
   preferencesPatchSchema,
   sessionSchema,
@@ -128,17 +132,23 @@ export function sessionWithSampleApps(overrides: Partial<Session["user"]> = {}, 
   const session = sessionWithApps(overrides);
   return {
     ...session,
-    apps: [
-      app("checklist", FAMILY_SPACE, "Checklist", "清单", "A list of things to do, ticked off as you go.", "一份待办清单，完成一项勾选一项。", "list-checks", "teal", {
-        widgetSize: "tall",
-        ...checklist,
-      }),
-      app("feed", PERSONAL_SPACE, "Feed", "动态", "A sample card that each person filters for themselves.", "每个人可以自行筛选的示例卡片。", "trending-up", "purple", {
-        widgetSize: "wide",
-        hasPage: false,
-      }),
-    ],
+    apps: [sampleApp("checklist", FAMILY_SPACE, checklist), sampleApp("feed", PERSONAL_SPACE)],
   };
+}
+
+/** One of the two apps this build holds, in a space, as the session lists it. */
+export function sampleApp(id: "checklist" | "feed", spaceId: string, extra: Partial<AppSummary> = {}): AppSummary {
+  if (id === "checklist") {
+    return app("checklist", spaceId, "Checklist", "清单", "A list of things to do, ticked off as you go.", "一份待办清单，完成一项勾选一项。", "list-checks", "teal", {
+      widgetSize: "tall",
+      ...extra,
+    });
+  }
+  return app("feed", spaceId, "Feed", "动态", "A sample card that each person filters for themselves.", "每个人可以自行筛选的示例卡片。", "trending-up", "purple", {
+    widgetSize: "wide",
+    hasPage: false,
+    ...extra,
+  });
 }
 
 /** One item of the sample checklist, as its `list` query answers. */
@@ -181,6 +191,8 @@ export class FakeApi {
   appFailure: Failure | null = null;
   /** Every request made for an app, as "METHOD path", in order. */
   readonly appRequests: string[] = [];
+  /** Every change asked of the routes for apps in a space (add, remove, switch and pin, settings), as "METHOD path body". */
+  readonly appChanges: string[] = [];
   private held: Promise<void> | null = null;
 
   /** Keeps the answers to requests for apps back until the returned function is called. */
@@ -239,6 +251,30 @@ export class FakeApi {
       return route.fulfill({ json: this.current.user });
     }
 
+    const install = /^\/api\/spaces\/([^/]+)\/apps\/([^/]+)$/.exec(path);
+    if (install) {
+      const [, spaceId = "", appId = ""] = install;
+      const method = request.method();
+      const body: unknown = request.postDataJSON();
+      this.appChanges.push(`${method} ${path} ${JSON.stringify(body ?? null)}`);
+      if (this.appFailure) return fail(this.appFailure);
+      const space = this.current.spaces.find((candidate) => candidate.id === spaceId);
+      const listed = this.current.apps.find((candidate) => candidate.spaceId === spaceId && candidate.id === appId);
+      if (method === "PUT") {
+        if (!addAppRequestSchema.safeParse(body).success) return fail({ status: 400, code: "invalid_request", message: "Sample failure" });
+        if (!space || (appId !== "checklist" && appId !== "feed")) return fail({ status: 404, code: "not_found", message: "No such app" });
+        if (!space.canAddApps) return fail({ status: 403, code: "forbidden", message: "Sample failure" });
+        if (!listed) this.setSession({ ...this.current, apps: [...this.current.apps, sampleApp(appId, spaceId)] });
+        return route.fulfill({ status: 204 });
+      }
+      if (method === "DELETE" && listed) {
+        if (space?.role !== "owner") return fail({ status: 403, code: "forbidden", message: "Sample failure" });
+        this.setSession({ ...this.current, apps: this.current.apps.filter((candidate) => candidate !== listed) });
+        return route.fulfill({ status: 204 });
+      }
+      return fail({ status: 404, code: "not_found", message: "No such app" });
+    }
+
     const forApp = /^\/api\/spaces\/([^/]+)\/apps\/([^/]+)\/(.+)$/.exec(path);
     if (forApp) {
       this.appRequests.push(`${request.method()} ${path}`);
@@ -246,8 +282,20 @@ export class FakeApi {
       if (this.appFailure) return fail(this.appFailure);
       const [, spaceId = "", appId = "", rest = ""] = forApp;
       // As on the server: an app the session does not list is not there at all.
-      const listed = this.current.apps.some((candidate) => candidate.spaceId === spaceId && candidate.id === appId);
-      const answer = listed ? this.answerForApp(appId, rest, request.method(), request.postDataJSON()) : undefined;
+      const listed = this.current.apps.find((candidate) => candidate.spaceId === spaceId && candidate.id === appId);
+      if (listed && rest === "me" && request.method() === "PATCH") {
+        const patch = appPrefsPatchSchema.safeParse(request.postDataJSON());
+        if (!patch.success) return fail({ status: 400, code: "invalid_request", message: "Sample failure" });
+        this.appChanges.push(`PATCH ${path} ${JSON.stringify(patch.data)}`);
+        this.setSession({ ...this.current, apps: this.current.apps.map((candidate) => (candidate === listed ? { ...candidate, ...patch.data } : candidate)) });
+        return route.fulfill({ status: 204 });
+      }
+      // As on the server: the space's settings need edit access, the person's own only view.
+      const body: unknown = request.postDataJSON();
+      if (listed?.access === "view" && rest === "settings" && request.method() === "PATCH" && (body as { space?: unknown } | null)?.space) {
+        return fail({ status: 403, code: "forbidden", message: "Sample failure" });
+      }
+      const answer = listed ? this.answerForApp(appId, rest, request.method(), body) : undefined;
       if (answer === undefined) return fail({ status: 404, code: "not_found", message: "No such app or route" });
       if ("status" in answer) return fail(answer);
       return route.fulfill({ json: answer.json });
@@ -260,6 +308,14 @@ export class FakeApi {
   private answerForApp(appId: string, rest: string, method: string, body: unknown): { json: unknown } | Failure | undefined {
     const settings = this.appSettings[appId];
     if (rest === "settings" && method === "GET" && settings) return { json: appSettingsSchema.parse(settings) };
+    if (rest === "settings" && method === "PATCH" && settings) {
+      const patch = appSettingsPatchSchema.safeParse(body);
+      if (!patch.success) return { status: 400, code: "invalid_request", message: "Sample failure" };
+      this.appChanges.push(`PATCH ${appId}/settings ${JSON.stringify(patch.data)}`);
+      const updated = { space: { ...settings.space, ...patch.data.space }, user: { ...settings.user, ...patch.data.user } };
+      this.appSettings[appId] = updated;
+      return { json: appSettingsSchema.parse(updated) };
+    }
     if (appId !== "checklist" || method !== "POST") return undefined;
 
     const envelope = appCallRequestSchema.safeParse(body);

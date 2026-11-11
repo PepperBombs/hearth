@@ -72,9 +72,11 @@ data; step 5, `defineServer` in the SDK, the store behind `ctx.db` and the
 routes that run an app's queries and mutations; step 6, an app's
 settings: the two routes that read and save them, and `ctx.settings`;
 step 7, the build pipeline: `hearth-apps sync` and `check`, the lists of
-apps a build holds, the import scan and `@hearth/sdk/eslint`; and step 8,
+apps a build holds, the import scan and `@hearth/sdk/eslint`; step 8,
 widgets and pages in the shell: `appHooks`, `<AppScope>`, the dashboard's
-cards and the app page.
+cards and the app page; and step 9, the Apps page (add, remove, each
+person's switch and pin, and the route behind them) and the settings dialog
+drawn from a manifest.
 
 ## Layout and commands
 
@@ -82,9 +84,9 @@ cards and the app page.
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. It already holds the requests and answers of routes that are not built yet (groups, members, access, moving an app). |
 | `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too, and `appHooks` (`src/web/hooks.ts`), the hooks a widget or page is written with. `@hearth/sdk/web/scope` is the React context those hooks read, which the shell fills; for the framework only. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer`, `AppError`, `z` and the types of `ctx`; it holds no logic. `@hearth/sdk/manifest-schema` is the run-time check of a manifest and of a setting's value (`settingValueProblems`), for the framework only. `bin/hearth-apps.mjs` and `tools` are the `hearth-apps` command, plain JavaScript: `sync.mjs` (finds the apps, the version handshake, writes the generated lists), `import-scan.mjs` (what a file of an app may import), `default-export.mjs` (whether `widget.tsx`, `page.tsx` and `server.ts` have the default export the generated lists import), `check.mjs`, `eslint-boundary.mjs`. `@hearth/sdk/eslint` (`eslint.js`) and `tsconfig.app.json` are the ESLint and TypeScript configuration of a mini-apps repository. Imports no other Hearth package. |
-| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file), `installs.ts` (who may use which app where; add, remove, bring back, delete data), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db`, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds), `routes.ts`, `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports) and `check-bundle.ts` (run by `hearth-apps check`, not by the server). `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
+| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file), `installs.ts` (who may use which app where; add, remove, bring back, delete data, each person's switch and pin), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db`, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds), `routes.ts`, `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports) and `check-bundle.ts` (run by `hearth-apps check`, not by the server). `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file, a widget and a page; `feed` a manifest and a widget, no server file. |
-| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card and the avatar in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes and settings), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`) and `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"). |
+| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card and the avatar in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes and settings, and adding, removing, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
 | `docs` | `architecture.md`, `self-hosting.md` and `mini-app-contract.md` (the agreed design for mini-apps and its build plan). |
@@ -137,17 +139,35 @@ Things that bite:
 - The dashboard draws a card for each app the session lists, and the card's
   inside from the build's list: an app the session lists and this build
   lacks gets "Reload to update". The shell draws the frame (icon, name,
-  space tag, "Open"), the skeleton and the failed state; an app's widget
+  space tag, the settings button, "Open"), the skeleton and the failed state; an app's widget
   and page have no loading or error code of their own. Groups cannot be
   created yet, so `canCreateGroups` and `canInvitePeople` in the session
   are always `false`; tests that need a group insert it with SQL
   (`src/apps/test-world.ts`).
+- Every list of apps on screen comes from `enabledApps` (switched on,
+  pinned first) or, on the Apps page alone, from all of `session.apps`, in
+  `packages/web/src/session/session.ts`. A switch or pin is
+  `PATCH .../apps/:appId/me`, the caller's own row in `app_prefs`; the page
+  shows it before the server answers and then loads the session again.
+- The settings dialog sends only the values the person changed, compared
+  with what was saved when it opened: a saved value stays saved even when it
+  equals today's default. It checks values with `settingValueProblems`
+  first, and shares its cached settings with `<AppScope>` (`settingsQuery`).
+  A new setting type needs a control in `settings-dialog.tsx` too.
+- Removing an app keeps everyone's switches, pins and settings, and the
+  end-to-end tests against the real server share one server. A test there
+  that changes them puts them back before it removes the app, as
+  `e2e/real-server.spec.ts` does. The stand-in in `e2e/fixtures.ts` answers
+  add, remove, switch and pin and the settings `PATCH` for the two sample
+  apps and records them in `appChanges`.
 - An app's `useQuery` suspends and is read again after any mutation of the
   same app in the same space that the server answered, saved or turned
   down, on window focus and every 15 seconds while the window is visible
   (`REFRESH_EVERY_MS` in `packages/web/src/apps/scope.tsx`); settings
   likewise. Any `not_found`
-  from an app's routes reloads the session. Everything cached for one
+  from an app's routes reloads the session (one reload on its way serves
+  them all); after a mutation's `not_found` the app is read again only if
+  the reloaded session still lists it. Everything cached for one
   install starts with `installQueryKey`, so invalidating that key refreshes
   the whole app.
 - `@hearth/sdk/web/scope` is for the framework: the import scan refuses it

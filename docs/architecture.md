@@ -21,9 +21,12 @@ spaces" below), run an app's queries and mutations (see "What an app's
 code can do") and read and save its settings (see "An app's settings"). A
 build takes in the mini-apps of the folders it is told about (see "How
 mini-apps get into a build"), and the web app draws their widgets and pages
-(see "How the shell draws an app"). Nobody can add an app from the
-interface yet, nor change its settings there. The deploy does not tell its build about any folder
-yet, so a deployed server holds no apps. The scheduler does not exist.
+(see "How the shell draws an app"). On the Apps page a person adds an app
+to a space, switches it on or off and pins it for themselves, and an owner
+removes it; a dialog drawn from the manifest changes an app's settings (see
+"The Apps page and the settings dialog"). Groups cannot be created from the
+interface yet. The deploy does not tell its build about any folder yet, so
+a deployed server holds no apps. The scheduler does not exist.
 The design, and how far the build has come, is in
 [mini-app-contract.md](mini-app-contract.md).
 
@@ -116,6 +119,7 @@ Whether a space *has* an app is a separate thing, a row in `space_apps`:
 | Remove | `DELETE /api/spaces/:spaceId/apps/:appId` | The entry is marked removed. The app disappears for everyone; its data, settings, switches and pins stay. Owners only. |
 | Bring back | the same `PUT` | The mark is cleared and everything is there again. Access starts afresh from what is asked now. Owners only. |
 | Delete data | `DELETE /api/spaces/:spaceId/apps/:appId/data` | Rows, settings and the entry are deleted for good. Owners only, with the app's ID typed as confirmation, and only for an app that was removed or whose code is gone. |
+| Switch and pin | `PATCH /api/spaces/:spaceId/apps/:appId/me` | The caller's own switch (`enabled`) and pin (`pinned`), nobody else's. Anyone who can see the app, view access included. Switching an app off hides it for that person only and changes no one's access. |
 
 Who may use an app is one question with one answer,
 `resolveInstall(db, registry, userId, spaceId, appId)`, which gives `"view"`,
@@ -261,6 +265,29 @@ it is visible, which is how family members see each other's changes.
 Nothing is pushed. A `not_found` from any of an app's routes means it is no
 longer there for this person (removed, or access taken away), so the
 session is loaded again and the card goes.
+
+## The Apps page and the settings dialog
+
+The Apps page (`packages/web/src/pages/apps.tsx`) lists every app the
+session lists, by space, those switched off included, so that they can be
+switched on again. "Pinned" at the top holds shortcuts to the pinned ones,
+and pinned apps come first on the dashboard, in the sidebar and in each
+space's list. Each row has the person's own pin and switch, the app's
+settings and, for an owner of the space, "Remove", which asks first and
+says that the data is kept. Where the person may add apps, "Add an app"
+offers the apps this build holds that the space does not have and whose
+manifest allows its kind; in a group it asks who else may use the app,
+"only me for now" first.
+
+The settings dialog (`packages/web/src/apps/settings-dialog.tsx`) opens
+from the Apps page, from the button on the app's card and from the top bar
+of its page. It draws one control per setting from the manifest: a text box,
+a number box with its limits in words, a switch, a row of choices, chips for
+a multi-select, and an editable list. "For everyone in this space" holds the
+space's settings, read-only for someone who may only view; "Only for you"
+holds the reader's own. Saving sends only the values that were changed, and
+the app's queries are read again afterwards, since a route may read its
+settings.
 
 ## Where an app's data lives
 

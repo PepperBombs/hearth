@@ -15,6 +15,8 @@
  *    whether it saved the change or turned it down, every query of this app
  *    in this space is read again, the settings included: a change that was
  *    turned down was often about something another person changed first.
+ *    After a `not_found` the session is loaded first, and an app it no
+ *    longer lists is not read again.
  *
  * Queries and settings are also read again when the window gets the focus
  * back and every 15 seconds while it is visible. That is how people in a
@@ -28,7 +30,7 @@
  */
 import type { Manifest } from "@hearth/sdk";
 import { AppScopeContext, type AppInfo, type AppScopeValue, type MutationHandle } from "@hearth/sdk/web/scope";
-import type { AppSettings, AppSummary, Locale } from "@hearth/shared";
+import type { AppSettings, AppSummary, Locale, Session } from "@hearth/shared";
 import { useMutation, useQueryClient, useSuspenseQuery, type QueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { ApiRequestError, failureCode, type FailureCode } from "../session/api";
@@ -73,12 +75,14 @@ const LIVE = {
  * session is asked for again: it no longer lists the app, and the shell
  * stops drawing it. The failure itself is passed on unchanged.
  */
-async function forApp<T>(client: QueryClient, call: () => Promise<T>): Promise<T> {
+export async function forApp<T>(client: QueryClient, call: () => Promise<T>): Promise<T> {
   try {
     return await call();
   } catch (error) {
     if (error instanceof ApiRequestError && error.code === "not_found") {
-      void client.invalidateQueries({ queryKey: SESSION_QUERY_KEY });
+      // Several of an app's calls fail together when it goes (a change, then the reads that follow it):
+      // a reload of the session already on its way answers them all, so it is not started again.
+      void client.invalidateQueries({ queryKey: SESSION_QUERY_KEY }, { cancelRefetch: false });
     }
     throw error;
   }
@@ -110,10 +114,20 @@ function useAppMutation(name: string): MutationHandle {
     // A change the server turned down (the item is gone, a conflict) leaves the screen showing what the server
     // no longer holds: read it again, and settle `run` once it shows what is saved. Without an answer there is
     // nothing new to read.
-    onError: (failure) => {
+    onError: async (failure) => {
       const code = failureCode(failure);
       reportFailure(code);
-      return code === "network" ? undefined : client.invalidateQueries({ queryKey: installQueryKey({ spaceId, appId }) });
+      if (code === "network") return;
+      // A not_found may be about the app itself (removed, access taken away) or only about a row in it. The
+      // session reload it started is waited for, and an app the session no longer lists is not read again.
+      if (code === "not_found") {
+        await client.invalidateQueries({ queryKey: SESSION_QUERY_KEY }, { cancelRefetch: false });
+        const listed = client
+          .getQueryData<Session>(SESSION_QUERY_KEY)
+          ?.apps.some((app) => app.spaceId === spaceId && app.id === appId && app.enabled);
+        if (!listed) return;
+      }
+      await client.invalidateQueries({ queryKey: installQueryKey({ spaceId, appId }) });
     },
     retry: false,
   });
@@ -134,17 +148,36 @@ function useAppMutation(name: string): MutationHandle {
 
 const NO_SETTINGS: AppSettings = { space: {}, user: {} };
 
-/** The app's settings here, by name. Suspends until they are known; an app that declares none asks nothing. */
-function useAppSettings(install: Install, manifest: Manifest): Record<string, unknown> {
-  const declared = Object.keys(manifest.settings ?? {}).length > 0;
-  const client = useQueryClient();
-  const { data } = useSuspenseQuery({
-    queryKey: [...installQueryKey(install), "settings"],
-    queryFn: ({ signal }) => (declared ? forApp(client, () => fetchAppSettings(install, signal)) : NO_SETTINGS),
+/** Whether the app declares any settings. One that declares none is never asked for them. */
+export function hasSettings(manifest: Manifest): boolean {
+  return Object.keys(manifest.settings ?? {}).length > 0;
+}
+
+/** Where the app's settings in this space are cached, below the key of everything cached for the app. */
+export function settingsQueryKey(install: Install): readonly [string, string, string, "settings"] {
+  return [...installQueryKey(install), "settings"];
+}
+
+/**
+ * How the app's settings are read: by `<AppScope>` for the app's own code,
+ * and by the settings dialog, which shares the same cached answer.
+ */
+export function settingsQuery(client: QueryClient, install: Install, manifest: Manifest) {
+  const declared = hasSettings(manifest);
+  return {
+    queryKey: settingsQueryKey(install),
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      declared ? forApp(client, () => fetchAppSettings(install, signal)) : Promise.resolve(NO_SETTINGS),
     ...LIVE,
     refetchInterval: declared ? REFRESH_EVERY_MS : false,
     refetchOnWindowFocus: declared,
-  });
+  } as const;
+}
+
+/** The app's settings here, by name. Suspends until they are known; an app that declares none asks nothing. */
+function useAppSettings(install: Install, manifest: Manifest): Record<string, unknown> {
+  const client = useQueryClient();
+  const { data } = useSuspenseQuery(settingsQuery(client, install, manifest));
   // A setting has one scope, so the two groups never hold the same name.
   return useMemo(() => ({ ...data.space, ...data.user }), [data]);
 }

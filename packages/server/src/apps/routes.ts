@@ -1,7 +1,8 @@
 /**
  * The routes for one app in one space (docs/mini-app-contract.md, section
- * A8). So far: add or bring back, remove, delete the data, the app's
- * settings, and the app's own queries and mutations. The request shapes are
+ * A8). So far: add or bring back, remove, delete the data, each person's
+ * own switch and pin, the app's settings, and the app's own queries and
+ * mutations. The request shapes are
  * in `@hearth/shared`. The settings routes and a query or mutation answer
  * with a body; after the others the web app reloads the session to see what
  * changed.
@@ -9,6 +10,7 @@
 import {
   addAppRequestSchema,
   appCallRequestSchema,
+  appPrefsPatchSchema,
   appSettingsPatchSchema,
   deleteAppDataRequestSchema,
   type AppSettings,
@@ -18,7 +20,7 @@ import type { Db } from "../db/database";
 import { readBody } from "../http/body";
 import type { Env, RequireMember } from "../http/env";
 import { callApp } from "./calls";
-import { addApp, deleteAppData, removeApp } from "./installs";
+import { addApp, deleteAppData, removeApp, setAppPrefs } from "./installs";
 import type { Registry } from "./registry";
 import { changeAppSettings, readAppSettings } from "./settings";
 
@@ -48,6 +50,14 @@ export function registerAppRoutes(app: Hono<Env>, options: AppRoutesOptions): vo
     const { confirm } = await readBody(c, deleteAppDataRequestSchema);
     const { spaceId, appId } = c.req.param();
     deleteAppData(db, registry, { userId: c.get("user").id, spaceId, appId, confirm });
+    return c.body(null, 204);
+  });
+
+  // The caller's own switch and pin for the app. View access is enough: they are nobody else's.
+  app.patch("/api/spaces/:spaceId/apps/:appId/me", requireMember, async (c) => {
+    const patch = await readBody(c, appPrefsPatchSchema);
+    const { spaceId, appId } = c.req.param();
+    setAppPrefs(db, registry, { userId: c.get("user").id, spaceId, appId, patch });
     return c.body(null, 204);
   });
 

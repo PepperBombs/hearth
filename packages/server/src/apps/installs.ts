@@ -11,6 +11,7 @@
  */
 import type {
   AccessLevel,
+  AppPrefsPatch,
   AppSummary,
   MemberAccess,
   SpaceKind,
@@ -224,6 +225,30 @@ export function addApp(
       return "restored";
     })
     .immediate();
+}
+
+/**
+ * Changes the caller's own switch and pin for an app in a space: whether it
+ * is switched on for them, and whether it is kept at the top. Nobody else's
+ * are touched, and nobody's access changes. Anyone who can see the app may,
+ * with view access too; what is left out of the patch stays as it is.
+ *
+ * Throws a Refusal: 404 when the app is not there for this person.
+ */
+export function setAppPrefs(db: Db, registry: Registry, request: AppRequest & { patch: AppPrefsPatch }): void {
+  const { userId, spaceId, appId, patch } = request;
+  db.transaction(() => {
+    if (resolveInstall(db, registry, userId, spaceId, appId) === null) throw notFound();
+    if (patch.enabled === undefined && patch.pinned === undefined) return;
+    const flag = (value: boolean | undefined) => (value === undefined ? null : value ? 1 : 0);
+    // No row means switched on and not pinned, so a new row starts from there.
+    db.prepare(
+      `INSERT INTO app_prefs (space_id, app_id, user_id, enabled, pinned)
+       VALUES (@spaceId, @appId, @userId, coalesce(@enabled, 1), coalesce(@pinned, 0))
+       ON CONFLICT (space_id, app_id, user_id) DO UPDATE
+          SET enabled = coalesce(@enabled, enabled), pinned = coalesce(@pinned, pinned)`,
+    ).run({ spaceId, appId, userId, enabled: flag(patch.enabled), pinned: flag(patch.pinned) });
+  }).immediate();
 }
 
 /**
