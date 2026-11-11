@@ -148,6 +148,14 @@ class FakeServer {
       this.session = { ...this.session, apps: this.session.apps.filter((app) => app !== listed) };
       return json(204, null);
     }
+    if (rest === "move" && method === "POST") {
+      const { toSpaceId } = body as { toSpaceId: string };
+      if (this.session.apps.some((app) => app.spaceId === toSpaceId && app.id === appId)) {
+        return json(409, { error: { code: "conflict", message: "That space has the app." } });
+      }
+      this.session = { ...this.session, apps: this.session.apps.map((app) => (app === listed ? { ...app, spaceId: toSpaceId } : app)) };
+      return json(204, null);
+    }
     if (rest === "me" && method === "PATCH") {
       this.session = { ...this.session, apps: this.session.apps.map((app) => (app === listed ? { ...app, ...(body as object) } : app)) };
       return json(204, null);
@@ -166,11 +174,11 @@ class FakeServer {
   };
 }
 
-function start(server: FakeServer, at = "/apps") {
+function start(server: FakeServer, at = "/apps", bundled: readonly BundledApp[] = BUNDLED) {
   vi.stubGlobal("fetch", server.fetch);
   render(
     <MemoryRouter initialEntries={[at]}>
-      <BundledAppsProvider apps={BUNDLED}>
+      <BundledAppsProvider apps={bundled}>
         <App queryClient={new QueryClient()} />
       </BundledAppsProvider>
     </MemoryRouter>,
@@ -355,6 +363,140 @@ describe("the Apps page", () => {
     fireEvent.click(within(family).getByRole("button", { name: "添加应用" }));
     const add = await dialog("向Family添加应用");
     expect(within(add).getByRole("radio", { name: "暂时只有我" })).toBeTruthy();
+  });
+});
+
+describe("moving an app to another space", () => {
+  it("moves a group's app to the owner's own space, after saying what goes along and who loses it", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([summary(checklistManifest, FAMILY, { pinned: true })]);
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Move Checklist in Family" }));
+    const move = await dialog("Move Checklist in Family to another space");
+    // The personal space is the one place it can go, chosen already; nobody else is asked about there.
+    const where = within(move).getByRole("group", { name: "Move to" });
+    expect(within(where).getAllByRole("radio").map((radio) => (radio as HTMLInputElement).value)).toEqual([PERSONAL]);
+    expect((within(where).getByRole("radio", { name: /Personal/ }) as HTMLInputElement).checked).toBe(true);
+    expect(within(move).queryByRole("group", { name: "Who else can use it" })).toBeNull();
+    expect(within(move).getByText(/Everything in it goes along/)).toBeTruthy();
+    expect(within(move).getByText(/Anyone here who is not in that space loses it/)).toBeTruthy();
+
+    fireEvent.click(within(move).getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(server.changes).toEqual([`POST /api/spaces/${FAMILY}/apps/checklist/move {"toSpaceId":"${PERSONAL}"}`]));
+    // It is in the personal space now, which says so and has the focus the dialog had.
+    const personal = await spaceCard("Personal");
+    const notice = await within(personal).findByText("Checklist was moved here.");
+    expect(within(personal).getByRole("button", { name: "Pin Checklist" }).getAttribute("aria-pressed")).toBe("true");
+    expect(within(await spaceCard("Family")).getByText("No apps in this space yet.")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(notice));
+    // The family no longer has it, so it could go back there.
+    fireEvent.click(within(personal).getByRole("button", { name: "Move Checklist" }));
+    const back = await dialog("Move Checklist to another space");
+    expect(within(back).getAllByRole("radio", { name: /Family/ })).toHaveLength(1);
+    expect(within(back).queryByText(/loses it/)).toBeNull();
+  });
+
+  it("moves a personal app into a group, asking who else may use it there, only me for now first", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([summary(feedManifest, PERSONAL)]);
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Move Feed" }));
+    const move = await dialog("Move Feed to another space");
+    expect((within(move).getByRole("radio", { name: /Family/ }) as HTMLInputElement).checked).toBe(true);
+    const who = within(move).getByRole("group", { name: "Who else can use it" });
+    expect((within(who).getByRole("radio", { name: "Only me for now" }) as HTMLInputElement).checked).toBe(true);
+    // From a personal space nobody else had it, so nobody is said to lose it.
+    expect(within(move).queryByText(/loses it/)).toBeNull();
+    fireEvent.click(within(who).getByRole("radio", { name: "Everyone can view" }));
+    fireEvent.click(within(move).getByRole("button", { name: "Move" }));
+
+    await waitFor(() =>
+      expect(server.changes).toEqual([`POST /api/spaces/${PERSONAL}/apps/feed/move {"toSpaceId":"${FAMILY}","memberAccess":"view"}`]),
+    );
+    expect(await within(await spaceCard("Family")).findByRole("switch", { name: "Show Feed in Family" })).toBeTruthy();
+    expect(within(await spaceCard("Family")).getByText("Feed was moved here.")).toBeTruthy();
+  });
+
+  it("is offered to an owner of the space, towards spaces where the person may add apps, that lack the app and that its manifest allows", async () => {
+    const journal = defineApp({
+      id: "journal",
+      name: { en: "Journal", zh: "日记" },
+      description: { en: "One entry a day, for you alone.", zh: "每天一篇，只给自己看。" },
+      icon: "notebook-text",
+      color: "purple",
+      spaces: ["personal"],
+      widget: { size: "wide" },
+    });
+    const bundled = [...BUNDLED, { id: "journal", manifest: journal, hasPage: false, widget: () => Promise.resolve({ default: Empty }) }];
+    const server = new FakeServer();
+    server.session = sessionWith(
+      [
+        summary(checklistManifest, PERSONAL),
+        summary(feedManifest, PERSONAL),
+        summary(journal, PERSONAL),
+        summary(checklistManifest, FAMILY),
+        summary(counter, FAMILY),
+      ],
+      { familyRole: "member", canAdd: true },
+    );
+    start(server, "/apps", bundled);
+
+    const personal = await spaceCard("Personal");
+    // The feed may go to the family; the family has a checklist already; the journal is for personal spaces only.
+    expect(within(personal).getByRole("button", { name: "Move Feed" })).toBeTruthy();
+    expect(within(personal).queryByRole("button", { name: "Move Checklist" })).toBeNull();
+    expect(within(personal).queryByRole("button", { name: "Move Journal" })).toBeNull();
+    // A member does not move the group's apps, not even one who may add apps there.
+    const family = await spaceCard("Family");
+    expect(within(family).queryByRole("button", { name: /^Move/ })).toBeNull();
+
+    // A member who may not add apps to the group cannot move anything into it.
+    cleanup();
+    server.session = sessionWith([summary(feedManifest, PERSONAL)], { familyRole: "member", canAdd: false });
+    start(server, "/apps", bundled);
+    expect(within(await spaceCard("Personal")).getByRole("button", { name: "Pin Feed" })).toBeTruthy();
+    expect(within(await spaceCard("Personal")).queryByRole("button", { name: "Move Feed" })).toBeNull();
+  });
+
+  it("says when the app cannot be moved there, keeps the dialog open and reads the session again", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([summary(feedManifest, PERSONAL)]);
+    server.fail = { ending: `POST /api/spaces/${PERSONAL}/apps/feed/move`, with: { status: 409, code: "conflict" } };
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Move Feed" }));
+    const move = await dialog("Move Feed to another space");
+    const sessions = server.count("GET /api/session");
+    fireEvent.click(within(move).getByRole("button", { name: "Move" }));
+    expect(
+      await within(move).findByText("The app cannot be moved there. That space may have it already, or have kept its data from before."),
+    ).toBeTruthy();
+    expect(server.count("GET /api/session")).toBe(sessions + 1);
+    expect(screen.getByRole("dialog", { name: "Move Feed to another space" })).toBeTruthy();
+
+    // Anything else is worth another try.
+    server.fail = { ending: `POST /api/spaces/${PERSONAL}/apps/feed/move`, with: { status: 500, code: "internal" } };
+    fireEvent.click(within(move).getByRole("button", { name: "Move" }));
+    expect(await within(move).findByText("The app could not be moved. Try again.")).toBeTruthy();
+    fireEvent.click(within(move).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(within(await spaceCard("Personal")).getByRole("switch", { name: "Show Feed" })).toBeTruthy();
+  });
+
+  it("speaks Chinese", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([summary(checklistManifest, FAMILY)], { locale: "zh" });
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "移动Family的清单" }));
+    const move = await dialog("把Family的清单移到另一个空间");
+    expect((within(within(move).getByRole("group", { name: "移到" })).getByRole("radio", { name: /个人/ }) as HTMLInputElement).checked).toBe(true);
+    expect(within(move).getByText(/它的一切都会一起移过去/)).toBeTruthy();
+    fireEvent.click(within(move).getByRole("button", { name: "移动" }));
+    expect(await within(await spaceCard("个人")).findByText("清单已移到这里。")).toBeTruthy();
   });
 });
 

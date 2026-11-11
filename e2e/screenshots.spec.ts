@@ -80,6 +80,10 @@ test.describe("screenshots", () => {
             await page.getByRole("main").getByRole("button", { name: /Add an app|添加应用/ }).first().click();
             await page.getByRole("dialog").getByRole("radio").first().waitFor();
             await shot(page, file("apps-add"));
+            await page.keyboard.press("Escape");
+            await page.getByRole("main").getByRole("button", { name: /^(Move Feed|移动动态)$/ }).click();
+            await page.getByRole("dialog").getByRole("radio").first().waitFor();
+            await shot(page, file("apps-move"));
           });
 
           test("a family in Settings", async ({ page, api }) => {

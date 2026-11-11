@@ -23,12 +23,12 @@ build takes in the mini-apps of the folders it is told about (see "How
 mini-apps get into a build"), and the web app draws their widgets and pages
 (see "How the shell draws an app"). On the Apps page a person adds an app
 to a space, switches it on or off and pins it for themselves, and an owner
-removes it; a dialog drawn from the manifest changes an app's settings (see
-"The Apps page and the settings dialog"). In Settings the server's owner
-creates groups, and the owners of a group add and invite people and decide
-who can use each app (see "Groups, people and access"). Moving an app to
-another space is not built yet. The deploy does not tell its build about any
-folder yet, so a deployed server holds no apps. The scheduler does not exist.
+moves it with its data to another space or removes it; a dialog drawn from
+the manifest changes an app's settings (see "The Apps page and the settings
+dialog"). In Settings the server's owner creates groups, and the owners of a
+group add and invite people and decide who can use each app (see "Groups,
+people and access"). The deploy does not tell its build about any folder
+yet, so a deployed server holds no apps. The scheduler does not exist.
 The design, and how far the build has come, is in
 [mini-app-contract.md](mini-app-contract.md).
 
@@ -44,7 +44,7 @@ Every piece of data belongs to exactly one space and records who created it.
   space moves its data with it.
 
 Groups are created in Settings; see "Groups, people and access" below.
-Moving an app from one space to another is not built yet.
+Moving an app is described under "Apps in spaces".
 
 ## How mini-apps get into a build
 
@@ -116,6 +116,7 @@ Whether a space *has* an app is a separate thing, a row in `space_apps`:
 | Add | `PUT /api/spaces/:spaceId/apps/:appId` | A new entry. The person adding it says what the other members of a group get: nothing (the default), view or edit. Owners may add, and members an owner has allowed to. |
 | Remove | `DELETE /api/spaces/:spaceId/apps/:appId` | The entry is marked removed. The app disappears for everyone; its data, settings, switches and pins stay. Owners only. |
 | Bring back | the same `PUT` | The mark is cleared and everything is there again. Access starts afresh from what is asked now. Owners only. |
+| Move | `POST /api/spaces/:spaceId/apps/:appId/move` | The entry goes to another space with its rows and the settings everyone shares, and so do the own settings, switches and pins of people who are in both spaces; those of everyone else are deleted. Access starts afresh: no exceptions, members get what the mover chooses (nothing by default), and a mover who is not an owner there keeps edit. Owners of the space it is in, into a space they own or may add apps to, whose kind the manifest allows and which never had the app (a removed one counts): nothing is merged. |
 | Delete data | `DELETE /api/spaces/:spaceId/apps/:appId/data` | Rows, settings and the entry are deleted for good. Owners only, with the app's ID typed as confirmation, and only for an app that was removed or whose code is gone. |
 | Switch and pin | `PATCH /api/spaces/:spaceId/apps/:appId/me` | The caller's own switch (`enabled`) and pin (`pinned`), nobody else's. Anyone who can see the app, view access included. Switching an app off hides it for that person only and changes no one's access. |
 
@@ -261,8 +262,8 @@ makes the calls; the app never builds an address. Queries and settings are
 read again when the window gets the focus back and every 15 seconds while
 it is visible, which is how family members see each other's changes.
 Nothing is pushed. A `not_found` from any of an app's routes means it is no
-longer there for this person (removed, or access taken away), so the
-session is loaded again and the card goes.
+longer there for this person (removed or moved, or access taken away), so
+the session is loaded again and the card goes.
 
 ## The Apps page and the settings dialog
 
@@ -272,10 +273,14 @@ switched on again. "Pinned" at the top holds shortcuts to the pinned ones,
 and pinned apps come first on the dashboard, in the sidebar and in each
 space's list. Each row has the person's own pin and switch, the app's
 settings and, for an owner of the space, "Remove", which asks first and
-says that the data is kept. Where the person may add apps, "Add an app"
-offers the apps this build holds that the space does not have and whose
-manifest allows its kind; in a group it asks who else may use the app,
-"only me for now" first.
+says that the data is kept, and "Move" where there is somewhere to move it:
+another space where the person may add apps, which does not have it and
+whose kind the manifest allows. The move dialog says what goes along and,
+from a group, who loses the app; afterwards the space it went to says so
+and takes the focus. Where the person may add apps, "Add an app" offers the
+apps this build holds that the space does not have and whose manifest
+allows its kind. Adding an app to a group, and moving one into a group,
+asks who else may use it, "only me for now" first.
 
 The settings dialog (`packages/web/src/apps/settings-dialog.tsx`) opens
 from the Apps page, from the button on the app's card and from the top bar
@@ -351,7 +356,8 @@ The database itself keeps three rules, so that no code path can break them:
 - A row for an app the space does not have is refused.
 - Moving an app is one change of `space_apps.space_id`, which every table
   above follows. Rows about a person (access, switch, own settings) cannot
-  arrive in a space that person is not in, and go when the person leaves.
+  arrive in a space that person is not in, so a move deletes those first,
+  and they go when the person leaves.
 - An app's entry cannot be deleted while it has rows or settings, and a space
   cannot be deleted while it has apps. Data goes only when it is deleted on
   purpose.

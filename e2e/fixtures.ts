@@ -6,8 +6,9 @@
  * remembers what was saved, so a reload sees it. It also answers for the
  * framework's two sample apps (packages/fixture-apps), which the tested
  * build holds: the checklist's routes, from a list kept here, both apps'
- * settings, adding either to a space, removing an app, and each person's
- * switch and pin. And it keeps groups: creating one, renaming it, adding,
+ * settings, adding either to a space, removing an app, moving one to
+ * another space, and each person's switch and pin. And it keeps groups:
+ * creating one, renaming it, adding,
  * changing and removing people, invitations, the owners' list of a group
  * and who can use each app (`groups`, `people`). All names and addresses
  * are made up.
@@ -24,6 +25,7 @@ import {
   appSettingsSchema,
   createSpaceRequestSchema,
   memberPatchSchema,
+  moveAppRequestSchema,
   preferencesPatchSchema,
   sessionSchema,
   spaceAppsSchema,
@@ -206,7 +208,7 @@ export class FakeApi {
   appFailure: Failure | null = null;
   /** Every request made for an app, as "METHOD path", in order. */
   readonly appRequests: string[] = [];
-  /** Every change asked of the routes for apps in a space (add, remove, switch and pin, settings), as "METHOD path body". */
+  /** Every change asked of the routes for apps in a space (add, remove, move, switch and pin, settings), as "METHOD path body". */
   readonly appChanges: string[] = [];
   /**
    * The owners' list of each group the session's person owns, by space ID,
@@ -326,6 +328,11 @@ export class FakeApi {
         this.appChanges.push(`PATCH ${path} ${JSON.stringify(patch.data)}`);
         this.setSession({ ...this.current, apps: this.current.apps.map((candidate) => (candidate === listed ? { ...candidate, ...patch.data } : candidate)) });
         return route.fulfill({ status: 204 });
+      }
+      if (listed && rest === "move" && request.method() === "POST") {
+        const move = this.moveApp(listed, request.postDataJSON() as unknown);
+        this.appChanges.push(`POST ${path} ${JSON.stringify(request.postDataJSON() ?? null)}`);
+        return move ? fail(move) : route.fulfill({ status: 204 });
       }
       // As on the server: the space's settings need edit access, the person's own only view.
       const body: unknown = request.postDataJSON();
@@ -465,6 +472,43 @@ export class FakeApi {
       return {};
     }
     return refuse(404, "not_found");
+  }
+
+  /**
+   * Moves an app the session lists to another of the person's spaces, as
+   * the server would: they must own the space it is in and may add apps to
+   * the other, which must not have it. Access there starts afresh, and the
+   * owners' lists of both spaces follow. Answers the refusal, or nothing
+   * once the app is moved.
+   */
+  private moveApp(listed: AppSummary, body: unknown): Failure | undefined {
+    const refuse = (status: number, code: ApiErrorCode): Failure => ({ status, code, message: "Sample failure" });
+    const parsed = moveAppRequestSchema.safeParse(body);
+    if (!parsed.success) return refuse(400, "invalid_request");
+    const from = this.current.spaces.find((space) => space.id === listed.spaceId);
+    if (from?.role !== "owner") return refuse(403, "forbidden");
+    const to = this.current.spaces.find((space) => space.id === parsed.data.toSpaceId);
+    if (!to) return refuse(404, "not_found");
+    if (!to.canAddApps) return refuse(403, "forbidden");
+    const target = this.groups[to.id];
+    if (this.current.apps.some((app) => app.spaceId === to.id && app.id === listed.id) || target?.apps.some((entry) => entry.id === listed.id)) {
+      return refuse(409, "conflict");
+    }
+    const source = this.groups[from.id];
+    const entry = source?.apps.find((candidate) => candidate.id === listed.id);
+    if (source) source.apps = source.apps.filter((candidate) => candidate !== entry);
+    target?.apps.push({
+      id: listed.id,
+      hasCode: true,
+      removedAt: null,
+      rowCount: entry?.rowCount ?? 0,
+      memberAccess: parsed.data.memberAccess ?? "none",
+      // Someone who is not an owner there keeps edit for themselves, as when they add an app.
+      members: to.role === "owner" ? {} : { [this.current.user.id]: "edit" },
+    });
+    // The mover can always use it where it went: as an owner, or by that exception.
+    this.setSession({ ...this.current, apps: this.current.apps.map((app) => (app === listed ? { ...app, spaceId: to.id, access: "edit" } : app)) });
+    return undefined;
   }
 
   /** What the sample apps answer, checked against the shared contract. Undefined: nothing at this address. */

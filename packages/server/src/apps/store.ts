@@ -16,6 +16,8 @@
  *   and one for each person. What the values mean is settings.ts's business.
  * - `countRows` says how many rows an app holds in a space, for its owners.
  * - `deleteAllData` deletes everything an app has in a space.
+ * - `deleteOwnSettingsOfOthers` deletes, before an app moves to another
+ *   space, the own settings of the people who are not in that space.
  *
  * Design: docs/mini-app-contract.md, sections A3 and A6.
  */
@@ -509,4 +511,23 @@ export function deleteAllData(
     .prepare("DELETE FROM app_settings WHERE space_id = ? AND app_id = ?")
     .run(spaceId, appId).changes;
   return { rows, settings };
+}
+
+/**
+ * Deletes the own settings that people who are not in another space keep
+ * for one app in this one, and says how many went. An app moving to that
+ * space takes its settings along, but a person's own cannot arrive in a
+ * space they are not in (the database refuses it), so these go first. The
+ * space's shared settings and the own settings of everyone in both spaces
+ * stay. The caller holds the transaction and has checked that the person
+ * may move the app.
+ */
+export function deleteOwnSettingsOfOthers(db: Db, spaceId: string, appId: string, toSpaceId: string): number {
+  return db
+    .prepare(
+      `DELETE FROM app_settings
+        WHERE space_id = @spaceId AND app_id = @appId AND user_id IS NOT NULL
+          AND user_id NOT IN (SELECT user_id FROM space_members WHERE space_id = @toSpaceId)`,
+    )
+    .run({ spaceId, appId, toSpaceId }).changes;
 }

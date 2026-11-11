@@ -1,8 +1,9 @@
 /**
  * The calls the shell makes for a mini-app: one of its queries or mutations,
- * its settings, adding it to a space or removing it, and the person's own
- * switch and pin. A mini-app's own code never builds an address; it names a
- * route, and `<AppScope>` (./scope.tsx) knows the space and the app.
+ * its settings, adding it to a space, removing it or moving it to another,
+ * and the person's own switch and pin. A mini-app's own code never builds an
+ * address; it names a route, and `<AppScope>` (./scope.tsx) knows the space
+ * and the app.
  *
  * Shapes are in @hearth/shared; answers are checked against them.
  */
@@ -13,6 +14,7 @@ import {
   type AppPrefsPatch,
   type AppSettings,
   type AppSettingsPatch,
+  type MoveAppRequest,
 } from "@hearth/shared";
 import { ApiRequestError, request } from "../session/api";
 
@@ -94,6 +96,11 @@ export async function addAppToSpace(install: Install, body: AddAppRequest): Prom
 /** DELETE /api/spaces/:spaceId/apps/:appId: removes an app from a space. Its data is kept. */
 export async function removeAppFromSpace(install: Install): Promise<void> {
   await request(address(install), { method: "DELETE" });
+}
+
+/** POST .../move: moves an app with its data to another space. No body comes back. */
+export async function moveAppToSpace(install: Install, body: MoveAppRequest): Promise<void> {
+  await request(address(install, "move"), { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(body) });
 }
 
 /** PATCH .../me: the person's own switch and pin for the app. No body comes back. */

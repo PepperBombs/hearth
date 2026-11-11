@@ -230,9 +230,9 @@ export default function Widget() {
   rejects when the change was not made; the shell tells the person, so a
   caller that does not wait for it need not catch it. Disable what calls a
   mutation when `canEdit` is false: the server refuses it then.
-- When any call answers that the app is not there (it was removed, or the
-  person's access was taken away), the shell loads the session again and
-  the card or page goes with the app.
+- When any call answers that the app is not there (it was removed or moved
+  to another space, or the person's access was taken away), the shell loads
+  the session again and the card or page goes with the app.
 
 ## The UI kit
 

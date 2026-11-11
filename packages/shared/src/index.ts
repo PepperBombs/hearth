@@ -166,8 +166,6 @@ export type Health = z.infer<typeof healthSchema>;
  * Spaces, members and apps in a space (docs/mini-app-contract.md, section A8)
  *
  * The shapes below were agreed before the routes that use them were built.
- * Moving an app to another space is the one not built yet; until it is, the
- * server answers 404 for it.
  *
  * Request bodies refuse properties they do not know, so a misspelt one is an
  * error and not silently ignored. Where a route has no response schema here,
@@ -280,7 +278,24 @@ export type AddAppRequest = z.infer<typeof addAppRequestSchema>;
 export const deleteAppDataRequestSchema = z.strictObject({ confirm: z.string() });
 export type DeleteAppDataRequest = z.infer<typeof deleteAppDataRequestSchema>;
 
-/** POST /api/spaces/:spaceId/apps/:appId/move: move an app and its data to another space. */
+/**
+ * POST /api/spaces/:spaceId/apps/:appId/move: move an app with its data to
+ * another space. Answers 204 with no body.
+ *
+ * The caller must own the space the app is in (403 `forbidden` for a member
+ * who can use it, 404 for anyone it is hidden from), and own the space it
+ * goes to or be allowed to add apps there (403; 404 when they are not in
+ * that space or it does not exist). The app's manifest must allow the kind
+ * of that space, and the space must never have had the app: one that has
+ * it, or had it and kept its data, answers 409 `conflict`. Apps are not
+ * merged.
+ *
+ * The rows, the settings the space shares, and the own settings, switches
+ * and pins of people who are in both spaces go with the app; those of
+ * everyone else are deleted. Access starts afresh: exceptions made for
+ * single members are gone, and a caller who is not an owner of the target
+ * gets edit for themselves, as when they add an app.
+ */
 export const moveAppRequestSchema = z.strictObject({
   toSpaceId: z.string().min(1),
   /** What the members of the target get. Left out: "none", so a move never widens access by itself. */

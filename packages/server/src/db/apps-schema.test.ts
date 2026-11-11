@@ -606,4 +606,25 @@ describe("every table that belongs to an app in a space", () => {
       ).toBe(true);
     }
   });
+
+  it("and is cleared by a move of what is about people who are not in the new space", () => {
+    // A row about a person cannot arrive in a space that person is not in, so moving an app
+    // (moveApp in src/apps/installs.ts) deletes such rows first, table by table. A new table
+    // about an app in a space that names a person must be added there, or every move of that
+    // app out of a group fails.
+    const db = openDatabase(":memory:");
+    migrate(db);
+    const tables = (
+      all(db, "SELECT name FROM sqlite_master WHERE type = 'table'") as { name: string }[]
+    ).map((row) => row.name);
+    const aboutPeople = tables.filter((table) => {
+      const columns = (db.pragma(`table_info(${table})`) as { name: string }[]).map((c) => c.name);
+      return columns.includes("space_id") && columns.includes("app_id") && columns.includes("user_id");
+    });
+    expect(aboutPeople.sort(), "the tables moveApp clears of people who are not in the new space").toEqual([
+      "app_access",
+      "app_prefs",
+      "app_settings",
+    ]);
+  });
 });

@@ -1,12 +1,12 @@
 /**
  * The routes for apps in a space (docs/mini-app-contract.md, section A8):
  * the owners' list of a space's apps and who can use them, and for one app
- * add or bring back, remove, delete the data, who can use it, each person's
- * own switch and pin, the app's settings, and the app's own queries and
- * mutations. Moving an app to another space is not built yet. The request
- * shapes are in `@hearth/shared`. The owners' list, the settings routes and
- * a query or mutation answer with a body; after the others the web app
- * reloads the session to see what changed.
+ * add or bring back, remove, move to another space, delete the data, who
+ * can use it, each person's own switch and pin, the app's settings, and the
+ * app's own queries and mutations. The request shapes are in
+ * `@hearth/shared`. The owners' list, the settings routes and a query or
+ * mutation answer with a body; after the others the web app reloads the
+ * session to see what changed.
  */
 import {
   addAppRequestSchema,
@@ -15,6 +15,7 @@ import {
   appPrefsPatchSchema,
   appSettingsPatchSchema,
   deleteAppDataRequestSchema,
+  moveAppRequestSchema,
   type AppSettings,
   type SpaceApps,
 } from "@hearth/shared";
@@ -23,7 +24,7 @@ import type { Db } from "../db/database";
 import { readBody } from "../http/body";
 import type { Env, RequireMember } from "../http/env";
 import { callApp } from "./calls";
-import { addApp, deleteAppData, listSpaceApps, removeApp, setAppAccess, setAppPrefs } from "./installs";
+import { addApp, deleteAppData, listSpaceApps, moveApp, removeApp, setAppAccess, setAppPrefs } from "./installs";
 import type { Registry } from "./registry";
 import { changeAppSettings, readAppSettings } from "./settings";
 
@@ -52,6 +53,14 @@ export function registerAppRoutes(app: Hono<Env>, options: AppRoutesOptions): vo
   app.delete("/api/spaces/:spaceId/apps/:appId", requireMember, (c) => {
     const { spaceId, appId } = c.req.param();
     removeApp(db, registry, { userId: c.get("user").id, spaceId, appId });
+    return c.body(null, 204);
+  });
+
+  // Move an app with its data to another space. Access there starts afresh.
+  app.post("/api/spaces/:spaceId/apps/:appId/move", requireMember, async (c) => {
+    const { toSpaceId, memberAccess } = await readBody(c, moveAppRequestSchema);
+    const { spaceId, appId } = c.req.param();
+    moveApp(db, registry, { userId: c.get("user").id, spaceId, appId, toSpaceId, memberAccess });
     return c.body(null, 204);
   });
 

@@ -5,8 +5,9 @@ answers the JSON API under `/api` and serves the built web app for every other
 path. It keeps its data in one SQLite file.
 
 It is the app shell plus most of mini-apps: the server is built with a
-list of apps; an app can be added to a space, removed, brought back and its
-data deleted; an app's own queries and mutations run against rows that
+list of apps; an app can be added to a space, removed, brought back, moved
+with its data to another space and its data deleted; an app's own queries
+and mutations run against rows that
 belong to one app in one space (see "Mini-apps"); and groups can be created,
 people added to them or invited, and their owners decide who can use each
 app (see "Groups and members"). Which apps a server holds is decided when it
@@ -159,6 +160,7 @@ app.
 | `PUT /api/spaces/:spaceId/apps/:appId/access` | yes | Who can use the app: `{ memberAccess?, members? }`, exceptions by user ID, `null` removing one. Owners only. Answers `204`. |
 | `PUT /api/spaces/:spaceId/apps/:appId` | yes | Adds the app to the space, or brings a removed one back with its data. Takes `{ memberAccess? }`. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/apps/:appId` | yes | Removes the app from the space and keeps its data. Answers `204`. |
+| `POST /api/spaces/:spaceId/apps/:appId/move` | yes | Moves the app with its data to another space: `{ toSpaceId, memberAccess? }`. Owners of the space it is in, into a space they own or may add apps to. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/apps/:appId/data` | yes | Deletes the data of a removed app for good. Takes `{ confirm }`, the app's ID. Answers `204`. |
 | `PATCH /api/spaces/:spaceId/apps/:appId/me` | yes | The caller's own switch and pin for the app: `{ enabled?, pinned? }`. Answers `204`. Needs view access. |
 | `GET /api/spaces/:spaceId/apps/:appId/settings` | yes | The app's settings in this space: `{ space, user }`, the values everyone shares and the caller's own, defaults filled in. Needs view access. |
@@ -172,8 +174,7 @@ from the code. Unknown routes under `/api` answer `404` with `not_found`. An
 unexpected failure answers `500` with `internal` and no detail; the detail goes
 to the server's log. `forbidden` (403) is for a member who may not do this,
 and `conflict` (409) for a request that cannot be carried out as things
-stand. The contract also holds the request of the one route of section A8
-that is not built yet, moving an app (`docs/mini-app-contract.md`).
+stand.
 
 ## Mini-apps
 
@@ -228,6 +229,21 @@ which passes the check does not stop a server from starting.
   for good. Owners only (`403` for any other member), `confirm` must be the
   app's ID (`400`), and the app must have been removed or its code be gone
   (`409` otherwise).
+- `POST .../apps/:appId/move` (`moveApp`) moves the app with its data to
+  the space `toSpaceId` names, in one immediate transaction. The caller
+  must own the space the app is in (`403` for a member who can use it,
+  `404` for anyone it is hidden from, a removed app and one without code
+  included) and own the other space or be allowed to add apps there (`404`
+  when they are not in it or it does not exist, `403` for a plain member).
+  `409` when the manifest does not allow that kind of space, and when that
+  space has an entry for the app, removed or not: nothing is merged. The
+  rows, the settings everyone shares, and the own settings, switches and
+  pins of people who are in both spaces go along; those of everyone else are
+  deleted first, since the database refuses a row about a person in a
+  space they are not in. Access starts afresh: every exception goes, members
+  get `memberAccess` (`none` when left out), and a caller who is not an
+  owner of the new space gets edit there, as when they add an app. Who
+  added the app, and when, stays recorded.
 - `PATCH .../apps/:appId/me` (`setAppPrefs`) sets the caller's own switch
   and pin in `app_prefs`, and nobody else's. Anyone who can see the app may,
   view access included; `404` for anyone it is hidden from. What the request
@@ -439,10 +455,12 @@ Tables so far, from migration 1: `users`, `spaces`, `space_members`,
 `space_apps` (an app added to a space), `app_rows` (every mini-app's data),
 `app_settings`, `app_access`, `app_prefs` and `space_invitations`, plus the
 column `space_members.can_add_apps`. The server writes `space_apps`; the
-access route, and adding an app as a member, write `app_access`; an app's
-mutations write `app_rows` through the store, the settings route writes
-`app_settings` and the switch-and-pin route `app_prefs`; all of them are
-deleted from when an app's data is deleted. The routes for groups write
+access route, and adding or moving an app as a member, write `app_access`;
+an app's mutations write `app_rows` through the store, the settings route
+writes `app_settings` and the switch-and-pin route `app_prefs`; all of them
+are deleted from when an app's data is deleted, and a move deletes from the
+last three what is about people who are not in the new space. The routes
+for groups write
 `spaces`, `space_members`, `invitations` and `space_invitations`. SQL for
 `app_rows` and `app_settings` lives in `src/apps/store.ts` only.
 
@@ -451,7 +469,10 @@ Rules the database keeps by itself, tested as SQL in
 
 - Every table with a `space_id` and an `app_id` refers to `space_apps` with
   `ON UPDATE CASCADE`, so an app moves to another space with one `UPDATE`. A
-  new table of that kind needs the same key; a test fails without it.
+  new table of that kind needs the same key; a test fails without it. One
+  that also has a `user_id` must be cleared by `moveApp` of people who are
+  not in the new space; another test names the three there are and fails
+  for a fourth.
 - `app_rows` and `app_settings` use `ON DELETE RESTRICT`: delete them first,
   on purpose, then the `space_apps` row.
 - A space keeps at least one owner. Three triggers on `space_members` refuse

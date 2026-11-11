@@ -1,7 +1,7 @@
 /**
- * Apps in spaces: who may use which app where, and adding, removing and
- * deleting them, each person's switch and pin, the owners' list of a
- * space's apps and the owners' choice of who can use each. An app in a
+ * Apps in spaces: who may use which app where, and adding, removing,
+ * moving and deleting them, each person's switch and pin, the owners' list
+ * of a space's apps and the owners' choice of who can use each. An app in a
  * space is a row in `space_apps`, called an install here.
  *
  * Every function names its space, and every answer about access comes from
@@ -25,7 +25,7 @@ import { membershipOf } from "../db/people";
 import { listInvitations, listMemberDetails } from "../groups/members";
 import { notFound, Refusal } from "../http/errors";
 import type { Registry } from "./registry";
-import { countRows, deleteAllData } from "./store";
+import { countRows, deleteAllData, deleteOwnSettingsOfOthers } from "./store";
 
 /**
  * The installs a person can reach and what they may do with each: one row
@@ -353,6 +353,88 @@ export function removeApp(db: Db, registry: Registry, request: AppRequest): void
     db.prepare(
       "UPDATE space_apps SET removed_at = ? WHERE space_id = ? AND app_id = ? AND removed_at IS NULL",
     ).run(new Date().toISOString(), spaceId, appId);
+  }).immediate();
+}
+
+/**
+ * Moves an app with its data to another space: its rows, the settings
+ * everyone in the space shares, and the own settings, switches and pins of
+ * the people who are in both spaces. Nothing is merged: a space that has
+ * the app, or had it and kept its data, cannot take it.
+ *
+ * The person moving it must own the space it is in (owner's decision 3),
+ * and own the space it goes to or be allowed to add apps there; the app's
+ * manifest must allow that kind of space. In one immediate transaction,
+ * after the checks:
+ *
+ * 1. Every exception made for single members goes: access starts afresh.
+ * 2. What belongs to people who are not in the new space (their own
+ *    settings, switch and pin) is deleted, since it cannot go there.
+ * 3. One change of the entry's space, which every table about the app
+ *    follows (`ON UPDATE CASCADE`), and of what its members get:
+ *    `memberAccess`, "none" when left out. Who added the app stays recorded.
+ * 4. A mover who is not an owner of the new space gets edit for
+ *    themselves, as when they add an app, so that the app arrives for them
+ *    and the owners only until access is chosen.
+ *
+ * A move therefore never widens access by itself: in the new space the app
+ * is for its owners, the mover and whoever the mover chose.
+ *
+ * Throws a Refusal: 404 when the app is not there for this person, or they
+ * are not in the space it should go to (or it does not exist); 403 when they
+ * do not own the space it is in, or may not add apps to the other; 409 when
+ * the other space cannot take it.
+ */
+export function moveApp(
+  db: Db,
+  registry: Registry,
+  request: AppRequest & { toSpaceId: string; memberAccess?: MemberAccess },
+): void {
+  const { userId, spaceId, appId, toSpaceId } = request;
+  db.transaction(() => {
+    if (resolveInstall(db, registry, userId, spaceId, appId) === null) throw notFound();
+    if (membershipOf(db, userId, spaceId)?.role !== "owner") {
+      throw new Refusal(403, "forbidden", "Moving an app out of a space is for the space's owners.");
+    }
+    const target = membershipOf(db, userId, toSpaceId);
+    if (!target) throw notFound();
+    const ownsTarget = target.role === "owner";
+    if (!ownsTarget && target.canAddApps !== 1) {
+      throw new Refusal(403, "forbidden", "Moving an app into a space is for its owners and the members they allow to add apps.");
+    }
+    const manifest = registry.get(appId)?.manifest;
+    if (manifest?.spaces && !manifest.spaces.includes(target.kind)) {
+      throw new Refusal(409, "conflict", `This app cannot be moved to a ${target.kind} space.`);
+    }
+    // The space the app is in has it too, so moving it to where it is ends here.
+    if (installOf(db, toSpaceId, appId)) {
+      throw new Refusal(
+        409,
+        "conflict",
+        "That space has this app already, or had it and kept its data. Apps are not merged: move it to another space.",
+      );
+    }
+
+    db.prepare("DELETE FROM app_access WHERE space_id = ? AND app_id = ?").run(spaceId, appId);
+    db.prepare(
+      `DELETE FROM app_prefs
+        WHERE space_id = @spaceId AND app_id = @appId
+          AND user_id NOT IN (SELECT user_id FROM space_members WHERE space_id = @toSpaceId)`,
+    ).run({ spaceId, appId, toSpaceId });
+    deleteOwnSettingsOfOthers(db, spaceId, appId, toSpaceId);
+
+    db.prepare("UPDATE space_apps SET space_id = ?, member_access = ? WHERE space_id = ? AND app_id = ?").run(
+      toSpaceId,
+      request.memberAccess ?? "none",
+      spaceId,
+      appId,
+    );
+    if (!ownsTarget) {
+      db.prepare(
+        `INSERT INTO app_access (space_id, app_id, user_id, level, created_by, updated_at)
+         VALUES (?, ?, ?, 'edit', ?, ?)`,
+      ).run(toSpaceId, appId, userId, userId, new Date().toISOString());
+    }
   }).immediate();
 }
 

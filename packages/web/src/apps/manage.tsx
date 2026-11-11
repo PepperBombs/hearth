@@ -1,8 +1,8 @@
 /**
  * What a person does with an app as a whole, rather than inside it: add it
- * to a space, remove it, switch it on or off and pin it for themselves, and
- * open its settings. The Apps page uses all of them; the dashboard's cards
- * and an app's page offer the settings.
+ * to a space, remove it, move it to another space, switch it on or off and
+ * pin it for themselves, and open its settings. The Apps page uses all of
+ * them; the dashboard's cards and an app's page offer the settings.
  *
  * After each change the session is loaded again, since every screen draws
  * its lists from it. A switch or pin shows at once, before the server has
@@ -11,14 +11,15 @@
  */
 import type { Manifest } from "@hearth/sdk";
 import { IconButton } from "@hearth/sdk/web";
-import type { AppPrefsPatch, AppSummary, MemberAccess, Session } from "@hearth/shared";
+import type { AppPrefsPatch, AppSummary, MemberAccess, Session, Space } from "@hearth/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Settings2 } from "lucide-react";
 import { useState } from "react";
+import { spaceAppsKey } from "../groups/queries";
 import { pickLocalized } from "../i18n";
 import { useI18n } from "../session/preferences";
 import { SESSION_QUERY_KEY, useSession } from "../session/session";
-import { addAppToSpace, patchAppPrefs, removeAppFromSpace, type Install } from "./api";
+import { addAppToSpace, moveAppToSpace, patchAppPrefs, removeAppFromSpace, type Install } from "./api";
 import { useBundledApps } from "./bundled";
 import { hasSettings } from "./scope";
 import { AppSettingsDialog } from "./settings-dialog";
@@ -68,6 +69,50 @@ export function useRemoveApp() {
     mutationFn: (install: Install) => removeAppFromSpace(install),
     onSuccess: () => client.invalidateQueries({ queryKey: SESSION_QUERY_KEY }),
   });
+}
+
+export type MoveRequest = { install: Install; toSpaceId: string; memberAccess?: MemberAccess };
+
+/**
+ * Moves an app with its data to another space. Once the server has
+ * answered, whether it moved the app or turned the move down, the session
+ * and the owners' lists of both spaces are loaded again, and the move counts
+ * as finished when they are: a refusal usually means that the screen was out
+ * of date, for example because someone else moved the app first.
+ */
+export function useMoveApp() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ install, toSpaceId, memberAccess }: MoveRequest) =>
+      moveAppToSpace(install, memberAccess === undefined ? { toSpaceId } : { toSpaceId, memberAccess }),
+    onSettled: (_result, _error, { install, toSpaceId }) =>
+      Promise.all([
+        client.invalidateQueries({ queryKey: SESSION_QUERY_KEY }),
+        client.invalidateQueries({ queryKey: spaceAppsKey(install.spaceId) }),
+        client.invalidateQueries({ queryKey: spaceAppsKey(toSpaceId) }),
+      ]),
+  });
+}
+
+/**
+ * The spaces this person could move an app to, as the session tells: those
+ * other than its own where they may add apps, whose kind the app's manifest
+ * allows, and which do not list the app already. Empty unless they own the
+ * space the app is in. The server decides again; a space that holds the app
+ * hidden from this person, or kept its data from before, turns the move down.
+ */
+export function useMoveTargets(app: AppSummary): Space[] {
+  const session = useSession();
+  const manifest = useBundledManifest(app.id);
+  const from = session.spaces.find((space) => space.id === app.spaceId);
+  if (from?.role !== "owner") return [];
+  return session.spaces.filter(
+    (space) =>
+      space.id !== app.spaceId &&
+      space.canAddApps &&
+      (!manifest?.spaces || manifest.spaces.includes(space.kind)) &&
+      !session.apps.some((other) => other.spaceId === space.id && other.id === app.id),
+  );
 }
 
 /**

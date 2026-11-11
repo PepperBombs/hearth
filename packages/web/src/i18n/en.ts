@@ -69,6 +69,17 @@ export const en = {
     "It disappears for everyone in this space. Its data is kept: adding the app again brings everything back.",
   "apps.removeConfirm": "Remove",
   "apps.removeFailed": "The app could not be removed. Try again.",
+  "apps.move": "Move {app}",
+  "apps.moveTitle": "Move {app} to another space",
+  "apps.moveTo": "Move to",
+  "apps.moveBody":
+    "Everything in it goes along: its data, the settings everyone shares, and your own. It is no longer in this space afterwards.",
+  "apps.moveOthers":
+    "Who can use it starts afresh in the new space. Anyone here who is not in that space loses it, and their own settings for it are deleted.",
+  "apps.moveConfirm": "Move",
+  "apps.moveFailed": "The app could not be moved. Try again.",
+  "apps.moveRefused": "The app cannot be moved there. That space may have it already, or have kept its data from before.",
+  "apps.moved": "{app} was moved here.",
   "apps.changeFailed": "That change could not be saved. Try again.",
 
   "appSettings.open": "Settings of {app}",

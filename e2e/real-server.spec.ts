@@ -5,7 +5,9 @@
  * headers the server sends, the routes for apps as the built server answers
  * them, the sample apps the build was given (packages/fixture-apps), the
  * screen for someone who was not invited, and a family of two people: the
- * owner and Lin, each with a copy of the server of their own over one database.
+ * owner and Lin, each with a copy of the server of their own over one
+ * database, who share a group and an app the owner then moves out of it and
+ * back.
  */
 import { expect, test, type Page } from "@playwright/test";
 import { GUEST_URL, MEMBER_EMAIL, MEMBER_URL, OWNER_EMAIL, SERVER_VERSION } from "./servers.ts";
@@ -411,6 +413,112 @@ test("two people share a family: the owner invites Lin, decides what she may do 
     }
     await linApi.dispose();
     await linContext.close();
+  }
+  expect((await ownerSession()).apps).toEqual([]);
+});
+
+test("the owner moves a group's checklist into their own space and back: its data goes along, access starts afresh", async ({
+  page,
+  request,
+  playwright,
+}) => {
+  type Listed = { id: string; spaceId: string; access: string; pinned: boolean };
+  type Session = { user: { id: string }; spaces: { id: string; kind: string; name: string }[]; apps: Listed[] };
+  type Item = { name: string; createdBy: string };
+  const ownerSession = async () => (await (await request.get("/api/session")).json()) as Session;
+  const owner = await ownerSession();
+  const personalId = owner.spaces.find((space) => space.kind === "personal")?.id ?? "";
+  const inPersonal = `/api/spaces/${personalId}/apps/checklist`;
+  // A name of its own, so that a group an earlier run left on a reused server is not taken for this one.
+  const groupName = `Movers ${Date.now().toString(36)}`;
+  const ownItem = `Sample from the owner ${Date.now()}`;
+  const linItem = `Sample from Lin ${Date.now()}`;
+  const problems = watchForProblems(page);
+  const card = (name: string) => page.getByRole("main").getByRole("region", { name });
+  const linApi = await playwright.request.newContext({ baseURL: MEMBER_URL });
+  const linSession = async () => (await (await linApi.get("/api/session")).json()) as Session;
+  const itemsAt = async (api: typeof request, address: string) =>
+    ((await (await api.post(`${address}/q/list`, { data: {} })).json()) as { output: Item[] }).output.map((item) => [item.name, item.createdBy]);
+  let groupId = "";
+
+  try {
+    // A group of the owner and Lin, with the checklist for both to change, an item from each,
+    // the sections everyone shares, and each one's own setting and pin.
+    const created = await request.post("/api/spaces", { data: { name: groupName } });
+    expect(created.status()).toBe(201);
+    groupId = ((await created.json()) as { id: string }).id;
+    const inGroup = `/api/spaces/${groupId}/apps/checklist`;
+    expect((await request.post(`/api/spaces/${groupId}/members`, { data: { email: MEMBER_EMAIL } })).status()).toBe(200);
+    // Her first request makes an invited Lin arrive; on a server she already uses, she was added at once.
+    const lin = (await linSession()).user;
+    expect((await request.put(inGroup, { data: { memberAccess: "edit" } })).status()).toBe(204);
+    expect((await request.post(`${inGroup}/m/add`, { data: { input: { name: ownItem } } })).status()).toBe(200);
+    expect((await linApi.post(`${inGroup}/m/add`, { data: { input: { name: linItem } } })).status()).toBe(200);
+    expect((await request.patch(`${inGroup}/settings`, { data: { space: { sections: ["Garden"] }, user: { hideDone: true } } })).status()).toBe(200);
+    expect((await linApi.patch(`${inGroup}/settings`, { data: { user: { hideDone: true } } })).status()).toBe(200);
+    expect((await request.patch(`${inGroup}/me`, { data: { pinned: true } })).status()).toBe(204);
+    expect((await linApi.patch(`${inGroup}/me`, { data: { pinned: true } })).status()).toBe(204);
+
+    // Apps are not merged: a space that has the checklist, or had it and kept its data, cannot take this one.
+    expect((await request.put(inPersonal, { data: {} })).status()).toBe(204);
+    expect((await request.post(`${inGroup}/move`, { data: { toSpaceId: personalId } })).status()).toBe(409);
+    expect((await request.delete(inPersonal)).status()).toBe(204);
+    expect((await request.post(`${inGroup}/move`, { data: { toSpaceId: personalId } })).status()).toBe(409);
+    // Earlier tests also leave it removed there with data. Deleting that data makes room.
+    expect((await request.delete(`${inPersonal}/data`, { data: { confirm: "checklist" } })).status()).toBe(204);
+
+    // The owner moves it on the Apps page into their own space.
+    await page.goto("/apps");
+    await card(groupName).getByRole("button", { name: `Move Checklist in ${groupName}`, exact: true }).click();
+    let dialog = page.getByRole("dialog", { name: `Move Checklist in ${groupName} to another space` });
+    await dialog.getByRole("radio", { name: /Personal/ }).check();
+    await dialog.getByRole("button", { name: "Move", exact: true }).click();
+    await expect(card("Personal").getByText("Checklist was moved here.")).toBeFocused();
+
+    // Both items arrived, each still by whoever wrote it, with the sections and the owner's own pin and setting.
+    expect(await itemsAt(request, inPersonal)).toEqual([
+      [ownItem, owner.user.id],
+      [linItem, lin.id],
+    ]);
+    expect(await (await request.get(`${inPersonal}/settings`)).json()).toEqual({ space: { sections: ["Garden"] }, user: { hideDone: true } });
+    expect((await ownerSession()).apps).toEqual([expect.objectContaining({ id: "checklist", spaceId: personalId, access: "edit", pinned: true })]);
+    // Lin is not in the owner's own space: the app is gone for her, at the old address and the new one.
+    expect((await linSession()).apps.filter((app) => app.id === "checklist")).toEqual([]);
+    expect((await linApi.post(`${inGroup}/q/list`, { data: {} })).status()).toBe(404);
+    expect((await linApi.post(`${inPersonal}/q/list`, { data: {} })).status()).toBe(404);
+
+    // Back into the group, for everyone to view.
+    await card("Personal").getByRole("button", { name: "Move Checklist", exact: true }).click();
+    dialog = page.getByRole("dialog", { name: "Move Checklist to another space" });
+    await dialog.getByRole("radio", { name: new RegExp(groupName) }).check();
+    await dialog.getByRole("radio", { name: "Everyone can view" }).check();
+    await dialog.getByRole("button", { name: "Move", exact: true }).click();
+    await expect(card(groupName).getByText("Checklist was moved here.")).toBeFocused();
+
+    // Lin has it again, as everyone gets it now, and the data is all there; her own pin and setting
+    // did not survive the time in a space she is not in, and her old edit access did not come back.
+    expect((await linSession()).apps.filter((app) => app.id === "checklist")).toEqual([
+      expect.objectContaining({ spaceId: groupId, access: "view", pinned: false }),
+    ]);
+    expect(await (await linApi.get(`${inGroup}/settings`)).json()).toEqual({ space: { sections: ["Garden"] }, user: { hideDone: false } });
+    expect(await itemsAt(linApi, inGroup)).toEqual([
+      [ownItem, owner.user.id],
+      [linItem, lin.id],
+    ]);
+    expect((await linApi.post(`${inGroup}/m/add`, { data: { input: { name: "Sample not allowed" } } })).status()).toBe(403);
+    // The owner's own pin made both trips.
+    expect((await ownerSession()).apps).toEqual([expect.objectContaining({ id: "checklist", spaceId: groupId, pinned: true })]);
+    expect(problems).toEqual([]);
+  } finally {
+    // The group stays (nothing deletes a space); the app and Lin leave it, and the owner's
+    // dashboard is empty again for whatever runs next against the same server.
+    if (groupId) {
+      await request.delete(`/api/spaces/${groupId}/apps/checklist`);
+      await request.delete(inPersonal);
+      const lin = ((await (await linApi.get("/api/session")).json()) as { user?: { id: string } }).user;
+      if (lin) await request.delete(`/api/spaces/${groupId}/members/${lin.id}`);
+    }
+    await linApi.dispose();
   }
   expect((await ownerSession()).apps).toEqual([]);
 });
