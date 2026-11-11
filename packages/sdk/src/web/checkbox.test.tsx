@@ -62,8 +62,9 @@ describe("Checkbox", () => {
     );
     const box = screen.getByRole<HTMLInputElement>("checkbox", { name: "Oat milk" });
     expect(box.disabled).toBe(true);
-    fireEvent.click(box);
-    fireEvent.click(screen.getByText("Oat milk"));
+    // The element's own click(), as a press would be: a made-up event reaches even a disabled control.
+    box.click();
+    screen.getByText("Oat milk").click();
     expect(onChange).not.toHaveBeenCalled();
   });
 

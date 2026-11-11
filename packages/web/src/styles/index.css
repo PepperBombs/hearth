@@ -2,6 +2,13 @@
 @import "./tokens.css";
 
 /*
+ * The UI kit lives in the SDK, outside this package, where Tailwind does not
+ * look by itself. Without this line the classes its components use would be
+ * missing from the stylesheet.
+ */
+@source "../../../sdk/src/web";
+
+/*
  * Tailwind theme. The default palette, type scale, radii, shadows and
  * breakpoints are cleared so that only Hearth's tokens can be used.
  */

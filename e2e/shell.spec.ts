@@ -204,6 +204,22 @@ test.describe("shell on a desktop", () => {
     }
   });
 
+  test("styles the UI kit, whose components live in the SDK package", async ({ page, api }) => {
+    void api;
+    await page.goto("/settings");
+    // The look of the pressed choice comes from classes that only the kit's own
+    // source uses, so it is lost if the stylesheet is built without reading the SDK.
+    const pressed = page.getByRole("group", { name: "Theme" }).getByRole("button", { name: "Light" });
+    await expect(pressed).toHaveAttribute("aria-pressed", "true");
+    const look = await pressed.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { radius: style.borderRadius, shadow: style.boxShadow, height: style.height };
+    });
+    expect(look.radius).toBe("6px");
+    expect(look.shadow).not.toBe("none");
+    expect(look.height).toBe("28px");
+  });
+
   test("says so when a page does not exist", async ({ page, api }) => {
     void api;
     await page.goto("/no/such/page");

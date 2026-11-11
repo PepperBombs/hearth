@@ -270,7 +270,7 @@ export default defineConfig([
   },
   {
     name: "hearth/browser-globals",
-    files: ["packages/web/src/**", "packages/web/public/**"],
+    files: ["packages/web/src/**", "packages/web/public/**", "packages/sdk/src/web/**"],
     languageOptions: { globals: globals.browser },
   },
   {
