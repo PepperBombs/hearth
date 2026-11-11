@@ -1,4 +1,4 @@
-import { Globe, House, Moon, Search, SlidersHorizontal, Sun } from "lucide-react";
+import { Globe, House, LayoutGrid, Moon, Search, SlidersHorizontal, Sun } from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router";
 import type { AppSummary } from "@hearth/shared";
@@ -20,10 +20,17 @@ function SectionLabel({ children }: { children: ReactNode }) {
   return <h2 className="px-2 pt-3 pb-1 text-xs font-medium text-fg-3">{children}</h2>;
 }
 
+/**
+ * The pages of a space's apps, those the person has switched on. A space
+ * with none switched on has no apps as far as this person's lists go; one
+ * whose apps have only a widget says that they are on the dashboard.
+ */
 function AppLinks({ apps }: { apps: AppSummary[] }) {
   const { locale, t } = usePreferences();
   const withPages = apps.filter((app) => app.hasPage);
-  if (withPages.length === 0) return <p className="px-2 py-1 text-xs text-fg-3">{t("nav.noApps")}</p>;
+  if (withPages.length === 0) {
+    return <p className="px-2 py-1 text-xs text-fg-3">{apps.length === 0 ? t("nav.noApps") : t("nav.widgetsOnly")}</p>;
+  }
   return (
     <ul className="flex flex-col gap-1">
       {withPages.map((app) => (
@@ -77,6 +84,11 @@ export function Sidebar({ className }: { className?: string }) {
         <NavLink to="/" end className={NAV_ITEM}>
           <House size={16} aria-hidden="true" />
           <span className="clip">{t("nav.dashboard")}</span>
+        </NavLink>
+        {/* Where apps are added, switched on and off, pinned, moved and removed. An app's own page is marked by its own link below. */}
+        <NavLink to="/apps" end className={NAV_ITEM}>
+          <LayoutGrid size={16} aria-hidden="true" />
+          <span className="clip">{t("nav.apps")}</span>
         </NavLink>
 
         <section aria-label={t("nav.personal")}>

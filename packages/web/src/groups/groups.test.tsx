@@ -270,6 +270,12 @@ describe("groups in Settings", () => {
     expect(peopleIn(book)).toEqual(["SSam Example (you)sam@example.comOwner"]);
     expect(within(await card("Groups")).getByText("Book club was created. Add the people who share it.")).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+
+    // It has no apps yet; the card says where they are added, and leads there.
+    const appsPage = await within(book).findByRole("link", { name: "the Apps page" });
+    expect(appsPage.closest("p")?.textContent).toBe("No apps in this group yet. Add one on the Apps page.");
+    fireEvent.click(appsPage);
+    expect(await screen.findByRole("heading", { level: 1, name: "Apps" })).toBeTruthy();
   });
 
   it("explains groups to someone who may not create one and is in none, and offers no button", async () => {
@@ -496,7 +502,10 @@ describe("groups in Settings", () => {
 
     expect(within(family).getByText("You are a member")).toBeTruthy();
     expect(peopleIn(family)).toEqual(["SSam ExampleOwner", "LLin Example", "KKim Example (you)"]);
-    expect(within(family).getByText("You can add apps to this group on the Apps page.")).toBeTruthy();
+    // Allowed to add apps, which is done on the Apps page: the sentence leads there.
+    const appsPage = within(family).getByRole("link", { name: "the Apps page" });
+    expect(appsPage.closest("p")?.textContent).toBe("You can add apps to this group on the Apps page.");
+    expect(appsPage.getAttribute("href")).toBe("/apps");
     for (const name of [/Manage/, "Add a person"]) expect(within(family).queryByRole("button", { name })).toBeNull();
     expect(within(family).queryByRole("table")).toBeNull();
     expect(within(family).queryByLabelText("Name of the group")).toBeNull();

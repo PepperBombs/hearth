@@ -202,6 +202,15 @@ afterEach(() => {
 });
 
 describe("the Apps page", () => {
+  it("is where the empty dashboard leads", async () => {
+    const server = new FakeServer();
+    start(server, "/");
+
+    expect(await screen.findByRole("heading", { name: "No widgets yet" })).toBeTruthy();
+    fireEvent.click(within(main()).getByRole("link", { name: "Go to the Apps page" }));
+    expect(await within(await spaceCard("Personal")).findByRole("button", { name: "Add an app" })).toBeTruthy();
+  });
+
   it("lists every app by space, switched-off ones included, with the person's own controls", async () => {
     const server = new FakeServer();
     server.session = sessionWith([

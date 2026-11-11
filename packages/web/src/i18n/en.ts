@@ -15,6 +15,7 @@ export const en = {
   "nav.settings": "Settings",
   "nav.personal": "Personal",
   "nav.noApps": "No apps yet",
+  "nav.widgetsOnly": "Widgets only, on the dashboard",
   "nav.darkMode": "Dark mode",
   "nav.lightMode": "Light mode",
   "nav.switchLanguage": "Switch language",

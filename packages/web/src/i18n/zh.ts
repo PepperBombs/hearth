@@ -13,6 +13,7 @@ export const zh: Dictionary = {
   "nav.settings": "设置",
   "nav.personal": "个人",
   "nav.noApps": "还没有应用",
+  "nav.widgetsOnly": "仅小组件，显示在仪表盘上",
   "nav.darkMode": "深色模式",
   "nav.lightMode": "浅色模式",
   "nav.switchLanguage": "切换语言",
