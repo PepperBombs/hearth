@@ -1,11 +1,18 @@
 /**
  * The routes for one app in one space (docs/mini-app-contract.md, section
- * A8). So far: add or bring back, remove, delete the data, and the app's
- * own queries and mutations. The request shapes are in `@hearth/shared`.
- * Only a query or mutation answers with a body; after the others the web
- * app reloads the session to see what changed.
+ * A8). So far: add or bring back, remove, delete the data, the app's
+ * settings, and the app's own queries and mutations. The request shapes are
+ * in `@hearth/shared`. The settings routes and a query or mutation answer
+ * with a body; after the others the web app reloads the session to see what
+ * changed.
  */
-import { addAppRequestSchema, appCallRequestSchema, deleteAppDataRequestSchema } from "@hearth/shared";
+import {
+  addAppRequestSchema,
+  appCallRequestSchema,
+  appSettingsPatchSchema,
+  deleteAppDataRequestSchema,
+  type AppSettings,
+} from "@hearth/shared";
 import type { Hono } from "hono";
 import type { Db } from "../db/database";
 import { readBody } from "../http/body";
@@ -13,6 +20,7 @@ import type { Env, RequireMember } from "../http/env";
 import { callApp } from "./calls";
 import { addApp, deleteAppData, removeApp } from "./installs";
 import type { Registry } from "./registry";
+import { changeAppSettings, readAppSettings } from "./settings";
 
 export type AppRoutesOptions = { db: Db; registry: Registry; requireMember: RequireMember };
 
@@ -41,6 +49,21 @@ export function registerAppRoutes(app: Hono<Env>, options: AppRoutesOptions): vo
     const { spaceId, appId } = c.req.param();
     deleteAppData(db, registry, { userId: c.get("user").id, spaceId, appId, confirm });
     return c.body(null, 204);
+  });
+
+  // The app's settings here: the values the space shares and the caller's own, defaults filled in.
+  app.get("/api/spaces/:spaceId/apps/:appId/settings", requireMember, (c) => {
+    const { spaceId, appId } = c.req.param();
+    const settings: AppSettings = readAppSettings(db, registry, { userId: c.get("user").id, spaceId, appId });
+    return c.json(settings);
+  });
+
+  // Save some of them. The space's need edit access; a person's own need only view.
+  app.patch("/api/spaces/:spaceId/apps/:appId/settings", requireMember, async (c) => {
+    const patch = await readBody(c, appSettingsPatchSchema);
+    const { spaceId, appId } = c.req.param();
+    const settings: AppSettings = changeAppSettings(db, registry, { userId: c.get("user").id, spaceId, appId, patch });
+    return c.json(settings);
   });
 
   // An app's own routes: a query reads and needs view, a mutation changes

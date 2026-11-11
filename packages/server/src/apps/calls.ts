@@ -122,7 +122,7 @@ export function callApp(db: Db, registry: Registry, call: AppCall): string {
       locale: user.locale,
       space: Object.freeze({ kind: space.kind, name: space.name }),
       access,
-      settings: settingsFor(app.manifest),
+      settings: settingsFor(db, { spaceId, appId, userId: user.id }, app.manifest),
       now: new Date(now),
       db: store.collections,
     });

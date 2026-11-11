@@ -14,7 +14,7 @@ the manifest, the UI kit and what an app's server file is written with.
 | `@hearth/sdk` | `defineApp`, the manifest types (`Manifest`, `Setting`, `Localized`), `SettingsOf`, the message types (`MessageKey`, `PlaceholderArgs`, `Translate`), the lists `APP_ICONS` and `APP_COLORS`, `APP_ID_PATTERN`, `SDK_VERSION`. Imports nothing. | Mini-apps and the framework. |
 | `@hearth/sdk/web` | The UI kit: `Button`, `IconButton`, `Input`, `Field`, `Switch`, `Checkbox`, `Chip`, `Tag`, `Segmented`, `Rows`, `Row`, `EmptyState`, `Dialog`, `DialogBody`, `Icon`, and the class helpers `buttonClass` and `chipClass`. | A mini-app's widget and page, and the shell. |
 | `@hearth/sdk/server` | `defineServer`, `AppError`, `z` (the one zod that mini-apps use), and the types of a handler's context and of rows and collections (`QueryCtx`, `MutationCtx`, `Row`, `ReadCollection`, `Collection`, `Json`, `InputOf`, `OutputOf`). | A mini-app's `server.ts`. |
-| `@hearth/sdk/manifest-schema` | `manifestSchema`, a zod schema that checks a manifest at run time. | The framework only. |
+| `@hearth/sdk/manifest-schema` | `manifestSchema`, a zod schema that checks a manifest at run time, and `settingValueProblems`, which says whether a value fits a setting. | The framework only. |
 
 Still to come: the hooks in `@hearth/sdk/web`, `@hearth/sdk/testing`,
 `@hearth/sdk/eslint` and the `hearth-apps` command.
@@ -56,6 +56,35 @@ export default defineApp({
   default that does not fit its own setting (a `select` default that is not
   an option, a number outside `min` and `max`), placeholders that differ
   between the two languages, and unknown properties.
+
+### Settings
+
+A setting has a `scope`: `"space"` for one value shared by everyone in the
+space, `"user"` for one value per person in that space. People change them
+in a form the shell draws from the manifest; code reads them as
+`ctx.settings`, typed by `SettingsOf`.
+
+| Type | A value is | Limited by |
+|---|---|---|
+| `text` | text | `maxLength` |
+| `number` | a finite number | `min`, `max`, `step` |
+| `switch` | `true` or `false` | |
+| `select` | the key of one option | `options` |
+| `multi-select` | a list of option keys, none twice | `options` |
+| `list` | a list of texts | `maxItems`, and `maxLength` for each text |
+
+- The limits hold for the default and for every value someone saves; the
+  server refuses a value that breaks them.
+- `step` limits values as it does in a form's number field: a value is
+  `min` (0 when there is none) plus a whole number of steps. `step: 1`
+  means whole numbers. Leave it out to allow any number.
+- Nothing is stored until someone saves a value, so a default may change
+  with a release, and whoever has not saved one gets the new default.
+- Settings may change with a release too. A value saved under a name the
+  manifest no longer has is ignored. A saved value that no longer fits (an
+  option that is gone, a shorter `maxLength`) reads as the default; a
+  multi-select keeps the options that remain. Code therefore always gets a
+  value its manifest allows.
 
 ## A server file
 
@@ -111,7 +140,9 @@ export default app.routes({
 - **`input`** is a zod schema for what the caller sends; the handler gets
   its output. Leave it out for a route that takes nothing.
 - **`ctx`** also has `user` (`id`, `name`), `locale`, `space` (`kind`,
-  `name`), `access`, `settings` (typed from the manifest) and `now`. There is
+  `name`), `access`, `settings` and `now`. `ctx.settings` is typed from the
+  manifest and holds every setting by name: the space's value for a
+  `"space"` setting, the caller's own for a `"user"` setting. There is
   no space ID and no database handle: `ctx.db` already reaches this app's
   rows in this space and no others.
 - `list` takes `where` (fields and the text, number, switch or null each

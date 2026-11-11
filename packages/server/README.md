@@ -142,6 +142,8 @@ app.
 | `PUT /api/spaces/:spaceId/apps/:appId` | yes | Adds the app to the space, or brings a removed one back with its data. Takes `{ memberAccess? }`. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/apps/:appId` | yes | Removes the app from the space and keeps its data. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/apps/:appId/data` | yes | Deletes the data of a removed app for good. Takes `{ confirm }`, the app's ID. Answers `204`. |
+| `GET /api/spaces/:spaceId/apps/:appId/settings` | yes | The app's settings in this space: `{ space, user }`, the values everyone shares and the caller's own, defaults filled in. Needs view access. |
+| `PATCH /api/spaces/:spaceId/apps/:appId/settings` | yes | Saves the settings named in `{ space?, user? }`; answers like the `GET`. `space` needs edit access, `user` only view. |
 | `POST /api/spaces/:spaceId/apps/:appId/q/:name` | yes | Runs the app's query of that name. Takes `{ input? }`; answers `{ output }`. Needs view access. |
 | `POST /api/spaces/:spaceId/apps/:appId/m/:name` | yes | Runs the app's mutation of that name. Takes `{ input? }`; answers `{ output }`, or `{}` when it returns nothing. Needs edit access. |
 
@@ -152,8 +154,8 @@ unexpected failure answers `500` with `internal` and no detail; the detail goes
 to the server's log. `forbidden` (403) is for a member who may not do this,
 and `conflict` (409) for a request that cannot be carried out as things
 stand. The contract also holds the requests of routes that are not built yet:
-groups, members, access, moving an app and settings
-(`docs/mini-app-contract.md`, section A8).
+groups, members, access and moving an app (`docs/mini-app-contract.md`,
+section A8).
 
 ## Mini-apps
 
@@ -227,8 +229,9 @@ does. An owner can delete its data without removing it first.
   answer that is not JSON, a misuse of the store.
 - The handler's `ctx` has the person (ID and name), their language, the
   space's kind and name, their access, the app's settings, the time and
-  `db`. It has no space ID. `ctx.settings` holds the manifest's defaults
-  until settings can be saved.
+  `db`. It has no space ID. `ctx.settings` holds every setting the manifest
+  declares by name: the space's value or this person's own, read inside
+  the same transaction (see below).
 
 **The store** (`src/apps/store.ts`) is `ctx.db`: the app's collections, each
 with `get`, `list` and `count`, and for a mutation also `insert`, `update`,
@@ -256,6 +259,43 @@ methods at all.
 A unit test (`src/apps/store-boundary.test.ts`) fails when a source file
 other than `store.ts` and the migrations names `app_rows` or `app_settings`,
 or when a statement in `store.ts` does not name its space and app.
+
+**An app's settings** (`src/apps/settings.ts`) are what its manifest
+declares, filled with what people saved. A setting with scope `space` has
+one value for the whole space; one with scope `user` has a value for each
+person in that space.
+
+- `GET .../apps/:appId/settings` answers `{ space, user }` with every
+  declared setting under its scope: the shared values, and the caller's
+  own. Anyone who can see the app may read them; `404` otherwise.
+- `PATCH` on the same address takes `{ space?, user? }` and saves the
+  settings it names, all of them or none, then answers like the `GET`.
+  Naming a setting under `space` needs edit access (`403` for a viewer,
+  before anything is said about the values). A person's own settings need
+  only view, and are saved for that person alone.
+- `400` `invalid_request` for a name the manifest does not declare under
+  that scope, and for a value that does not fit its setting. The message
+  names it: `space.servings: Must be at most 12.` The rules are those of
+  `settingValueProblems` in `@hearth/sdk/manifest-schema`, which also
+  checks the manifest's own defaults.
+- The check of who is asking and the change are one immediate transaction.
+- Only values are stored: one JSON object for the space (`user_id` null)
+  and one per person, holding what was saved and nothing else. Defaults
+  are filled in when settings are read, so a manifest's default can change
+  without touching the database.
+- Stored values are read against today's manifest. A value under a name
+  the manifest no longer declares, or under the other scope, is not read. A
+  value that no longer fits its setting reads as the default; a
+  multi-select first loses the keys that are no longer options. None of
+  this is logged: it is what a release does to settings.
+- Saving replaces the named values and leaves everything else in the
+  stored object as it is, read or not. A release that is rolled back
+  therefore finds the values of a setting the newer one had dropped.
+- Removing the app keeps its settings and adding it again brings them
+  back; deleting the app's data deletes them. A person's own settings go
+  when the person leaves the space.
+- There is no way to put a setting back to "not saved". A value equal to
+  the default is stored like any other, and stays when the default changes.
 
 ## Web app files
 
@@ -315,9 +355,10 @@ Tables so far, from migration 1: `users`, `spaces`, `space_members`,
 `app_settings`, `app_access`, `app_prefs` and `space_invitations`, plus the
 column `space_members.can_add_apps`. The server writes `space_apps` and, for
 a member who adds an app, `app_access`; an app's mutations write `app_rows`
-through the store; all of them are deleted from when an app's data is
-deleted. Nothing writes settings, switches or invitations yet. SQL for
-`app_rows` and `app_settings` lives in `src/apps/store.ts` only.
+through the store, and the settings route writes `app_settings`; all of
+them are deleted from when an app's data is deleted. Nothing writes
+switches or invitations yet. SQL for `app_rows` and `app_settings` lives in
+`src/apps/store.ts` only.
 
 Rules the database keeps by itself, tested as SQL in
 `src/db/apps-schema.test.ts`:

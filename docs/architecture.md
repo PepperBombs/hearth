@@ -9,7 +9,7 @@ that exist today (the app shell) and the rules later steps build on.
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web. This is the contract between them: change it first, then both sides. |
 | `packages/sdk` | `@hearth/sdk`, the only thing a mini-app imports. So far: `defineApp`, the manifest types, the run-time check of a manifest, the UI kit (`@hearth/sdk/web`), and `defineServer` for an app's queries and mutations (`@hearth/sdk/server`). It imports no other Hearth package. |
-| `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. `src/apps` holds the mini-apps this build was given, decides who may use which app in which space, and runs an app's queries and mutations against its own rows. |
+| `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. `src/apps` holds the mini-apps this build was given, decides who may use which app in which space, runs an app's queries and mutations against its own rows, and reads and saves its settings. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, which its tests run against. So far `checklist`: a manifest and a server file. |
 | `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings, quick switcher, themes, English and Chinese. It is built from the SDK's UI kit, as mini-apps will be. |
 | `e2e` | Playwright end-to-end tests. |
@@ -17,11 +17,11 @@ that exist today (the app shell) and the rules later steps build on.
 
 Mini-apps are being built in steps. The server can already hold apps, add
 one to a space, remove it, bring it back and delete its data (see "Apps in
-spaces" below), and run an app's queries and mutations (see "What an app's
-code can do"). The build does not hand it any apps yet, and the web app
-shows none: on a running server the session still lists no apps and screens
-show empty states. Settings cannot be saved yet. The scheduler does not
-exist.
+spaces" below), run an app's queries and mutations (see "What an app's
+code can do") and read and save its settings (see "An app's settings"). The
+build does not hand it any apps yet, and the web app shows none: on a
+running server the session still lists no apps and screens show empty
+states. The scheduler does not exist.
 The design, and how far the build has come, is in
 [mini-app-contract.md](mini-app-contract.md).
 
@@ -112,7 +112,8 @@ same for every app:
    person may do. Nothing is `404`; a mutation with view only is `403`.
 2. It checks the input against the route's schema (`400`).
 3. It builds the handler's `ctx`: the person, their language, the space's
-   kind and name, their access, the app's settings, the time, and `db`.
+   kind and name, their access, the app's settings here (the space's values
+   and this person's own), the time, and `db`.
 4. It runs the handler, still inside the transaction, and sends what it
    returns as JSON. A handler is not `async`; one that returns a promise is
    refused.
@@ -136,6 +137,37 @@ the collection and the row in the server's log.
 A handler turns a request down by throwing `AppError` (`invalid_request`,
 `not_found` or `conflict`). Anything else that goes wrong in a handler is
 logged and answered with `500`, and whatever the mutation wrote is undone.
+
+## An app's settings
+
+A manifest declares the app's settings: a name, a type (text, number,
+switch, select, multi-select, list), a label and a default each. Every
+setting has a scope. A `space` setting has one value, shared by everyone in
+the space; a `user` setting has one value for each person in that space.
+The same app in another space has other values.
+
+| Route | Who | What happens |
+|---|---|---|
+| `GET /api/spaces/:spaceId/apps/:appId/settings` | Anyone who can see the app. | Answers `{ space, user }`: every declared setting under its scope, with the shared value or the caller's own. |
+| `PATCH` on the same address | `space`: edit access. `user`: view is enough. | Saves the settings named in `{ space?, user? }` and answers like the `GET`. A name the manifest does not declare under that scope, or a value that does not fit its setting, is `400`, and then nothing in the request is saved. |
+
+Only values are stored, as one JSON object for the space and one per
+person, and they are read against the manifest as it is today:
+
+- A setting nobody saved has the manifest's default. Nothing is copied into
+  the database when an app is added, so a default can change with a release.
+- A value saved under a name the manifest no longer declares is not read.
+  It is not deleted either: saving replaces the named values and leaves the
+  rest, so a release that is rolled back finds its values again.
+- A saved value that no longer fits its setting, such as an option that is
+  gone, reads as the default. A multi-select keeps the options that remain.
+
+What a setting declares (`maxLength`, `min`, `max`, `step`, the options,
+`maxItems`) is the rule for its default and for every value saved in it;
+one function in the SDK checks both. A number with a `step` is `min` (or 0)
+plus a whole number of steps, as in a form's number field.
+
+A handler reads the same values, in one object by name, as `ctx.settings`.
 
 ## Where an app's data lives
 

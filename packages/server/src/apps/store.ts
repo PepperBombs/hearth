@@ -11,8 +11,10 @@
  *   functions, who has checked the person's access; nothing a mini-app or a
  *   request body says can change them. The caller closes the store when the
  *   handler has returned, and a closed store refuses everything.
+ * - `readSettingsData` and `writeSettingsData` read and replace what was
+ *   saved for an app's settings in one space: one JSON object for the space
+ *   and one for each person. What the values mean is settings.ts's business.
  * - `deleteAllData` deletes everything an app has in a space.
- * - Reading and writing settings are added here with the settings routes.
  *
  * Design: docs/mini-app-contract.md, sections A3 and A6.
  */
@@ -401,6 +403,81 @@ export function writableStore(db: Db, scope: StoreScope, collections: Schemas): 
  */
 export function readOnlyStore(db: Db, scope: StoreScope, collections: Schemas): Store<ReadCollection<Fields>> {
   return openStore(db, scope, collections, ({ get, list, count }) => ({ get, list, count }));
+}
+
+/** Whose settings: the ones everyone in the space shares, or the person's own. */
+export type SettingsScope = "space" | "user";
+
+/** Settings values by name, as they were saved. Nothing in here has been checked against a manifest. */
+export type SettingsData = Record<string, unknown>;
+
+/** Which settings a caller reaches: those of one app in one space, and one person's own. */
+export type SettingsOwner = { spaceId: string; appId: string; userId: string };
+
+/** What was stored, when it is a JSON object; anything else counts as nothing saved. */
+function settingsObject(data: string): SettingsData {
+  let value: unknown;
+  try {
+    value = JSON.parse(data);
+  } catch {
+    return {};
+  }
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as SettingsData) : {};
+}
+
+/**
+ * What was saved for an app's settings in one space: the values everyone
+ * shares and this person's own. Either is empty when nothing was saved.
+ * Nobody else's values are read. The caller has checked that the person may
+ * see the app there.
+ */
+export function readSettingsData(db: Db, owner: SettingsOwner): Record<SettingsScope, SettingsData> {
+  const rows = db
+    .prepare(
+      `SELECT user_id AS userId, data FROM app_settings
+        WHERE space_id = @spaceId AND app_id = @appId AND (user_id IS NULL OR user_id = @userId)`,
+    )
+    .all({ spaceId: owner.spaceId, appId: owner.appId, userId: owner.userId }) as {
+    userId: string | null;
+    data: string;
+  }[];
+  const saved: Record<SettingsScope, SettingsData> = { space: {}, user: {} };
+  for (const row of rows) saved[row.userId === null ? "space" : "user"] = settingsObject(row.data);
+  return saved;
+}
+
+/**
+ * Replaces what is saved for an app's settings in one space: the shared
+ * values, or this person's own. The caller holds the transaction, has
+ * checked that the person may change them, and passes the whole object.
+ */
+export function writeSettingsData(
+  db: Db,
+  owner: SettingsOwner & { now: Date },
+  scope: SettingsScope,
+  data: SettingsData,
+): void {
+  const bindings = {
+    spaceId: owner.spaceId,
+    appId: owner.appId,
+    userId: owner.userId,
+    data: JSON.stringify(data),
+    at: owner.now.toISOString(),
+  };
+  // The space's values are the row without a person, which only IS NULL finds.
+  const whose = scope === "space" ? "user_id IS NULL" : "user_id = @userId";
+  const person = scope === "space" ? "NULL" : "@userId";
+  const changed = db
+    .prepare(
+      `UPDATE app_settings SET data = @data, updated_by = @userId, updated_at = @at
+        WHERE space_id = @spaceId AND app_id = @appId AND ${whose}`,
+    )
+    .run(bindings).changes;
+  if (changed > 0) return;
+  db.prepare(
+    `INSERT INTO app_settings (space_id, app_id, user_id, data, created_by, updated_by, updated_at)
+     VALUES (@spaceId, @appId, ${person}, @data, @userId, @userId, @at)`,
+  ).run(bindings);
 }
 
 /**

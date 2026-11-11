@@ -8,8 +8,11 @@
  * text is empty, that a default fits its own setting, and that both languages
  * of a string use the same {placeholders}.
  *
- * This is for the framework (the server at start-up, the `hearth-apps`
- * checks). A mini-app does not import it.
+ * `settingValueProblems` is the check of one setting's value, which the
+ * schema applies to defaults and the server to what people save.
+ *
+ * This is for the framework (the server, the `hearth-apps` checks). A
+ * mini-app does not import it.
  *
  * Messages in here are English text for whoever builds or deploys an app.
  * They never reach the interface.
@@ -77,52 +80,97 @@ const settingSchema = z
     for (const [path, message] of defaultProblems(setting)) ctx.addIssue({ code: "custom", path, message });
   });
 
-/** Where a setting's default does not fit the setting itself, as [path, message] pairs. */
-function defaultProblems(setting: Setting): [path: (string | number)[], message: string][] {
-  const problems: [(string | number)[], string][] = [];
+/** Where a value does not fit: the path inside the value (empty for the value itself) and what is wrong. */
+export type ValueProblem = [path: (string | number)[], message: string];
+
+/**
+ * Whether a number lies on a setting's steps, which are counted from `base`.
+ * Steps such as 0.1 cannot be held exactly, so a value within a billionth of
+ * a step counts as on it.
+ */
+function onStep(value: number, base: number, step: number): boolean {
+  const steps = (value - base) / step;
+  return Math.abs(steps - Math.round(steps)) <= Math.max(1e-9, Math.abs(steps) * 1e-12);
+}
+
+/**
+ * Where `value` does not fit `setting`; empty when it fits.
+ *
+ * These are the rules for every value of a setting: the default its
+ * manifest declares (checked by `manifestSchema`) and the values people save
+ * (checked by the server), so that the two cannot disagree.
+ *
+ * - `text`: text of at most `maxLength` characters.
+ * - `number`: a finite number from `min` to `max`. With `step`, it is `min`
+ *   (0 when there is none) plus a whole number of steps, as in a number
+ *   field of a form; `step: 1` therefore means whole numbers.
+ * - `switch`: true or false.
+ * - `select`: the key of one option.
+ * - `multi-select`: a list of option keys, none twice.
+ * - `list`: at most `maxItems` texts of at most `maxLength` characters each.
+ */
+export function settingValueProblems(setting: Setting, value: unknown): ValueProblem[] {
   switch (setting.type) {
     case "text":
-      if (setting.maxLength !== undefined && setting.default.length > setting.maxLength) {
-        problems.push([["default"], `The default is longer than maxLength (${setting.maxLength}).`]);
+      if (typeof value !== "string") return [[[], "Must be text."]];
+      if (setting.maxLength !== undefined && value.length > setting.maxLength) {
+        return [[[], `Must be at most ${setting.maxLength} characters long.`]];
       }
-      break;
+      return [];
     case "number":
-      if (setting.min !== undefined && setting.max !== undefined && setting.min > setting.max) {
-        problems.push([["min"], `min (${setting.min}) is greater than max (${setting.max}).`]);
+      if (typeof value !== "number" || !Number.isFinite(value)) return [[[], "Must be a number."]];
+      if (setting.min !== undefined && value < setting.min) return [[[], `Must be at least ${setting.min}.`]];
+      if (setting.max !== undefined && value > setting.max) return [[[], `Must be at most ${setting.max}.`]];
+      // A step that is not above zero is the manifest's fault, reported there, and limits nothing.
+      if (setting.step !== undefined && setting.step > 0 && !onStep(value, setting.min ?? 0, setting.step)) {
+        return [[[], `Must be ${setting.min ?? 0} plus a whole number of steps of ${setting.step}.`]];
       }
-      if (setting.min !== undefined && setting.default < setting.min) {
-        problems.push([["default"], `The default is less than min (${setting.min}).`]);
-      }
-      if (setting.max !== undefined && setting.default > setting.max) {
-        problems.push([["default"], `The default is greater than max (${setting.max}).`]);
-      }
-      break;
+      return [];
     case "switch":
-      break;
+      return typeof value === "boolean" ? [] : [[[], "Must be true or false."]];
     case "select":
-      if (!Object.hasOwn(setting.options, setting.default)) {
-        problems.push([["default"], `The default "${setting.default}" is not one of the options.`]);
-      }
-      break;
-    case "multi-select":
-      setting.default.forEach((key, index) => {
-        if (!Object.hasOwn(setting.options, key)) {
-          problems.push([["default", index], `The default "${key}" is not one of the options.`]);
-        } else if (setting.default.indexOf(key) !== index) {
-          problems.push([["default", index], `The default lists "${key}" twice.`]);
+      if (typeof value !== "string") return [[[], "Must be the key of one of the options."]];
+      return Object.hasOwn(setting.options, value) ? [] : [[[], `"${value}" is not one of the options.`]];
+    case "multi-select": {
+      if (!Array.isArray(value)) return [[[], "Must be a list of option keys."]];
+      const problems: ValueProblem[] = [];
+      value.forEach((key: unknown, index) => {
+        if (typeof key !== "string") {
+          problems.push([[index], "Must be the key of one of the options."]);
+        } else if (!Object.hasOwn(setting.options, key)) {
+          problems.push([[index], `"${key}" is not one of the options.`]);
+        } else if (value.indexOf(key) !== index) {
+          problems.push([[index], `"${key}" is listed twice.`]);
         }
       });
-      break;
-    case "list":
-      if (setting.maxItems !== undefined && setting.default.length > setting.maxItems) {
-        problems.push([["default"], `The default has more items than maxItems (${setting.maxItems}).`]);
+      return problems;
+    }
+    case "list": {
+      if (!Array.isArray(value)) return [[[], "Must be a list of texts."]];
+      const problems: ValueProblem[] = [];
+      if (setting.maxItems !== undefined && value.length > setting.maxItems) {
+        problems.push([[], `Must have at most ${setting.maxItems} items.`]);
       }
-      setting.default.forEach((item, index) => {
-        if (setting.maxLength !== undefined && item.length > setting.maxLength) {
-          problems.push([["default", index], `This default item is longer than maxLength (${setting.maxLength}).`]);
+      value.forEach((item: unknown, index) => {
+        if (typeof item !== "string") {
+          problems.push([[index], "Must be text."]);
+        } else if (setting.maxLength !== undefined && item.length > setting.maxLength) {
+          problems.push([[index], `Must be at most ${setting.maxLength} characters long.`]);
         }
       });
-      break;
+      return problems;
+    }
+  }
+}
+
+/** Where a setting's default does not fit the setting itself. */
+function defaultProblems(setting: Setting): ValueProblem[] {
+  const problems: ValueProblem[] = [];
+  if (setting.type === "number" && setting.min !== undefined && setting.max !== undefined && setting.min > setting.max) {
+    problems.push([["min"], `min (${setting.min}) is greater than max (${setting.max}).`]);
+  }
+  for (const [path, message] of settingValueProblems(setting, setting.default)) {
+    problems.push([["default", ...path], `The default does not fit the setting. ${message}`]);
   }
   return problems;
 }

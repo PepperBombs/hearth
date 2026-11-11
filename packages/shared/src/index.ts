@@ -332,7 +332,9 @@ const settingValuesSchema = z.record(z.string(), settingValueSchema);
  * GET /api/spaces/:spaceId/apps/:appId/settings, and the answer to the PATCH
  * below. Every setting the manifest declares is present, with its default
  * where nothing was saved: `space` holds the values shared by everyone in the
- * space, `user` the caller's own.
+ * space, `user` the caller's own. Anyone who can see the app may read both.
+ * A value saved under a name the manifest no longer declares is left out,
+ * and one that no longer fits its setting is given as the default.
  */
 export const appSettingsSchema = z.object({
   space: settingValuesSchema,
@@ -342,8 +344,11 @@ export type AppSettings = z.infer<typeof appSettingsSchema>;
 
 /**
  * PATCH /api/spaces/:spaceId/apps/:appId/settings. Only the settings named
- * are changed. Changing `space` needs edit access; `user` needs only view.
- * The server checks names and values against the app's manifest.
+ * are changed, all of them or none. Naming a setting under `space` needs
+ * edit access (403 `forbidden` without); `user` needs only view, and saves
+ * for the caller alone. The server checks names and values against the
+ * app's manifest: a name the manifest does not declare under that scope, or
+ * a value that does not fit its setting, answers 400 `invalid_request`.
  */
 export const appSettingsPatchSchema = z
   .strictObject({ space: settingValuesSchema, user: settingValuesSchema })

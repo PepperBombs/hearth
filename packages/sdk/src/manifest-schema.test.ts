@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { z } from "zod";
-import { APP_COLORS, APP_ICONS, defineApp, type Manifest } from "./index";
-import { manifestSchema } from "./manifest-schema";
+import { APP_COLORS, APP_ICONS, defineApp, type Manifest, type Setting } from "./index";
+import { manifestSchema, settingValueProblems } from "./manifest-schema";
 
 /** A complete, valid manifest with one setting of every type. Each test changes one thing in a copy. */
 function valid() {
@@ -261,6 +261,26 @@ describe("manifestSchema", () => {
       expect(after((draft) => set(draft.settings.budget, "step", 0))).toEqual(["settings.budget.step"]);
     });
 
+    it("rejects a number default that is not on the setting's steps", () => {
+      expect(after((draft) => set(draft.settings.budget, "default", 105))).toEqual(["settings.budget.default"]);
+      expect(after((draft) => set(draft.settings.budget, "step", 30))).toEqual(["settings.budget.default"]);
+      expect(after((draft) => set(draft.settings.budget, "step", 25))).toEqual([]);
+      // Steps are counted from min: 5, 15, 25 and so on.
+      expect(
+        after((draft) => {
+          set(draft.settings.budget, "min", 5);
+          set(draft.settings.budget, "default", 105);
+        }),
+      ).toEqual([]);
+      // Without a step any number will do.
+      expect(
+        after((draft) => {
+          set(draft.settings.budget, "step", undefined);
+          set(draft.settings.budget, "default", 99.5);
+        }),
+      ).toEqual([]);
+    });
+
     it("rejects a select default that is not an option, and a select without options", () => {
       expect(after((draft) => set(draft.settings.period, "default", "monthly"))).toEqual(["settings.period.default"]);
       expect(after((draft) => set(draft.settings.period, "default", "toString"))).toEqual(["settings.period.default"]);
@@ -295,6 +315,15 @@ describe("manifestSchema", () => {
     });
   });
 
+  it("says of a default what is wrong with it", () => {
+    const draft = valid();
+    set(draft.settings.shop, "default", "x".repeat(41));
+    const result = manifestSchema.safeParse(draft);
+    expect(result.success ? [] : result.error.issues.map((issue) => issue.message)).toEqual([
+      "The default does not fit the setting. Must be at most 40 characters long.",
+    ]);
+  });
+
   it("reports every problem at once, each with a message", () => {
     const result = manifestSchema.safeParse({ ...valid(), id: "Grocery", icon: "rocket", name: { en: "Grocery list" } });
     expect(result.success).toBe(false);
@@ -302,5 +331,100 @@ describe("manifestSchema", () => {
     expect(result.error.issues.map((issue) => issue.path.join(".")).sort()).toEqual(["icon", "id", "name.zh"]);
     for (const issue of result.error.issues) expect(issue.message).not.toBe("");
     expect(result.error.issues.find((issue) => issue.path[0] === "id")?.message).toContain("lower-case");
+  });
+});
+
+describe("settingValueProblems", () => {
+  const settings = valid().settings as unknown as Record<string, Setting>;
+  /** Where the value does not fit the setting of this name, as dotted paths; "" is the value itself. */
+  const found = (name: string, value: unknown, change: Partial<Record<string, unknown>> = {}) =>
+    settingValueProblems({ ...settings[name], ...change } as Setting, value).map(([path]) => path.join("."));
+
+  it("accepts every default of a valid manifest", () => {
+    for (const [name, setting] of Object.entries(settings)) expect(found(name, setting.default), name).toEqual([]);
+  });
+
+  it("checks a text", () => {
+    expect(found("shop", "Corner shop")).toEqual([]);
+    expect(found("shop", "")).toEqual([]);
+    expect(found("shop", "x".repeat(40))).toEqual([]);
+    expect(found("shop", "x".repeat(41))).toEqual([""]);
+    expect(found("shop", "x".repeat(4000), { maxLength: undefined })).toEqual([]);
+    for (const value of [7, true, null, undefined, ["Corner shop"], { text: "Corner shop" }]) {
+      expect(found("shop", value), JSON.stringify(value)).toEqual([""]);
+    }
+  });
+
+  it("checks a number against min, max and step", () => {
+    for (const value of [0, 10, 990, 1000]) expect(found("budget", value), String(value)).toEqual([]);
+    for (const value of [-10, 1010, 5, 99.5, Number.NaN, Number.POSITIVE_INFINITY, "100", null, undefined, [100]]) {
+      expect(found("budget", value), String(value)).toEqual([""]);
+    }
+    expect(found("budget", -10, { min: undefined })).toEqual([]);
+    expect(found("budget", 5000, { max: undefined })).toEqual([]);
+    expect(found("budget", 99.5, { step: undefined })).toEqual([]);
+  });
+
+  it("counts steps from min, or from 0 without one", () => {
+    expect(found("budget", 13, { min: 3 })).toEqual([]);
+    expect(found("budget", 10, { min: 3 })).toEqual([""]);
+    expect(found("budget", -20, { min: undefined })).toEqual([]);
+    expect(found("budget", -25, { min: undefined })).toEqual([""]);
+  });
+
+  it("takes whole numbers only with a step of 1", () => {
+    expect(found("budget", 7, { step: 1 })).toEqual([]);
+    expect(found("budget", 7.5, { step: 1 })).toEqual([""]);
+    expect(found("budget", 7.000001, { step: 1 })).toEqual([""]);
+  });
+
+  it("allows for steps that a computer cannot hold exactly", () => {
+    const tenths = { min: undefined, max: undefined, step: 0.1 };
+    // 0.1 + 0.2 is not quite 0.3, and 0.3 / 0.1 is not quite 3.
+    for (const value of [0.3, 0.1 + 0.2, 0.7, 1.1, 2.3, 123456.7, -0.9]) {
+      expect(found("budget", value, tenths), String(value)).toEqual([]);
+    }
+    for (const value of [0.35, 0.301, 123456.75]) expect(found("budget", value, tenths), String(value)).toEqual([""]);
+    expect(found("budget", 0.75, { min: 0.25, max: undefined, step: 0.25 })).toEqual([]);
+  });
+
+  it("checks a switch", () => {
+    expect(found("hideDone", true)).toEqual([]);
+    expect(found("hideDone", false)).toEqual([]);
+    for (const value of ["true", 1, 0, null, undefined, [true]]) expect(found("hideDone", value), String(value)).toEqual([""]);
+  });
+
+  it("checks a select against its options", () => {
+    expect(found("period", "daily")).toEqual([]);
+    for (const value of ["monthly", "", "Daily", "toString", "constructor", "__proto__", 1, null, undefined, ["daily"]]) {
+      expect(found("period", value), String(value)).toEqual([""]);
+    }
+  });
+
+  it("checks every key of a multi-select", () => {
+    expect(found("diets", [])).toEqual([]);
+    expect(found("diets", ["halal", "vegan"])).toEqual([]);
+    expect(found("diets", ["vegan", "kosher", "halal", "vegan", 3])).toEqual(["1", "3", "4"]);
+    expect(found("diets", ["toString"])).toEqual(["0"]);
+    for (const value of ["vegan", { vegan: true }, null, undefined, true]) {
+      expect(found("diets", value), String(value)).toEqual([""]);
+    }
+  });
+
+  it("checks a list and every item in it", () => {
+    expect(found("aisles", [])).toEqual([]);
+    expect(found("aisles", ["Dairy", "Bakery", "Dairy", ""])).toEqual([]);
+    expect(found("aisles", Array.from({ length: 20 }, (_, n) => `Aisle ${n}`))).toEqual([]);
+    expect(found("aisles", Array.from({ length: 21 }, (_, n) => `Aisle ${n}`))).toEqual([""]);
+    expect(found("aisles", ["Dairy", "x".repeat(41), 7, null])).toEqual(["1", "2", "3"]);
+    expect(found("aisles", Array.from({ length: 300 }, () => "x".repeat(300)), { maxItems: undefined, maxLength: undefined })).toEqual([]);
+    for (const value of ["Dairy", { 0: "Dairy" }, null, undefined, 3]) {
+      expect(found("aisles", value), String(value)).toEqual([""]);
+    }
+  });
+
+  it("gives each problem a message", () => {
+    expect(settingValueProblems(settings.budget as Setting, 5)).toEqual([[[], "Must be 0 plus a whole number of steps of 10."]]);
+    expect(settingValueProblems(settings.diets as Setting, ["kosher"])).toEqual([[[0], '"kosher" is not one of the options.']]);
   });
 });

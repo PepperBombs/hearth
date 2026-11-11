@@ -109,6 +109,18 @@ test("the built server answers the routes for apps in a space, and holds no apps
     expect(nothingThere.status()).toBe(404);
     expect(await nothingThere.json()).toMatchObject({ error: { code: "not_found" } });
   }
+
+  // So have an app's settings: read, and saved in two groups.
+  const misshapen = await request.patch(`${address}/settings`, { data: { everyone: { title: "Ours" } } });
+  expect(misshapen.status()).toBe(400);
+  expect(await misshapen.json()).toMatchObject({ error: { code: "invalid_request" } });
+  for (const response of [
+    await request.get(`${address}/settings`),
+    await request.patch(`${address}/settings`, { data: { space: { title: "Ours" }, user: { compact: true } } }),
+  ]) {
+    expect(response.status()).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: "not_found" } });
+  }
 });
 
 test.describe("installed", () => {

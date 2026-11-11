@@ -68,16 +68,17 @@ each marked there once built. Built so far: step 1, the SDK package skeleton;
 step 2, the UI kit in the SDK; step 3, the shared contract and the database
 tables for apps in spaces; step 4, the server's registry of apps and the
 routes that add an app to a space, remove it, bring it back and delete its
-data; and step 5, `defineServer` in the SDK, the store behind `ctx.db` and
-the routes that run an app's queries and mutations.
+data; step 5, `defineServer` in the SDK, the store behind `ctx.db` and the
+routes that run an app's queries and mutations; and step 6, an app's
+settings: the two routes that read and save them, and `ctx.settings`.
 
 ## Layout and commands
 
 | Folder | Holds |
 |---|---|
-| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. It already holds the requests and answers of routes that are not built yet (groups, members, access, moving an app, app settings). |
-| `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer`, `AppError`, `z` and the types of `ctx`; it holds no logic. `@hearth/sdk/manifest-schema` is the run-time check of a manifest, for the framework only. Imports no other Hearth package. |
-| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file), `installs.ts` (who may use which app where; add, remove, bring back, delete data), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db`, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (what `ctx.settings` holds) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
+| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. It already holds the requests and answers of routes that are not built yet (groups, members, access, moving an app). |
+| `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer`, `AppError`, `z` and the types of `ctx`; it holds no logic. `@hearth/sdk/manifest-schema` is the run-time check of a manifest and of a setting's value (`settingValueProblems`), for the framework only. Imports no other Hearth package. |
+| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file), `installs.ts` (who may use which app where; add, remove, bring back, delete data), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db`, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them. So far `checklist`, a manifest and a server file. |
 | `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card and the avatar in `src/components` are the shell's own. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). |
@@ -152,9 +153,23 @@ Things that bite:
   (owner's decision 7). The types require it and `checkServer`
   (`packages/server/src/apps/definition.ts`) refuses a server file without
   one at start-up, fixtures and test apps included.
-- `ctx.settings` is the manifest's defaults for now: `settingsFor` in
-  `packages/server/src/apps/settings.ts` is the one place it comes from, and
-  step 6 fills it from the saved values.
+- Settings are stored as values only, one JSON object for the space and
+  one per person, and read against today's manifest in one place, `fill` in
+  `packages/server/src/apps/settings.ts`, which the two routes and
+  `ctx.settings` (`settingsFor`) share. A name the manifest does not
+  declare under that scope is not read; a value that no longer fits reads
+  as the default. Saving replaces the named values and must leave the rest
+  of the stored object alone, so that a rolled-back release finds its
+  values again. Never copy defaults into the database.
+- Whether a value fits a setting is decided by `settingValueProblems` in
+  `packages/sdk/src/manifest-schema.ts`, for a manifest's defaults and for
+  what people save alike. A new setting type or limit goes there, into the
+  types in `packages/sdk/src/index.ts` and into the schema beside it. A
+  number's `step` limits values: `min` (or 0) plus a whole number of steps.
+- Saving a setting of the space needs edit access; a person's own needs
+  only view (owner's decision 5). The settings `PATCH` checks access, then
+  names and values, then writes, in one immediate transaction, and saves a
+  request as a whole or not at all.
 - The store matches and sorts with SQL on the stored JSON but returns rows
   parsed by the collection's schema. The two agree because a row is stored
   as the schema's own output and a missing field counts as its default; a

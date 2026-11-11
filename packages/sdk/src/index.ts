@@ -88,6 +88,19 @@ type Field<T, X> = { label: Localized; help?: Localized; scope: SettingScope; de
  * the database, so changing one needs no data migration. A list default is
  * `readonly` so that it may also be a list declared `as const`; nothing ever
  * changes a default.
+ *
+ * What a setting declares is also the rule for what may be saved in it, and
+ * its own default must keep to it: a text is at most `maxLength` characters;
+ * a number lies from `min` to `max` and, with `step`, is `min` (0 when
+ * there is none) plus a whole number of steps, so `step: 1` means whole
+ * numbers; a select holds the key of one option and a multi-select a list
+ * of keys, none twice; a list has at most `maxItems` texts of at most
+ * `maxLength` characters each.
+ *
+ * A saved value that no longer fits, because the manifest changed since,
+ * is read as the default; a multi-select first loses the keys that are no
+ * longer options. A value saved under a name the manifest no longer has is
+ * not read at all.
  */
 export type Setting =
   | Field<string, { type: "text"; maxLength?: number }>
