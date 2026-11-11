@@ -9,7 +9,7 @@ They are sample apps with sample data. Nobody's real app lives here.
 
 | Folder | Holds so far |
 |---|---|
-| `checklist` | `manifest.ts` only. Its server file, card and page arrive with the steps of [docs/mini-app-contract.md](../../docs/mini-app-contract.md) that build what they need. |
+| `checklist` | `manifest.ts` and `server.ts`: one collection, `items`, with a query that lists them and mutations that add one, tick one and clear the ticked ones. Its card and page arrive with the steps of [docs/mini-app-contract.md](../../docs/mini-app-contract.md) that build what they need. |
 
 The server does not load these by itself. Its tests pass them to
 `createApp({ apps })` (`FIXTURE_APPS` in `packages/server/src/testing.ts`).

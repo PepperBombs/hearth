@@ -9,13 +9,15 @@
  *   the collections the app declared, each limited to one app in one space.
  *   The space, the app and the person come from the caller of these
  *   functions, who has checked the person's access; nothing a mini-app or a
- *   request body says can change them.
+ *   request body says can change them. The caller closes the store when the
+ *   handler has returned, and a closed store refuses everything.
  * - `deleteAllData` deletes everything an app has in a space.
  * - Reading and writing settings are added here with the settings routes.
  *
  * Design: docs/mini-app-contract.md, sections A3 and A6.
  */
 import { AppError, type Collection, type ReadCollection, type z } from "@hearth/sdk/server";
+import { safeParse } from "zod";
 import type { Db } from "../db/database";
 import { newId } from "../db/ids";
 import { PLAIN_NAME } from "./definition";
@@ -47,8 +49,9 @@ type Bindings = Record<string, string | number>;
 
 /**
  * A handler asked the store for something it does not do: a `where` on a
- * field the collection lacks, a limit above the maximum. This is a mistake
- * in the app's code, not in the request, so it is a fault: logged, 500.
+ * field the collection lacks, a limit above the maximum, anything at all
+ * once its request is over. This is a mistake in the app's code, not in the
+ * request, so it is a fault: logged, 500.
  */
 export class StoreUsageError extends Error {
   constructor(message: string) {
@@ -90,12 +93,16 @@ const COLUMNS =
 const describeIssue = (issue: { path: PropertyKey[]; message: string } | undefined): string =>
   issue ? `${issue.path.length > 0 ? `${issue.path.map(String).join(".")}: ` : ""}${issue.message}` : "it is not valid";
 
+/** Whether the request a store was opened for is still being answered. */
+type Lifetime = { closed: boolean };
+
 /** One collection of one app in one space. */
 function openCollection(
   db: Db,
   scope: StoreScope,
   collection: string,
   schema: z.ZodObject,
+  lifetime: Lifetime,
 ): Collection<Fields> {
   const { appId, userId } = scope;
   const at = scope.now.toISOString();
@@ -103,6 +110,19 @@ function openCollection(
 
   const misuse = (message: string) =>
     new StoreUsageError(`App "${appId}", collection "${collection}": ${message}`);
+
+  /**
+   * Refuses a store that outlived its request: by then the transaction that
+   * held the access check is over, so nothing may be read or written on its
+   * strength. An `async` handler gets here after its first `await`.
+   */
+  function live(): void {
+    if (lifetime.closed) {
+      throw misuse(
+        "ctx.db was used after the handler returned. A handler cannot keep it for later, and cannot use it after an await.",
+      );
+    }
+  }
 
   /** The JSON path of a field, after checking that the collection has it. */
   function pathOf(field: string, what: string): string {
@@ -116,9 +136,27 @@ function openCollection(
   }
 
   /**
+   * What a row stored without this field reads as: the field's default, or
+   * undefined when it has none. Rows written before a field was added lack
+   * it, and are read with its default; matching and ordering must see them
+   * the same way, or `where: { done: false }` would skip those rows.
+   */
+  function whenMissing(field: string): unknown {
+    const fieldSchema = schema.shape[field];
+    if (!fieldSchema) return undefined;
+    try {
+      const parsed = safeParse(fieldSchema, undefined);
+      return parsed.success ? parsed.data : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Turns `where` into conditions, each beginning with AND, and adds what
    * they need to the bindings. A value is compared together with its kind,
-   * so that `true` does not match a stored 1 nor "1" a stored number.
+   * so that `true` does not match a stored 1 nor "1" a stored number. A row
+   * that lacks the field matches when the value is the field's default.
    */
   function matching(where: unknown, bindings: Bindings): string {
     if (where === undefined) return "";
@@ -130,16 +168,18 @@ function openCollection(
       const path = `path${index}`;
       const kind = `json_type(data, @${path})`;
       bindings[path] = pathOf(field, "where");
+      // json_type is NULL only where the row has no such field at all.
+      const orMissing = whenMissing(field) === value ? ` OR ${kind} IS NULL` : "";
       if (typeof value === "string") {
         bindings[`value${index}`] = value;
-        sql += ` AND ${kind} = 'text' AND json_extract(data, @${path}) = @value${index}`;
+        sql += ` AND ((${kind} = 'text' AND json_extract(data, @${path}) = @value${index})${orMissing})`;
       } else if (typeof value === "number" && Number.isFinite(value)) {
         bindings[`value${index}`] = value;
-        sql += ` AND ${kind} IN ('integer', 'real') AND json_extract(data, @${path}) = @value${index}`;
+        sql += ` AND ((${kind} IN ('integer', 'real') AND json_extract(data, @${path}) = @value${index})${orMissing})`;
       } else if (typeof value === "boolean") {
-        sql += ` AND ${kind} = '${value ? "true" : "false"}'`;
+        sql += ` AND (${kind} = '${value ? "true" : "false"}'${orMissing})`;
       } else if (value === null) {
-        sql += ` AND ${kind} = 'null'`;
+        sql += ` AND (${kind} = 'null'${orMissing})`;
       } else if (value === undefined) {
         throw misuse(
           `where.${field} is undefined. Leave the field out to match every value; an undefined value is refused so that a missing input cannot widen what is matched.`,
@@ -197,6 +237,7 @@ function openCollection(
   }
 
   function find(id: unknown): StoredRow | undefined {
+    live();
     if (typeof id !== "string") return undefined;
     return db
       .prepare(`SELECT ${COLUMNS} FROM app_rows WHERE ${SCOPE} AND id = @id`)
@@ -210,6 +251,7 @@ function openCollection(
     },
 
     list(options = {}) {
+      live();
       const bindings = scoped();
       let conditions = matching(options.where, bindings);
       if (options.mine) {
@@ -232,7 +274,14 @@ function openCollection(
         order = `updated_at ${direction}, ${order}`;
       } else if (orderBy !== "createdAt") {
         bindings.orderPath = pathOf(String(orderBy), "orderBy");
-        order = `json_extract(data, @orderPath) ${direction}, ${order}`;
+        let value = "json_extract(data, @orderPath)";
+        const missing = whenMissing(String(orderBy));
+        if (typeof missing === "string" || typeof missing === "boolean" || Number.isFinite(missing)) {
+          // json_extract gives a switch as 1 or 0.
+          bindings.orderDefault = typeof missing === "boolean" ? Number(missing) : (missing as string | number);
+          value = `CASE WHEN json_type(data, @orderPath) IS NULL THEN @orderDefault ELSE ${value} END`;
+        }
+        order = `${value} ${direction}, ${order}`;
       }
 
       const rows = db
@@ -244,6 +293,7 @@ function openCollection(
     },
 
     count(where) {
+      live();
       const bindings = scoped();
       const conditions = matching(where, bindings);
       const row = db
@@ -253,6 +303,7 @@ function openCollection(
     },
 
     insert(value) {
+      live();
       const { data, fields } = accept(value);
       const stored: StoredRow = {
         id: newId(),
@@ -284,11 +335,13 @@ function openCollection(
     },
 
     remove(id) {
+      live();
       if (typeof id !== "string") return;
       db.prepare(`DELETE FROM app_rows WHERE ${SCOPE} AND id = @id`).run({ ...scoped(), id });
     },
 
     removeWhere(where) {
+      live();
       if (where === undefined) {
         throw misuse("removeWhere needs to be told which rows; pass {} to delete every row of the collection.");
       }
@@ -301,29 +354,53 @@ function openCollection(
 
 type Schemas = Readonly<Record<string, z.ZodObject>>;
 
+/** A handler's `ctx.db`, and the way to end it. */
+export type Store<C> = {
+  /** The app's collections by name. */
+  collections: Readonly<Record<string, C>>;
+  /** Ends the store: from then on every method of every collection throws StoreUsageError. */
+  close(): void;
+};
+
+function openStore<C>(
+  db: Db,
+  scope: StoreScope,
+  schemas: Schemas,
+  shape: (collection: Collection<Fields>) => C,
+): Store<C> {
+  const lifetime: Lifetime = { closed: false };
+  const collections = Object.freeze(
+    Object.fromEntries(
+      Object.entries(schemas).map(([name, schema]) => [
+        name,
+        Object.freeze(shape(openCollection(db, scope, name, schema, lifetime))),
+      ]),
+    ),
+  );
+  return {
+    collections,
+    close: () => {
+      lifetime.closed = true;
+    },
+  };
+}
+
 /**
  * An app's collections for a mutation: read and write, all of it limited to
  * the scope's space and app. Call it only with a scope taken from an install
  * the person was found to have edit access to, inside the same transaction
- * as that check.
+ * as that check, and close it when the handler has returned.
  */
-export function writableStore(db: Db, scope: StoreScope, collections: Schemas): Record<string, Collection<Fields>> {
-  return Object.fromEntries(
-    Object.entries(collections).map(([name, schema]) => [name, openCollection(db, scope, name, schema)]),
-  );
+export function writableStore(db: Db, scope: StoreScope, collections: Schemas): Store<Collection<Fields>> {
+  return openStore(db, scope, collections, (collection) => collection);
 }
 
 /**
  * An app's collections for a query. The methods that write are not there at
  * all, so a query cannot change data whatever its code tries.
  */
-export function readOnlyStore(db: Db, scope: StoreScope, collections: Schemas): Record<string, ReadCollection<Fields>> {
-  return Object.fromEntries(
-    Object.entries(collections).map(([name, schema]) => {
-      const { get, list, count } = openCollection(db, scope, name, schema);
-      return [name, { get, list, count }];
-    }),
-  );
+export function readOnlyStore(db: Db, scope: StoreScope, collections: Schemas): Store<ReadCollection<Fields>> {
+  return openStore(db, scope, collections, ({ get, list, count }) => ({ get, list, count }));
 }
 
 /**

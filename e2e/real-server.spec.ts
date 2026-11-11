@@ -98,6 +98,17 @@ test("the built server answers the routes for apps in a space, and holds no apps
     expect(response.status()).toBe(404);
     expect(await response.json()).toMatchObject({ error: { code: "not_found" } });
   }
+
+  // An app's own queries and mutations have their routes as well, and answer likewise.
+  for (const call of [`${address}/q/list`, `${address}/m/add`]) {
+    const outsideEnvelope = await request.post(call, { data: { name: "Milk" } });
+    expect(outsideEnvelope.status()).toBe(400);
+    expect(await outsideEnvelope.json()).toMatchObject({ error: { code: "invalid_request" } });
+
+    const nothingThere = await request.post(call, { data: { input: { name: "Milk" } } });
+    expect(nothingThere.status()).toBe(404);
+    expect(await nothingThere.json()).toMatchObject({ error: { code: "not_found" } });
+  }
 });
 
 test.describe("installed", () => {

@@ -66,18 +66,19 @@ Items 2 to 4 follow `docs/mini-app-contract.md`: the agreed design (section
 A), the owner's decisions at its top, and fifteen build steps (section B),
 each marked there once built. Built so far: step 1, the SDK package skeleton;
 step 2, the UI kit in the SDK; step 3, the shared contract and the database
-tables for apps in spaces; and step 4, the server's registry of apps and the
+tables for apps in spaces; step 4, the server's registry of apps and the
 routes that add an app to a space, remove it, bring it back and delete its
-data.
+data; and step 5, `defineServer` in the SDK, the store behind `ctx.db` and
+the routes that run an app's queries and mutations.
 
 ## Layout and commands
 
 | Folder | Holds |
 |---|---|
-| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. It already holds the requests and answers of routes that are not built yet (groups, members, access, moving an app, app settings, queries and mutations). |
-| `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too. `@hearth/sdk/manifest-schema` is the run-time check of a manifest, for the framework only. Imports no other Hearth package. |
-| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `installs.ts` (who may use which app where; add, remove, bring back, delete data), `store.ts` (the only SQL for `app_rows` and `app_settings`) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
-| `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them. So far `checklist`, a manifest only. |
+| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. It already holds the requests and answers of routes that are not built yet (groups, members, access, moving an app, app settings). |
+| `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer`, `AppError`, `z` and the types of `ctx`; it holds no logic. `@hearth/sdk/manifest-schema` is the run-time check of a manifest, for the framework only. Imports no other Hearth package. |
+| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file), `installs.ts` (who may use which app where; add, remove, bring back, delete data), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db`, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (what `ctx.settings` holds) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
+| `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them. So far `checklist`, a manifest and a server file. |
 | `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card and the avatar in `src/components` are the shell's own. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
@@ -129,7 +130,35 @@ Things that bite:
 - A check and the change it allows go in one `db.transaction(...).immediate()`,
   as in `installs.ts`, so that a revoke cannot land between them.
 - SQL that names `app_rows` or `app_settings` belongs in
-  `packages/server/src/apps/store.ts` and in test files, nowhere else.
+  `packages/server/src/apps/store.ts` and in test files, nowhere else, and
+  every statement there names its space and app. A test fails otherwise
+  (`store-boundary.test.ts`); it reads source text, so a comment that names
+  the tables in another file fails it too.
+- A mini-app's handler never gets a database handle, a space ID or a user ID
+  to pass on. `ctx.db` is built in `calls.ts` from the space and app of the
+  address and the signed-in person, after `resolveInstall`, inside the same
+  transaction (deferred for a query, immediate for a mutation). Keep it so
+  when adding to `ctx` or to the store.
+- Handlers are synchronous. One that returns a promise is answered with 500,
+  and the store is closed when the handler returns, so that an `async`
+  handler cannot write after the transaction. Do not add an `await` between
+  the access check and the handler.
+- What a handler does wrong has three kinds. `AppError` (from the SDK) is the
+  request turned down: 400, 404 or 409, not logged. `StoreUsageError` is the
+  app misusing the store, and `StoredRowError` a stored row that no longer
+  fits its collection: both are logged inside an `AppFaultError` and answered
+  with 500, like any other error a handler throws.
+- Every query and mutation needs a `description`, one English sentence
+  (owner's decision 7). The types require it and `checkServer`
+  (`packages/server/src/apps/definition.ts`) refuses a server file without
+  one at start-up, fixtures and test apps included.
+- `ctx.settings` is the manifest's defaults for now: `settingsFor` in
+  `packages/server/src/apps/settings.ts` is the one place it comes from, and
+  step 6 fills it from the saved values.
+- The store matches and sorts with SQL on the stored JSON but returns rows
+  parsed by the collection's schema. The two agree because a row is stored
+  as the schema's own output and a missing field counts as its default; a
+  schema whose output it would not accept again is refused on insert.
 - Removing an app from a space only sets `space_apps.removed_at`. Its rows,
   settings, switches and pins stay; bringing it back resets access
   (`member_access` as asked, exceptions deleted) and nothing else.
@@ -165,12 +194,13 @@ Things that bite:
   breaking change to the SDK's types or to the manifest schema raises the
   minor version.
 - The SDK's type tests (`expectTypeOf`, `@ts-expect-error` in
-  `packages/sdk/src/index.test.ts`) fail in `pnpm typecheck`, not in the test
-  runner.
+  `packages/sdk/src/index.test.ts` and `server.test.ts`) fail in
+  `pnpm typecheck`, not in the test runner.
 - A manifest has two descriptions that must agree: the types in
   `packages/sdk/src/index.ts` and the schema in `manifest-schema.ts`. Change
   both. `@hearth/sdk` itself must keep importing nothing (it ends up in the
-  web bundle with every manifest); zod stays in `manifest-schema.ts`.
+  web bundle with every manifest); zod stays in `manifest-schema.ts` and
+  `server.ts`.
 - Icon and colour names are listed in the SDK. A new icon also needs its
   Lucide icon in `packages/sdk/src/web/icon.tsx` (a type error until then); a
   new colour needs a `--hearth-app-*` token in light and dark (the contrast

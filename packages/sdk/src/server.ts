@@ -66,7 +66,8 @@ export type Row<T> = T & {
 export type ListOptions<T> = {
   /**
    * Only rows whose fields equal these. A value is text, a number, true,
-   * false or null. A key the collection does not have, a value of another
+   * false or null, and is compared together with its kind: `true` does not
+   * match a stored 1. A key the collection does not have, a value of another
    * kind and an undefined value are errors: leave a key out to match all.
    */
   where?: Partial<T>;
@@ -193,8 +194,9 @@ export interface ServerBuilder<M, C extends Collections> {
   /**
    * A route that reads. Anyone who can see the app may call it. The handler
    * must not be `async`: it runs inside one database transaction together
-   * with the check of who is asking, and a handler that returns a promise is
-   * refused. What it returns is sent as JSON.
+   * with the check of who is asking, a handler that returns a promise is
+   * refused, and `ctx.db` stops working once the handler has returned. What
+   * it returns is sent as JSON.
    */
   query<O extends Json>(about: RouteAbout, run: (ctx: QueryCtx<M, C>) => O): Query<void, O>;
   query<I extends z.ZodType, O extends Json>(
@@ -226,7 +228,9 @@ export interface ServerBuilder<M, C extends Collections> {
  * A collection is a zod object schema. Rows are checked against it when
  * they are written and again when they are read, so:
  * - give every field added later a `.default()`, or old rows stop being
- *   readable and the app's queries fail until that is put right;
+ *   readable and the app's queries fail until that is put right. Rows
+ *   stored before the field existed then read, match (`where`) and sort
+ *   (`orderBy`) as if they held the default;
  * - the schema must accept what it produces (a transform that cannot be
  *   applied twice does not belong in a collection);
  * - field names are plain identifiers, and none is one of ROW_FIELDS.

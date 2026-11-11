@@ -5,7 +5,7 @@ nothing else: no framework internals, no other mini-app.
 
 It is being built in steps; the design is
 [docs/mini-app-contract.md](../../docs/mini-app-contract.md). So far it holds
-the manifest and the UI kit.
+the manifest, the UI kit and what an app's server file is written with.
 
 ## What is here
 
@@ -13,10 +13,11 @@ the manifest and the UI kit.
 |---|---|---|
 | `@hearth/sdk` | `defineApp`, the manifest types (`Manifest`, `Setting`, `Localized`), `SettingsOf`, the message types (`MessageKey`, `PlaceholderArgs`, `Translate`), the lists `APP_ICONS` and `APP_COLORS`, `APP_ID_PATTERN`, `SDK_VERSION`. Imports nothing. | Mini-apps and the framework. |
 | `@hearth/sdk/web` | The UI kit: `Button`, `IconButton`, `Input`, `Field`, `Switch`, `Checkbox`, `Chip`, `Tag`, `Segmented`, `Rows`, `Row`, `EmptyState`, `Dialog`, `DialogBody`, `Icon`, and the class helpers `buttonClass` and `chipClass`. | A mini-app's widget and page, and the shell. |
+| `@hearth/sdk/server` | `defineServer`, `AppError`, `z` (the one zod that mini-apps use), and the types of a handler's context and of rows and collections (`QueryCtx`, `MutationCtx`, `Row`, `ReadCollection`, `Collection`, `Json`, `InputOf`, `OutputOf`). | A mini-app's `server.ts`. |
 | `@hearth/sdk/manifest-schema` | `manifestSchema`, a zod schema that checks a manifest at run time. | The framework only. |
 
-Still to come: `@hearth/sdk/server`, the hooks in `@hearth/sdk/web`,
-`@hearth/sdk/testing`, `@hearth/sdk/eslint` and the `hearth-apps` command.
+Still to come: the hooks in `@hearth/sdk/web`, `@hearth/sdk/testing`,
+`@hearth/sdk/eslint` and the `hearth-apps` command.
 
 ## A manifest
 
@@ -55,6 +56,80 @@ export default defineApp({
   default that does not fit its own setting (a `select` default that is not
   an option, a number outside `min` and `max`), placeholders that differ
   between the two languages, and unknown properties.
+
+## A server file
+
+```ts
+import { AppError, defineServer, z } from "@hearth/sdk/server";
+import manifest from "./manifest";
+
+const app = defineServer(manifest, {
+  items: z.object({
+    name: z.string().trim().min(1).max(80),
+    aisle: z.string().max(40).default(""),
+    done: z.boolean().default(false),
+  }),
+});
+
+export default app.routes({
+  list: app.query(
+    { description: "Lists every item on the shopping list, oldest first." },
+    (ctx) => ctx.db.items.list({ orderBy: "createdAt" }),
+  ),
+  add: app.mutation(
+    {
+      description: "Adds an item to the shopping list, optionally under an aisle.",
+      input: z.object({ name: z.string(), aisle: z.string().default("") }),
+    },
+    (ctx, input) => ctx.db.items.insert({ ...input, done: false }),
+  ),
+  rename: app.mutation(
+    { description: "Gives one item of the shopping list another name.", input: z.object({ id: z.string(), name: z.string() }) },
+    (ctx, { id, name }) => {
+      if (ctx.db.items.count({ name }) > 0) throw new AppError("conflict", "That name is on the list already.");
+      return ctx.db.items.update(id, { name });
+    },
+  ),
+});
+```
+
+- **Collections** are zod object schemas. A row is checked when it is written
+  and again when it is read, and comes back as `Row<T>`: its fields plus
+  `id`, `createdBy`, `updatedBy`, `createdAt` and `updatedAt`, which the
+  framework records. A field may not have one of those five names, and field
+  names are letters, digits and underscores.
+- There are no migrations. Give every field you add later a `.default()`:
+  rows stored before it then read, match and sort as if they held the
+  default. A stored row that no longer fits its schema fails the query.
+- **A query** reads; its `ctx.db` has `get`, `list` and `count` only. **A
+  mutation** changes data and also has `insert`, `update`, `remove` and
+  `removeWhere`. The framework lets anyone who can see the app call a query,
+  and only someone with edit access call a mutation.
+- **Every route has a `description`**: one English sentence saying what it
+  does, for a reader who has not seen the app. An assistant will later choose
+  routes by it. A route without one stops the server from starting.
+- **`input`** is a zod schema for what the caller sends; the handler gets
+  its output. Leave it out for a route that takes nothing.
+- **`ctx`** also has `user` (`id`, `name`), `locale`, `space` (`kind`,
+  `name`), `access`, `settings` (typed from the manifest) and `now`. There is
+  no space ID and no database handle: `ctx.db` already reaches this app's
+  rows in this space and no others.
+- `list` takes `where` (fields and the text, number, switch or null each
+  must equal), `mine` (only rows the caller created), `orderBy` (a field,
+  `"createdAt"` or `"updatedAt"`), `desc` and `limit` (1000 unless given, at
+  most 5000). `update` replaces the top-level fields it is given.
+- **A handler is not `async`.** It runs inside one database transaction
+  together with the check of who is asking; a handler that returns a promise
+  is refused, and `ctx.db` stops working once the handler has returned. What
+  a handler returns must survive JSON.
+- To turn a request down, throw `AppError` with `"invalid_request"` (400),
+  `"not_found"` (404) or `"conflict"` (409); what the mutation wrote so far
+  is undone. A value that does not fit its collection's schema is refused as
+  `invalid_request` by `insert` and `update` themselves, so an input schema
+  need not repeat the collection's rules.
+- `typeof server` (the default export) stands for the app in `SettingsOf`,
+  `MessageKey` and `Translate`, and carries each route's input and output
+  types (`InputOf`, `OutputOf`) for the hooks that will call them.
 
 ## The UI kit
 
@@ -99,7 +174,7 @@ to a token class name or to the manifest schema raises the minor version.
 ## Commands
 
 ```sh
-pnpm --filter @hearth/sdk typecheck   # also runs the type tests in src/index.test.ts
+pnpm --filter @hearth/sdk typecheck   # also runs the type tests in src/index.test.ts and src/server.test.ts
 pnpm --filter @hearth/sdk test        # the manifest in Node, the UI kit in a simulated browser
 ```
 

@@ -4,11 +4,12 @@ The Hearth server: a small [Hono](https://hono.dev) application on Node that
 answers the JSON API under `/api` and serves the built web app for every other
 path. It keeps its data in one SQLite file.
 
-It is the app shell plus the first part of mini-apps: the server is built
-with a list of apps, and an app can be added to a space, removed, brought
-back and its data deleted (see "Mini-apps"). It cannot run an app's code yet,
-and the build does not hand it any apps, so a running server's session still
-lists `apps: []`.
+It is the app shell plus the first parts of mini-apps: the server is built
+with a list of apps; an app can be added to a space, removed, brought back
+and its data deleted; and an app's own queries and mutations run against
+rows that belong to one app in one space (see "Mini-apps"). The build does
+not hand the server any apps yet, so a running server's session still lists
+`apps: []`.
 
 ## Run it in development
 
@@ -141,6 +142,8 @@ app.
 | `PUT /api/spaces/:spaceId/apps/:appId` | yes | Adds the app to the space, or brings a removed one back with its data. Takes `{ memberAccess? }`. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/apps/:appId` | yes | Removes the app from the space and keeps its data. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/apps/:appId/data` | yes | Deletes the data of a removed app for good. Takes `{ confirm }`, the app's ID. Answers `204`. |
+| `POST /api/spaces/:spaceId/apps/:appId/q/:name` | yes | Runs the app's query of that name. Takes `{ input? }`; answers `{ output }`. Needs view access. |
+| `POST /api/spaces/:spaceId/apps/:appId/m/:name` | yes | Runs the app's mutation of that name. Takes `{ input? }`; answers `{ output }`, or `{}` when it returns nothing. Needs edit access. |
 
 Every failure has the shape `{ error: { code, message } }`. The message is
 English text for logs and network traces; the web app chooses what to show
@@ -149,8 +152,8 @@ unexpected failure answers `500` with `internal` and no detail; the detail goes
 to the server's log. `forbidden` (403) is for a member who may not do this,
 and `conflict` (409) for a request that cannot be carried out as things
 stand. The contract also holds the requests of routes that are not built yet:
-groups, members, access, moving an app, settings, and an app's own queries
-and mutations (`docs/mini-app-contract.md`, section A8).
+groups, members, access, moving an app and settings
+(`docs/mini-app-contract.md`, section A8).
 
 ## Mini-apps
 
@@ -159,10 +162,14 @@ The code is in `src/apps`; the design is `docs/mini-app-contract.md`.
 **The registry.** `createApp({ config, db, apps })` is given the mini-apps
 this build holds, each as `{ id, manifest, hasPage, server? }`. It checks
 every manifest against the SDK's schema, that `id` equals the manifest's
-`id`, and that no ID comes twice. If anything is wrong the server prints
-every problem and exits with status 1, before it opens the database or
-listens. `main.ts` passes an empty list for now: writing the list from the
-apps folders is a later step.
+`id`, and that no ID comes twice. It also checks what an app's `server.ts`
+exports (`src/apps/definition.ts`): that it was made with `defineServer` and
+this app's manifest, that every query and mutation has a description, and
+that the names of routes, collections and fields are plain and no field is
+called like one of the fields every row has. If anything is wrong the server
+prints every problem and exits with status 1, before it opens the database
+or listens. `main.ts` passes an empty list for now: writing the list from
+the apps folders is a later step.
 The tests pass the sample apps in `packages/fixture-apps`.
 
 **An app in a space** is a row in `space_apps`.
@@ -197,6 +204,58 @@ exactly the apps for which it is not `null`, from the same SQL.
 **An app whose folder is gone** from a deploy disappears from every session
 and answers `404`. Its rows are not touched, and it returns when the folder
 does. An owner can delete its data without removing it first.
+
+**An app's queries and mutations** are what its `server.ts` defines with
+`@hearth/sdk/server`. `callApp` in `src/apps/calls.ts` runs one:
+
+- Everything happens in one database transaction, the check of who is asking
+  first: deferred for a query, immediate for a mutation. A change of access
+  cannot land between the check and the handler, and what a mutation wrote
+  is kept as a whole or not at all.
+- `404` when `resolveInstall` gives `null`, when the app has no server file,
+  and when it has no route of that name and kind: a mutation cannot be
+  reached under `/q/`, nor a query under `/m/`.
+- `403` `forbidden` for a mutation by someone who may only view, before
+  anything is said about the input.
+- `400` `invalid_request` when `input` does not fit the route's schema, when
+  a route that takes none is sent some, and when a handler stores a value its
+  collection's schema refuses.
+- A handler turns a request down by throwing `AppError`: `400`, `404` or
+  `409`, with its message. Anything else it does wrong is a fault, logged as
+  `AppFaultError` with the app and the route and answered with `500`: an
+  error it throws, a promise it returns (handlers are not `async`), an
+  answer that is not JSON, a misuse of the store.
+- The handler's `ctx` has the person (ID and name), their language, the
+  space's kind and name, their access, the app's settings, the time and
+  `db`. It has no space ID. `ctx.settings` holds the manifest's defaults
+  until settings can be saved.
+
+**The store** (`src/apps/store.ts`) is `ctx.db`: the app's collections, each
+with `get`, `list` and `count`, and for a mutation also `insert`, `update`,
+`remove` and `removeWhere`. A query's collections do not have the writing
+methods at all.
+
+- A store is made for one request from the space and app of the address and
+  the signed-in person. Every statement it runs is limited to that space,
+  that app and one collection, so a row of another space is simply not
+  found. `created_by` and `updated_by` are the signed-in person.
+- Rows are checked against the collection's zod schema when written and
+  again when read. A stored row that no longer fits fails the read with a
+  `StoredRowError` naming the app, the collection and the row.
+- `where` takes fields of the collection and the text, number, switch or
+  null each should equal; `orderBy` takes a field, `createdAt` or
+  `updatedAt`. Anything else throws `StoreUsageError`, a fault of the app. A
+  row stored before a field was added counts as holding that field's
+  default, in `where` and `orderBy` as in what is read.
+- `list` gives at most 1000 rows unless `limit` says otherwise, and never
+  more than 5000.
+- The store is closed when the handler returns and refuses everything from
+  then on, so nothing is read or written outside the transaction that
+  checked access.
+
+A unit test (`src/apps/store-boundary.test.ts`) fails when a source file
+other than `store.ts` and the migrations names `app_rows` or `app_settings`,
+or when a statement in `store.ts` does not name its space and app.
 
 ## Web app files
 
@@ -255,10 +314,10 @@ Tables so far, from migration 1: `users`, `spaces`, `space_members`,
 `space_apps` (an app added to a space), `app_rows` (every mini-app's data),
 `app_settings`, `app_access`, `app_prefs` and `space_invitations`, plus the
 column `space_members.can_add_apps`. The server writes `space_apps` and, for
-a member who adds an app, `app_access`; it deletes from all of them when an
-app's data is deleted. Nothing writes rows, settings, switches or
-invitations yet. SQL for `app_rows` and `app_settings` lives in
-`src/apps/store.ts` only.
+a member who adds an app, `app_access`; an app's mutations write `app_rows`
+through the store; all of them are deleted from when an app's data is
+deleted. Nothing writes settings, switches or invitations yet. SQL for
+`app_rows` and `app_settings` lives in `src/apps/store.ts` only.
 
 Rules the database keeps by itself, tested as SQL in
 `src/db/apps-schema.test.ts`:

@@ -53,12 +53,19 @@ const isThenable = (value: unknown): value is PromiseLike<unknown> =>
   typeof (value as { then?: unknown }).then === "function";
 
 /** Checks what the caller sent against the route's own schema. */
-function readInput(route: RouteDefinition, input: Json | undefined): unknown {
+function readInput(route: RouteDefinition, call: AppCall): unknown {
+  const { input } = call;
   if (!route.input) {
     if (input !== undefined) throw new Refusal(400, "invalid_request", "input: This route takes no input.");
     return undefined;
   }
-  const parsed = route.input.safeParse(input);
+  let parsed: ReturnType<typeof route.input.safeParse>;
+  try {
+    parsed = route.input.safeParse(input);
+  } catch (error) {
+    // A schema that waits for something cannot be checked inside a transaction.
+    throw new AppFaultError(call, "has an input schema that could not be applied.", error);
+  }
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const where = issue && issue.path.length > 0 ? `.${issue.path.map(String).join(".")}` : "";
@@ -97,7 +104,7 @@ export function callApp(db: Db, registry: Registry, call: AppCall): string {
       throw new Refusal(403, "forbidden", "Changing anything in this app needs edit access to it.");
     }
     // After the checks, so that the input's faults are told only to someone who may use the app.
-    const input = readInput(route, call.input);
+    const input = readInput(route, call);
 
     const space = db.prepare("SELECT kind, name FROM spaces WHERE id = ?").get(spaceId) as {
       kind: SpaceKind;
@@ -106,6 +113,10 @@ export function callApp(db: Db, registry: Registry, call: AppCall): string {
     const now = new Date();
     // The scope comes from the address and the sign-in, both checked above.
     const scope = { spaceId, appId, userId: user.id, now };
+    const store =
+      kind === "query"
+        ? readOnlyStore(db, scope, app.server.collections)
+        : writableStore(db, scope, app.server.collections);
     const ctx = Object.freeze({
       user: Object.freeze({ id: user.id, name: user.name }),
       locale: user.locale,
@@ -113,11 +124,7 @@ export function callApp(db: Db, registry: Registry, call: AppCall): string {
       access,
       settings: settingsFor(app.manifest),
       now: new Date(now),
-      db: Object.freeze(
-        kind === "query"
-          ? readOnlyStore(db, scope, app.server.collections)
-          : writableStore(db, scope, app.server.collections),
-      ),
+      db: store.collections,
     });
 
     let output: unknown;
@@ -128,6 +135,10 @@ export function callApp(db: Db, registry: Registry, call: AppCall): string {
         throw new Refusal(STATUS[error.code], error.code, error.message);
       }
       throw new AppFaultError(call, "failed.", error);
+    } finally {
+      // The access check holds for this transaction only. A handler that kept
+      // `ctx.db`, or went on after an await, finds it closed.
+      store.close();
     }
 
     if (isThenable(output)) {
