@@ -1,8 +1,9 @@
 import { ArrowRight, LayoutDashboard } from "lucide-react";
 import { useMemo } from "react";
 import { Link } from "react-router";
-import type { AppSummary } from "@hearth/shared";
+import type { AppSummary, WidgetSize } from "@hearth/shared";
 import { EmptyState, Tag } from "@hearth/sdk/web";
+import { AppView } from "../apps/app-view";
 import { AppIcon } from "../components/app-icon";
 import { Page } from "../components/shell/page";
 import { Card, CardFooter, CardHeader } from "../components/card";
@@ -21,6 +22,18 @@ import { appPath, enabledApps, useSession } from "../session/session";
 const GRID =
   "grid grid-flow-dense auto-rows-[minmax(200px,auto)] grid-cols-4 gap-[var(--hearth-gap)] " +
   "@max-[844px]/main:grid-cols-2 @max-[560px]/main:auto-rows-auto @max-[560px]/main:grid-cols-1";
+
+/**
+ * The room a card takes, which its app chose in the manifest: 1x1, 2x1, 1x2
+ * or 2x2 cells. Where there are two columns a wide card fills the row; in a
+ * single column every card is one cell, as tall as what it holds.
+ */
+const SIZE: Record<WidgetSize, string> = {
+  small: "",
+  wide: "col-span-2 @max-[560px]/main:col-span-1",
+  tall: "row-span-2 @max-[560px]/main:row-span-1",
+  large: "col-span-2 row-span-2 @max-[560px]/main:col-span-1 @max-[560px]/main:row-span-1",
+};
 
 export function Dashboard() {
   const session = useSession();
@@ -48,20 +61,23 @@ export function Dashboard() {
   );
 }
 
-/** Stands in for an app's widget until apps can supply their own. */
+/**
+ * One app's card. The shell draws the frame: icon, name, the space's tag
+ * and the link to the app's page. What is inside is the app's own widget.
+ */
 function AppCard({ app }: { app: AppSummary }) {
   const session = useSession();
   const { locale, t } = useI18n();
   const space = session.spaces.find((candidate) => candidate.id === app.spaceId);
   const name = pickLocalized(app.name, locale);
   return (
-    <Card>
+    <Card className={SIZE[app.widgetSize]} data-widget={app.id}>
       <CardHeader
         icon={<AppIcon icon={app.icon} color={app.color} />}
         title={name}
         tag={space?.kind === "group" ? <Tag>{space.name}</Tag> : undefined}
       />
-      <p className="text-fg-2">{pickLocalized(app.description, locale) || t("dashboard.noDescription")}</p>
+      <AppView app={app} part="widget" />
       {app.hasPage ? (
         <CardFooter>
           <Link to={appPath(app)} className="inline-flex items-center gap-1 font-medium text-accent hover:underline">

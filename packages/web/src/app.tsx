@@ -17,7 +17,7 @@ export function AppRoutes() {
       <Route element={<Shell />}>
         <Route index element={<Dashboard />} />
         <Route path="apps" element={<Apps />} />
-        <Route path="apps/:spaceId/:appId" element={<AppPage />} />
+        <Route path="apps/:spaceId/:appId/*" element={<AppPage />} />
         <Route path="settings" element={<Settings />} />
         <Route path="*" element={<NotFound />} />
       </Route>

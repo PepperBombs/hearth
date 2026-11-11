@@ -54,7 +54,7 @@ describe("hearth-apps sync", () => {
   it("builds the framework's sample apps in, named relative to the repository's root", () => {
     const run = hearthApps(["sync"], { appsDir: "packages/fixture-apps", cwd: path.join(ROOT, "packages/web") });
     expect(run).toMatchObject({ status: 0, output: expect.stringContaining("this build holds 2 mini-apps (checklist, feed)") });
-    expect(generated(run, "server")).toContain('{ id: "checklist", manifest: manifest0, hasPage: false, server: server0 },');
+    expect(generated(run, "server")).toContain('{ id: "checklist", manifest: manifest0, hasPage: true, server: server0 },');
     expect(generated(run, "web")).toContain('id: "feed"');
   });
 

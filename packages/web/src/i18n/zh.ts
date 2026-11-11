@@ -28,7 +28,6 @@ export const zh: Dictionary = {
   "dashboard.emptyTitle": "还没有小组件",
   "dashboard.emptyBody": "添加应用后，小组件会显示在这里。每个应用都可以在这个页面上显示一小块摘要，比如一份清单或今天的数字。",
   "dashboard.open": "打开",
-  "dashboard.noDescription": "这个应用还没有填写简介。",
 
   "apps.title": "应用",
   "apps.pinned": "已固定",
@@ -42,9 +41,13 @@ export const zh: Dictionary = {
   "apps.emptyTitle": "还没有应用",
   "apps.emptyBody": "应用是放在 Hearth 里的小工具，比如购物清单。有应用添加到你的个人空间或共享空间后，就会列在这里。",
 
-  "appPage.unavailableTitle": "这个应用暂时还不能打开",
-  "appPage.unavailableBody": "应用页面会在 Hearth 之后的版本中提供。",
-  "appPage.back": "返回应用列表",
+  "appView.loading": "正在加载…",
+  "appView.failed": "这个应用无法加载。",
+  "appView.retry": "重试",
+  "appView.outdated": "自你打开此页面以来，Hearth 已更新。",
+  "appView.reload": "刷新以更新",
+  "appView.changeFailed": "这项更改未能保存，请重试。",
+  "appView.viewOnly": "你可以查看这个应用，但不能更改其中的内容。",
 
   "settings.title": "设置",
   "settings.autosave": "更改会自动保存",

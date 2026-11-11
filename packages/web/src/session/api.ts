@@ -1,6 +1,8 @@
 /**
- * The two calls the shell makes. Shapes come from @hearth/shared, which is the
- * contract with the server; responses are checked against it before use.
+ * How the web app talks to the server, and the two calls the shell makes for
+ * itself. Shapes come from @hearth/shared, which is the contract with the
+ * server; responses are checked against it before use. The calls made for a
+ * mini-app are in ../apps/api.ts and go through `request` too.
  */
 import { apiErrorSchema, sessionSchema, type ApiErrorCode, type PreferencesPatch, type Session } from "@hearth/shared";
 
@@ -26,12 +28,19 @@ export function failureCode(error: unknown): FailureCode {
 
 function codeForStatus(status: number): FailureCode {
   if (status === 401) return "unauthenticated";
+  if (status === 403) return "forbidden";
   if (status === 404) return "not_found";
+  if (status === 409) return "conflict";
   if (status === 400 || status === 422) return "invalid_request";
   return "internal";
 }
 
-async function request(path: string, init: RequestInit = {}): Promise<Response> {
+/**
+ * Sends one request. Resolves with the response when the server answered
+ * with success; anything else rejects with an `ApiRequestError` that carries
+ * the server's error code, or "network" when no answer came.
+ */
+export async function request(path: string, init: RequestInit = {}): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(path, {

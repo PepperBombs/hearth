@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { PHONE, expect, sessionWithApps, test } from "./fixtures.ts";
+import { FAMILY_SPACE, PHONE, expect, sessionWithApps, sessionWithSampleApps, test } from "./fixtures.ts";
 
 /**
  * Nothing may reach past the edge of the screen. The document's own width
@@ -303,6 +303,16 @@ test.describe("shell on a phone", () => {
       for (const path of ["/", "/apps", "/settings", "/apps/space-family/grocery", "/no/such/page"]) {
         await page.goto(path);
         await page.getByRole("heading", { level: 1 }).waitFor();
+        await expectNothingPastTheEdge(page);
+      }
+
+      // The same with the apps this build holds, whose own widgets and page are drawn.
+      api.setSession(sessionWithSampleApps({ locale, name: "A person with quite a long name indeed" }));
+      api.items[0]!.name = "A thing to do with a name long enough to need more than one line on a phone, in any language";
+      for (const path of ["/", `/apps/${FAMILY_SPACE}/checklist`]) {
+        await page.goto(path);
+        await page.getByRole("heading", { level: 1 }).waitFor();
+        await expect(page.getByRole("main").getByRole("checkbox").first()).toBeVisible();
         await expectNothingPastTheEdge(page);
       }
     }

@@ -76,11 +76,11 @@ describe("the generated files with no apps", () => {
 });
 
 describe("the generated files with the framework's sample apps", () => {
-  it("list each app with its manifest, its server file when it has one, and its widget", () => {
+  it("list each app with its manifest, its server file and its page when it has them, and its widget", () => {
     const { apps, notices, out, server, web, css, files } = synced([FIXTURES]);
     expect(notices).toEqual([]);
     expect(apps.map((app) => [app.id, app.hasServer, app.hasPage])).toEqual([
-      ["checklist", true, false],
+      ["checklist", true, true],
       ["feed", false, false],
     ]);
 
@@ -90,7 +90,7 @@ describe("the generated files with the framework's sample apps", () => {
       `import server0 from ${from(files.server, "checklist/server.ts")};`,
       `import manifest1 from ${from(files.server, "feed/manifest.ts")};`,
       "export const apps = [",
-      '  { id: "checklist", manifest: manifest0, hasPage: false, server: server0 },',
+      '  { id: "checklist", manifest: manifest0, hasPage: true, server: server0 },',
       '  { id: "feed", manifest: manifest1, hasPage: false },',
       "];",
     ]);
@@ -101,8 +101,9 @@ describe("the generated files with the framework's sample apps", () => {
       "  {",
       '    id: "checklist",',
       "    manifest: manifest0,",
-      "    hasPage: false,",
+      "    hasPage: true,",
       `    widget: () => import(${from(files.web, "checklist/widget.tsx")}),`,
+      `    page: () => import(${from(files.web, "checklist/page.tsx")}),`,
       "  },",
       "  {",
       '    id: "feed",',

@@ -36,11 +36,11 @@ export default defineApp({
   },
   messages: {
     en: {
-      empty: "Nothing new.",
+      everything: "Following every topic",
       following: "Following {count} topics",
     },
     zh: {
-      empty: "没有新内容。",
+      everything: "关注所有主题",
       following: "关注了 {count} 个主题",
     },
   },

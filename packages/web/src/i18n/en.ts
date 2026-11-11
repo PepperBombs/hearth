@@ -31,7 +31,6 @@ export const en = {
   "dashboard.emptyBody":
     "Widgets appear here when apps are added. Each app can show a small summary on this page, such as a list or today's numbers.",
   "dashboard.open": "Open",
-  "dashboard.noDescription": "This app has not said what it does yet.",
 
   "apps.title": "Apps",
   "apps.pinned": "Pinned",
@@ -46,9 +45,13 @@ export const en = {
   "apps.emptyBody":
     "Apps are small tools that live in Hearth, such as a grocery list. When one is added to your personal space or to a shared space, it is listed here.",
 
-  "appPage.unavailableTitle": "This app cannot be opened yet",
-  "appPage.unavailableBody": "App pages arrive in a later version of Hearth.",
-  "appPage.back": "Back to apps",
+  "appView.loading": "Loading…",
+  "appView.failed": "This app could not be loaded.",
+  "appView.retry": "Try again",
+  "appView.outdated": "Hearth has been updated since you opened this page.",
+  "appView.reload": "Reload to update",
+  "appView.changeFailed": "That change could not be saved. Try again.",
+  "appView.viewOnly": "You can look at this app, but not change anything in it.",
 
   "settings.title": "Settings",
   "settings.autosave": "Changes save automatically",

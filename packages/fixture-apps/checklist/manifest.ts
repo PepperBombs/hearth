@@ -31,6 +31,7 @@ export default defineApp({
     en: {
       empty: "Nothing to do.",
       add: "Add an item",
+      submit: "Add",
       other: "Other",
       clear: "Clear ticked",
       left: "{count} left",
@@ -38,6 +39,7 @@ export default defineApp({
     zh: {
       empty: "没有待办事项。",
       add: "添加事项",
+      submit: "添加",
       other: "其他",
       clear: "清除已勾选",
       left: "还剩 {count} 项",

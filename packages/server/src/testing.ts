@@ -13,10 +13,11 @@ export const OWNER_EMAIL = "owner@example.com";
 /**
  * The framework's own sample apps (packages/fixture-apps), as a build hands
  * them over: what `hearth-apps sync` writes for that folder. `checklist`
- * keeps rows; `feed` has no server file.
+ * keeps rows and has a page of its own; `feed` has no server file and no
+ * page.
  */
 export const FIXTURE_APPS: readonly BundledApp[] = [
-  { id: "checklist", manifest: checklist, hasPage: false, server: checklistServer },
+  { id: "checklist", manifest: checklist, hasPage: true, server: checklistServer },
   { id: "feed", manifest: feed, hasPage: false },
 ];
 

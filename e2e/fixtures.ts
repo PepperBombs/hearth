@@ -3,14 +3,20 @@
  *
  * `api` stands in for the server: it answers GET /api/session and
  * PATCH /api/me from memory, checks both against the shared contract, and
- * remembers what was saved, so a reload sees it. All names and addresses are
- * made up.
+ * remembers what was saved, so a reload sees it. It also answers for the
+ * framework's two sample apps (packages/fixture-apps), which the tested
+ * build holds: the checklist's routes, from a list kept here, and both
+ * apps' settings. All names and addresses are made up.
  */
 import { expect, test as base, type Page, type Route } from "@playwright/test";
 import {
+  appCallRequestSchema,
+  appCallResponseSchema,
+  appSettingsSchema,
   preferencesPatchSchema,
   sessionSchema,
   type ApiErrorCode,
+  type AppSettings,
   type AppSummary,
   type PreferencesPatch,
   type Session,
@@ -75,7 +81,12 @@ function app(
   };
 }
 
-/** A member with a family space and a few sample apps, to exercise the lists that are empty today. */
+/**
+ * A member with a family space and a few apps, to exercise the shell's own
+ * lists: sidebar, dashboard grid, app list, quick switcher. The tested build
+ * holds none of these apps, so each card and page says "Reload to update";
+ * `sessionWithSampleApps` lists the ones it does hold.
+ */
 export function sessionWithApps(overrides: Partial<Session["user"]> = {}): Session {
   const session = emptySession(overrides);
   return {
@@ -108,6 +119,45 @@ export function sessionWithApps(overrides: Partial<Session["user"]> = {}): Sessi
   };
 }
 
+/**
+ * A member whose spaces hold the two apps this build really carries: the
+ * checklist in the family space and the feed in their own. Their widgets
+ * and the checklist's page are drawn from the apps' own code.
+ */
+export function sessionWithSampleApps(overrides: Partial<Session["user"]> = {}, checklist: Partial<AppSummary> = {}): Session {
+  const session = sessionWithApps(overrides);
+  return {
+    ...session,
+    apps: [
+      app("checklist", FAMILY_SPACE, "Checklist", "清单", "A list of things to do, ticked off as you go.", "一份待办清单，完成一项勾选一项。", "list-checks", "teal", {
+        widgetSize: "tall",
+        ...checklist,
+      }),
+      app("feed", PERSONAL_SPACE, "Feed", "动态", "A sample card that each person filters for themselves.", "每个人可以自行筛选的示例卡片。", "trending-up", "purple", {
+        widgetSize: "wide",
+        hasPage: false,
+      }),
+    ],
+  };
+}
+
+/** One item of the sample checklist, as its `list` query answers. */
+export type ChecklistItem = {
+  id: string;
+  name: string;
+  section: string;
+  done: boolean;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function item(id: string, name: string, done = false, section = ""): ChecklistItem {
+  const at = "2026-11-10T08:00:00.000Z";
+  return { id, name, section, done, createdBy: "user-1", updatedBy: "user-1", createdAt: at, updatedAt: at };
+}
+
 type Failure = { status: number; code: ApiErrorCode; message: string };
 
 export class FakeApi {
@@ -119,6 +169,36 @@ export class FakeApi {
   /** Every body accepted by PATCH /api/me, in order. */
   readonly saved: PreferencesPatch[] = [];
   sessionRequests = 0;
+
+  /** What the sample checklist holds, wherever it is. Change it to stand in for someone else's change. */
+  items: ChecklistItem[] = [item("item-1", "Water the plants"), item("item-2", "Book the dentist"), item("item-3", "Return the library books", true)];
+  /** The sample apps' settings, by app ID. */
+  appSettings: Record<string, AppSettings> = {
+    checklist: { space: { sections: [] }, user: { hideDone: false } },
+    feed: { space: {}, user: { topics: [], period: "day" } },
+  };
+  /** Make every route of every app fail, for example `{ status: 500, code: "internal", message: "Sample failure" }`. */
+  appFailure: Failure | null = null;
+  /** Every request made for an app, as "METHOD path", in order. */
+  readonly appRequests: string[] = [];
+  private held: Promise<void> | null = null;
+
+  /** Keeps the answers to requests for apps back until the returned function is called. */
+  holdApps(): () => void {
+    let release = () => {};
+    this.held = new Promise((resolve) => {
+      release = resolve;
+    });
+    return () => {
+      this.held = null;
+      release();
+    };
+  }
+
+  /** How many requests for apps ended like this, for example "/q/list". */
+  appRequestCount(ending: string): number {
+    return this.appRequests.filter((request) => request.endsWith(ending)).length;
+  }
 
   get session(): Session {
     return this.current;
@@ -159,7 +239,53 @@ export class FakeApi {
       return route.fulfill({ json: this.current.user });
     }
 
+    const forApp = /^\/api\/spaces\/([^/]+)\/apps\/([^/]+)\/(.+)$/.exec(path);
+    if (forApp) {
+      this.appRequests.push(`${request.method()} ${path}`);
+      if (this.held) await this.held;
+      if (this.appFailure) return fail(this.appFailure);
+      const [, spaceId = "", appId = "", rest = ""] = forApp;
+      // As on the server: an app the session does not list is not there at all.
+      const listed = this.current.apps.some((candidate) => candidate.spaceId === spaceId && candidate.id === appId);
+      const answer = listed ? this.answerForApp(appId, rest, request.method(), request.postDataJSON()) : undefined;
+      if (answer === undefined) return fail({ status: 404, code: "not_found", message: "No such app or route" });
+      if ("status" in answer) return fail(answer);
+      return route.fulfill({ json: answer.json });
+    }
+
     return fail({ status: 404, code: "not_found", message: "No such route" });
+  }
+
+  /** What the sample apps answer, checked against the shared contract. Undefined: nothing at this address. */
+  private answerForApp(appId: string, rest: string, method: string, body: unknown): { json: unknown } | Failure | undefined {
+    const settings = this.appSettings[appId];
+    if (rest === "settings" && method === "GET" && settings) return { json: appSettingsSchema.parse(settings) };
+    if (appId !== "checklist" || method !== "POST") return undefined;
+
+    const envelope = appCallRequestSchema.safeParse(body);
+    if (!envelope.success) return { status: 400, code: "invalid_request", message: "Sample failure" };
+    const input = (envelope.data.input ?? {}) as { id?: string; name?: string; section?: string; done?: boolean };
+    const output = (value: unknown) => ({ json: appCallResponseSchema.parse({ output: value }) });
+
+    if (rest === "q/list") return output(this.items);
+    if (rest === "m/tick") {
+      const found = this.items.find((candidate) => candidate.id === input.id);
+      if (!found) return { status: 404, code: "not_found", message: "No such item" };
+      found.done = input.done === true;
+      return output(found);
+    }
+    if (rest === "m/add") {
+      const added = item(`item-${this.items.length + 1}-${Date.now()}`, String(input.name ?? "").trim(), false, input.section ?? "");
+      if (added.name === "") return { status: 400, code: "invalid_request", message: "Sample failure" };
+      this.items.push(added);
+      return output(added);
+    }
+    if (rest === "m/clearTicked") {
+      const before = this.items.length;
+      this.items = this.items.filter((candidate) => !candidate.done);
+      return output(before - this.items.length);
+    }
+    return undefined;
   }
 }
 

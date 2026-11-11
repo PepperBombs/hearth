@@ -139,7 +139,7 @@ describe("adding an app to a personal space", () => {
         access: "edit",
         enabled: true,
         pinned: false,
-        hasPage: false,
+        hasPage: true,
       },
     ]);
     expect(installs(world.db)).toEqual([

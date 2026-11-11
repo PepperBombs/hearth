@@ -5,10 +5,9 @@
  * to `BundledAppsProvider`; nothing else imports it, so tests and stories
  * supply their own. Which of these apps a person sees is not decided here:
  * that is the session, which lists the apps the server lets them use.
- *
- * Nothing reads the list yet. The dashboard still draws its cards from the
- * session alone; drawing each app's own widget from here is the next step
- * of docs/mini-app-contract.md.
+ * `<AppView>` (./app-view.tsx) looks an app of the session up here to draw
+ * its widget or its page. An app the session lists and this list lacks
+ * means the browser holds an older build than the server.
  */
 import type { Manifest } from "@hearth/sdk";
 import { createContext, useContext, type ComponentType, type ReactNode } from "react";

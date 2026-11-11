@@ -9,6 +9,7 @@
     "./manifest-schema": "./src/manifest-schema.ts",
     "./server": "./src/server.ts",
     "./web": "./src/web/index.ts",
+    "./web/scope": "./src/web/scope.ts",
     "./eslint": "./eslint.js",
     "./tsconfig.app.json": "./tsconfig.app.json"
   },
