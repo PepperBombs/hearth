@@ -29,44 +29,12 @@
  * Design: docs/mini-app-contract.md, section A4.
  */
 import { useContext } from "react";
-import type { Locale, Manifest, SettingsOf, SpaceKind, Translate } from "../index";
-import type { AppServer, InputOf, OutputOf } from "../server";
+import type { Locale, SettingsOf, SpaceKind, Translate } from "../index";
+import type { AppLike, InputArgs, MutationName, Output, QueryName } from "../routes";
 import { AppScopeContext, type AppScopeValue } from "./scope";
 
-/** What may stand for an app: what its `server.ts` exports, or its manifest. */
-export type AppLike = AppServer<unknown, unknown, unknown> | Manifest<unknown, unknown>;
-
-/** The routes of `S`: none when `S` is a manifest. */
-type RoutesOf<S> = S extends { readonly manifest: unknown; readonly routes: infer R } ? R : Record<never, never>;
-
-type NamesOfKind<S, Kind extends string> = {
-  [K in keyof RoutesOf<S>]: RoutesOf<S>[K] extends { readonly kind: Kind } ? K : never;
-}[keyof RoutesOf<S>] &
-  string;
-
-/** The names of an app's queries. */
-export type QueryName<S> = NamesOfKind<S, "query">;
-/** The names of an app's mutations. */
-export type MutationName<S> = NamesOfKind<S, "mutation">;
-
-type RouteOf<S, K> = K extends keyof RoutesOf<S> ? RoutesOf<S>[K] : never;
-
-/**
- * What follows a route's name in a call: nothing for a route that takes no
- * input, otherwise the input, which may be left out when the route's schema
- * accepts that.
- */
-export type InputArgs<S, K> =
-  InputOf<RouteOf<S, K>> extends infer I
-    ? [I] extends [void]
-      ? []
-      : undefined extends I
-        ? [input?: I]
-        : [input: I]
-    : never;
-
-/** What a route answers with. */
-export type Output<S, K> = OutputOf<RouteOf<S, K>>;
+// The route types are shared with @hearth/sdk/testing, which cannot load React.
+export type { AppLike, InputArgs, MutationName, Output, QueryName };
 
 /** What `useApp()` gives a widget or page. */
 export type AppContext<S> = {

@@ -8,7 +8,7 @@ that exist today (the app shell) and the rules later steps build on.
 | Folder | What it is |
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web. This is the contract between them: change it first, then both sides. |
-| `packages/sdk` | `@hearth/sdk`, the only thing a mini-app imports. So far: `defineApp`, the manifest types, the run-time check of a manifest, the UI kit and the hooks of a widget or page (`@hearth/sdk/web`), and `defineServer` for an app's queries and mutations (`@hearth/sdk/server`). It also holds the `hearth-apps` command, which builds mini-apps into the framework and checks them, and the ESLint and TypeScript configuration of a mini-apps repository. It imports no other Hearth package. |
+| `packages/sdk` | `@hearth/sdk`, the only thing a mini-app imports. So far: `defineApp`, the manifest types, the run-time check of a manifest, the UI kit and the hooks of a widget or page (`@hearth/sdk/web`), `defineServer` for an app's queries and mutations (`@hearth/sdk/server`), and `testApp` for an app's own tests (`@hearth/sdk/testing`). It also holds the `hearth-apps` command, which builds mini-apps into the framework, checks them, runs their tests and runs Hearth with them for development, and the ESLint and TypeScript configuration of a mini-apps repository. It imports no other Hearth package. |
 | `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. `src/apps` holds the mini-apps this build was given, decides who may use which app in which space, runs an app's queries and mutations against its own rows, and reads and saves its settings. `src/groups` creates groups and manages the people in them. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, which its tests run against: `checklist`, which keeps rows and has a page, and `feed`, which has a widget and no server file. |
 | `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings (with a card for each group), quick switcher, themes, English and Chinese. It is built from the SDK's UI kit, as mini-apps are, and draws each app's widget on the dashboard and its page at `/apps/:spaceId/:appId`. |
@@ -28,8 +28,9 @@ the manifest changes an app's settings (see "The Apps page and the settings
 dialog"). In Settings the server's owner creates groups, and the owners of a
 group add and invite people and decide who can use each app (see "Groups,
 people and access"). The deploy builds every release with the mini-apps of
-`hearth-stones` as they are at that moment (see "Deployment"). The scheduler
-does not exist.
+`hearth-stones` as they are at that moment (see "Deployment"), and an app's
+own tests call its routes against the server's real store (see "Working on
+mini-apps"). The scheduler does not exist.
 The design, and how far the build has come, is in
 [mini-app-contract.md](mini-app-contract.md).
 
@@ -101,7 +102,32 @@ Neither is a sandbox.
 `hearth-apps check` is what a mini-apps repository runs before a merge:
 sync, then that every app has its `README.md` and `package.json`, that every
 manifest and server file passes the server's own start-up check, the
-TypeScript compiler and ESLint. It does not run an app's tests yet.
+TypeScript compiler, ESLint, and the app's own tests.
+
+## Working on mini-apps
+
+`hearth-stones` lies beside this repository, as on the server. Its
+`package.json` says which SDK version its apps are written for and links
+`@hearth/sdk` from `../hearth/packages/sdk`; its lockfile holds that link and
+nothing else, so `pnpm install` there downloads nothing and the server's
+deploy runs it offline. Its `tsconfig.json` and `eslint.config.js` are one line each,
+from the SDK, and its commands are the SDK's `hearth-apps`:
+
+| Command there | Does |
+|---|---|
+| `pnpm check` | `hearth-apps check` (above). CI runs it on every pull request, with `main` of this repository checked out beside it, then builds Hearth with the apps. |
+| `pnpm test` | `hearth-apps test`: the apps' own tests. |
+| `pnpm dev` | `hearth-apps dev`: sync, then this repository's `pnpm dev` with the apps in and sign-in switched off. A change to a widget or page shows without reloading the page; one to a manifest or server file restarts the server. |
+
+An app's tests are written with `testApp(server)` from `@hearth/sdk/testing`:
+the app in a space of a database of its own, and people in it who call its
+queries and mutations, each with view or edit access. The SDK only hands the
+call over. The framework answers it (`packages/server/src/apps/app-testing.ts`)
+with the functions the routes use, the access check, the store and the
+transaction included, so a test sees what a browser would. That is why the
+tests run inside this repository: `hearth-apps test` starts the server
+package's vitest with `packages/server/vitest.apps.config.ts`, whose setup
+file installs the implementation.
 
 ## Apps in spaces
 
@@ -450,11 +476,16 @@ see styles: the kit's classes are turned into a stylesheet by the web app's
 build, and an end-to-end test (`e2e/shell.spec.ts`) checks that they arrive.
 Lint also holds the fixture apps to the rules for every mini-app: import the
 SDK and your own files, nothing else, and leave the globals that reach
-outside alone.
+outside alone. The sample checklist has tests of its own, written with
+`testApp` as any mini-app's are; `pnpm test` runs them with
+`hearth-apps test`.
 The `hearth-apps` command is tested as it is run (`packages/sdk/tools`):
 against the fixture apps, and against mini-apps repositories made up in a
 temporary folder outside the checkout, each with one thing wrong. Those
-tests send the generated files to a temporary folder too.
+tests send the generated files to a temporary folder too. One of them sets
+up a repository exactly as `hearth-stones` is, beside a folder named
+`hearth`, installs it with the real `pnpm install --frozen-lockfile
+--offline` and runs `pnpm check` there, with no apps and with one.
 The end-to-end tests build with the fixture apps, so the whole path is
 tried: from an app's folder to a server that answers for it and a web app
 that draws its widget and page with their styles. One of them ticks an

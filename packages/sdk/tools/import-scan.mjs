@@ -46,7 +46,8 @@ import ts from "typescript";
 
 /** The extensions of files that can import something. */
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
-const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
+/** A test file: `.test.` and then a JavaScript or TypeScript extension. `hearth-apps test` runs these. */
+export const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
 
 const SDK = "@hearth/sdk";
 const WEB_ONLY = ["@hearth/sdk/web", "react"];
@@ -84,7 +85,7 @@ const isSourceFile = (/** @type {string} */ name) => SOURCE_EXTENSIONS.some((ext
  * is hidden. An app may not import from them either, or its bundle would
  * hold code nobody checked.
  */
-const isUnread = (/** @type {string} */ name) => name === "node_modules" || name.startsWith(".");
+export const isUnread = (/** @type {string} */ name) => name === "node_modules" || name.startsWith(".");
 
 /**
  * A relative address without what a bundler lets follow it: "./server?raw"

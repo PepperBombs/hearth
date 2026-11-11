@@ -11,7 +11,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SDK_VERSION } from "../src/index";
 import { GENERATED } from "./sync.mjs";
-import { BIN, FIXTURES, ROOT, appFiles, makeRepo, removeTempDirs, tempDir, write } from "./test-repos";
+import { BIN, FIXTURES, ROOT, SDK_DIR, appFiles, makeRepo, removeTempDirs, tempDir, write } from "./test-repos";
 
 afterEach(removeTempDirs);
 
@@ -165,7 +165,9 @@ describe("hearth-apps check", () => {
     const run = hearthApps(["check"], { cwd: repo });
     expect(run.status).toBe(1);
     expect(run.output).toContain('App "checklist": server route "tick": Needs a description');
-    expect(run.output).toContain("failed (manifests and server files)");
+    // The checklist's own tests cannot start it either.
+    expect(run.output).toContain("testApp: the server would not start with this app:");
+    expect(run.output).toContain("failed (manifests and server files, tests)");
   });
 
   it("fails a collection with a field named like one every row has", { timeout: SLOW }, () => {
@@ -214,11 +216,183 @@ describe("hearth-apps check", () => {
     expect(hearthApps(["check"], { cwd: foreign })).toMatchObject({ status: 1, output: expect.stringContaining('"left-pad" is neither') });
   });
 
-  it("says that tests were not run, rather than nothing", { timeout: SLOW }, () => {
-    const repo = makeRepo({ files: { ...appFiles("notes"), "notes/notes.test.ts": "export {};\n" } });
-    const run = hearthApps(["check"], { cwd: repo });
+  it("runs the apps' tests last, and fails when one fails", { timeout: SLOW }, () => {
+    const repo = makeRepo({ fixtures: ["checklist", "feed"] });
+    const passed = hearthApps(["check"], { cwd: repo });
+    expect(passed.output).toContain("running the tests of 1 mini-app (checklist)");
+    expect(passed.output).toContain("2 mini-apps passed (checklist, feed)");
+    expect(passed.status).toBe(0);
+
+    write(repo, { "checklist/wrong.test.ts": FAILING_TEST });
+    const failed = hearthApps(["check"], { cwd: repo });
+    expect(failed.output).toContain("wrong.test.ts > counts wrongly");
+    expect(failed.output).toContain("failed (tests)");
+    expect(failed.status).toBe(1);
+  });
+});
+
+/** A test that fails, in an app's folder. */
+const FAILING_TEST = 'import { expect, it } from "vitest";\n\nit("counts wrongly", () => {\n  expect(1 + 1).toBe(3);\n});\n';
+/** A test that passes and needs no server file. */
+const PASSING_TEST = 'import { expect, it } from "vitest";\n\nit("counts", () => {\n  expect(1 + 1).toBe(2);\n});\n';
+
+describe("hearth-apps test", () => {
+  it("runs the apps' tests against the framework's own store, from a repository beside it", { timeout: SLOW }, () => {
+    // The checklist's tests call its routes with testApp from @hearth/sdk/testing.
+    const repo = makeRepo({ fixtures: ["checklist", "feed"] });
+    const run = hearthApps(["test"], { cwd: repo });
+    expect(run.output).toContain("running the tests of 1 mini-app (checklist)");
+    expect(run.output).toMatch(/Test Files\s+1 passed \(1\)/);
+    expect(run.output).toContain("the tests of checklist passed");
     expect(run.status).toBe(0);
-    expect(run.output).toContain('have test files. They were not run: "hearth-apps test" is not built yet.');
+    // It writes nothing.
+    expect(wroteNothing(run)).toBe(true);
+  });
+
+  it("ends with status 1 when a test fails, naming the test", { timeout: SLOW }, () => {
+    const repo = makeRepo({ fixtures: ["checklist"], files: { "checklist/wrong.test.ts": FAILING_TEST } });
+    const run = hearthApps(["test"], { cwd: repo });
+    expect(run.status).toBe(1);
+    expect(run.output).toContain("wrong.test.ts > counts wrongly");
+    expect(run.output).toContain("expected 2 to be 3");
+    expect(run.output).toContain("hearth-apps test: failed.");
+  });
+
+  it("finds the test files anywhere in an app's folder, except where the import scan does not look", { timeout: SLOW }, () => {
+    const repo = makeRepo({
+      files: {
+        ...appFiles("notes"),
+        "notes/parts/sum.test.ts": PASSING_TEST,
+        "notes/.drafts/wrong.test.ts": FAILING_TEST,
+        "notes/node_modules/wrong.test.ts": FAILING_TEST,
+        // Not an app: no manifest.ts.
+        "scripts/wrong.test.ts": FAILING_TEST,
+      },
+    });
+    const run = hearthApps(["test"], { cwd: repo });
+    expect(run.output).toMatch(/Test Files\s+1 passed \(1\)/);
+    expect(run.status).toBe(0);
+  });
+
+  it("runs the tests of every folder HEARTH_APPS_DIR names, in one run", { timeout: SLOW }, () => {
+    const first = makeRepo({ files: { ...appFiles("notes"), "notes/notes.test.ts": PASSING_TEST } });
+    const second = makeRepo({ files: { ...appFiles("diary"), "diary/diary.test.ts": PASSING_TEST } });
+    const run = hearthApps(["test"], { appsDir: [first, second].join(path.delimiter) });
+    expect(run.output).toContain("running the tests of 2 mini-apps (notes, diary)");
+    expect(run.output).toMatch(/Test Files\s+2 passed \(2\)/);
+    expect(run.status).toBe(0);
+  });
+
+  it("says when there is nothing to test", () => {
+    expect(hearthApps(["test"], { cwd: tempDir() })).toMatchObject({ status: 0, output: expect.stringContaining("no mini-apps to test") });
+    const untested = makeRepo({ fixtures: ["feed"] });
+    expect(hearthApps(["test"], { cwd: untested })).toMatchObject({
+      status: 0,
+      output: expect.stringContaining("none of the mini-apps has tests"),
+    });
+  });
+
+  it("does not run the tests of apps a build would refuse, and keeps sync's status", () => {
+    const behind = makeRepo({ sdk: "^0.9.0", fixtures: ["checklist"] });
+    const late = hearthApps(["test"], { cwd: behind });
+    expect(late).toMatchObject({ status: 3, output: expect.stringContaining("their tests were not run") });
+    expect(late.output).not.toContain("RUN");
+
+    const foreign = makeRepo({ files: { ...appFiles("notes"), "notes/notes.test.ts": 'import fs from "node:fs";\nexport default fs;\n' } });
+    expect(hearthApps(["test"], { cwd: foreign })).toMatchObject({ status: 1, output: expect.stringContaining('"node:fs" is neither') });
+  });
+});
+
+describe("hearth-apps dev", () => {
+  /** Runs the command without --out, which dev does not take. */
+  const devIn = (cwd: string) => {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.HEARTH_APPS_DIR;
+    const result = spawnSync(process.execPath, [BIN, "dev"], { cwd, env, encoding: "utf8", timeout: 30_000 });
+    return { status: result.status, output: result.stdout + result.stderr };
+  };
+
+  it("refuses what a build refuses, with sync's status, and starts nothing", () => {
+    const behind = devIn(makeRepo({ sdk: "^0.9.0", fixtures: ["feed"] }));
+    expect(behind.status).toBe(3);
+    expect(behind.output).toContain("hearth-apps dev: the mini-apps cannot be built in. Nothing was started.");
+    expect(behind.output).toContain("^0.9.0");
+
+    const foreign = devIn(makeRepo({ files: { ...appFiles("notes"), "notes/widget.tsx": 'import "left-pad";\nexport default null;\n' } }));
+    expect(foreign).toMatchObject({ status: 1, output: expect.stringContaining('"left-pad" is neither') });
+  });
+
+  it("does not take --out: the dev servers read the lists where a build writes them", () => {
+    expect(hearthApps(["dev"], { cwd: makeRepo() })).toMatchObject({ status: 2, output: expect.stringContaining("--out does not apply") });
+  });
+});
+
+describe("a mini-apps repository set up as hearth-stones is", () => {
+  // Its files as docs/mini-app-contract.md (A1) has them, and the lockfile
+  // pnpm 10 writes for that package.json: the link to the SDK and nothing else.
+  const STONES = {
+    "package.json": `${JSON.stringify(
+      {
+        name: "sample-stones",
+        private: true,
+        type: "module",
+        hearth: { sdk: `^${SDK_VERSION}` },
+        scripts: { check: "hearth-apps check", test: "hearth-apps test", dev: "hearth-apps dev" },
+        devDependencies: { "@hearth/sdk": "link:../hearth/packages/sdk" },
+      },
+      null,
+      2,
+    )}\n`,
+    "pnpm-lock.yaml": [
+      "lockfileVersion: '9.0'",
+      "",
+      "settings:",
+      "  autoInstallPeers: true",
+      "  excludeLinksFromLockfile: false",
+      "",
+      "importers:",
+      "",
+      "  .:",
+      "    devDependencies:",
+      "      '@hearth/sdk':",
+      "        specifier: link:../hearth/packages/sdk",
+      "        version: link:../hearth/packages/sdk",
+      "",
+    ].join("\n"),
+    "tsconfig.json": '{ "extends": "@hearth/sdk/tsconfig.app.json", "compilerOptions": { "noEmit": true } }\n',
+    "eslint.config.js": 'export { default } from "@hearth/sdk/eslint";\n',
+  };
+
+  it("links the SDK beside it offline, and passes pnpm check with no apps and with one", { timeout: SLOW }, () => {
+    // Side by side, as on the server and in CI: "hearth" is this checkout.
+    const base = tempDir();
+    fs.symlinkSync(ROOT, path.join(base, "hearth"), "dir");
+    const stones = path.join(base, "hearth-stones");
+    write(stones, STONES);
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.HEARTH_APPS_DIR;
+    const out = tempDir();
+    const pnpm = (args: string[]) => {
+      const result = spawnSync("pnpm", args, { cwd: stones, env, encoding: "utf8" });
+      expect(result.error).toBeUndefined();
+      return { status: result.status, output: result.stdout + result.stderr };
+    };
+
+    expect(pnpm(["install", "--frozen-lockfile", "--offline"]).status).toBe(0);
+    expect(fs.realpathSync(path.join(stones, "node_modules/@hearth/sdk"))).toBe(fs.realpathSync(SDK_DIR));
+    expect(fs.existsSync(path.join(stones, "node_modules/.bin/hearth-apps"))).toBe(true);
+
+    // The Testable line of step 13. --out keeps this checkout's lists as they are.
+    const empty = pnpm(["check", "--out", out]);
+    expect(empty.output).toContain("no mini-apps to check");
+    expect(empty.status).toBe(0);
+    expect(pnpm(["test"])).toMatchObject({ status: 0, output: expect.stringContaining("no mini-apps to test") });
+
+    fs.cpSync(path.join(FIXTURES, "checklist"), path.join(stones, "checklist"), { recursive: true });
+    const one = pnpm(["check", "--out", out]);
+    expect(one.output).toContain("the tests of checklist passed");
+    expect(one.output).toContain("1 mini-app passed (checklist)");
+    expect(one.status).toBe(0);
   });
 });
 
@@ -226,8 +400,6 @@ describe("hearth-apps", () => {
   it("says what it can do, and ends with status 2 for what it cannot", () => {
     expect(hearthApps([])).toMatchObject({ status: 2, output: expect.stringContaining("Usage: hearth-apps <command>") });
     expect(hearthApps(["publish"])).toMatchObject({ status: 2, output: expect.stringContaining('there is no command "publish"') });
-    for (const command of ["dev", "test", "new"]) {
-      expect(hearthApps([command])).toMatchObject({ status: 2, output: expect.stringContaining(`hearth-apps ${command} is not built yet`) });
-    }
+    expect(hearthApps(["new"])).toMatchObject({ status: 2, output: expect.stringContaining("hearth-apps new is not built yet") });
   });
 });

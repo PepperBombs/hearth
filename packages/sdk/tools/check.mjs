@@ -11,42 +11,26 @@
  *     makes when it starts (packages/server/src/apps/registry.ts), so that
  *     an app which passes here does not stop a deploy;
  *  3. the TypeScript compiler, with the folder's own tsconfig.json;
- *  4. ESLint, with the folder's own configuration.
+ *  4. ESLint, with the folder's own configuration;
+ *  5. the apps' tests, as `hearth-apps test` runs them (test.mjs).
  *
  * Every stage runs even when an earlier one found something, so one run
- * shows everything. Tests are not run yet: `hearth-apps test` and
- * `@hearth/sdk/testing` arrive with a later step of the build plan.
+ * shows everything.
  *
- * Design: docs/mini-app-contract.md, section A7.
+ * Design: docs/mini-app-contract.md, sections A7 and A9.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { AppsError, EXIT_PROBLEMS, frameworkRoot, sync } from "./sync.mjs";
-
-const require = createRequire(import.meta.url);
+import { binOf, runAppTests } from "./test.mjs";
 
 /** Files every mini-app has, besides the manifest.ts that makes its folder an app and the widget.tsx sync asks for. */
 const REQUIRED_FILES = ["package.json", "README.md"];
 
-const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
-
-/** The script a package runs as `name`, as an absolute path. */
-function binOf(/** @type {string} */ packageName, /** @type {string} */ name) {
-  const packageFile = require.resolve(`${packageName}/package.json`);
-  const bin = JSON.parse(fs.readFileSync(packageFile, "utf8")).bin;
-  return path.resolve(path.dirname(packageFile), typeof bin === "string" ? bin : bin[name]);
-}
-
-/** Whether a folder holds a test file anywhere below it. */
-function hasTests(/** @type {string} */ dir) {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
-    if (entry.isDirectory() ? hasTests(path.join(dir, entry.name)) : TEST_FILE.test(entry.name)) return true;
-  }
-  return false;
-}
+/** The tools of the check are the SDK's own dependencies: a mini-apps repository installs nothing but the SDK. */
+const SDK_PACKAGE = fileURLToPath(new URL("../package.json", import.meta.url));
 
 /**
  * Runs the whole check and says what it found. Returns the exit status:
@@ -110,7 +94,7 @@ export function check(options) {
 
     // 3. Types.
     if (fs.existsSync(path.join(folder, "tsconfig.json"))) {
-      run(`types${label}`, [binOf("typescript", "tsc"), "--noEmit", "-p", path.join(folder, "tsconfig.json")], folder);
+      run(`types${label}`, [binOf("typescript", "tsc", SDK_PACKAGE), "--noEmit", "-p", path.join(folder, "tsconfig.json")], folder);
     } else {
       log(`hearth-apps check: ${folder} has no tsconfig.json. It needs one: { "extends": "@hearth/sdk/tsconfig.app.json" }.`);
       failed.push(`types${label}`);
@@ -118,12 +102,11 @@ export function check(options) {
 
     // 4. Lint, for each app's folder. ESLint finds the configuration itself.
     const apps = found.apps.filter((app) => app.folder === folder);
-    run(`lint${label}`, [binOf("eslint", "eslint"), "--max-warnings", "0", ...apps.map((app) => app.id)], folder);
-
-    if (apps.some((app) => hasTests(app.dir))) {
-      log(`hearth-apps check: the apps in ${folder} have test files. They were not run: "hearth-apps test" is not built yet.`);
-    }
+    run(`lint${label}`, [binOf("eslint", "eslint", SDK_PACKAGE), "--max-warnings", "0", ...apps.map((app) => app.id)], folder);
   }
+
+  // 5. The apps' tests, all folders in one run.
+  if (runAppTests({ apps: found.apps, root, log }) !== 0) failed.push("tests");
 
   if (failed.length > 0) {
     log(`hearth-apps check: failed (${failed.join(", ")}).`);

@@ -218,6 +218,17 @@ HEARTH_APPS_DIR=packages/fixture-apps HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@exa
 runs it to put a generated list through `createRegistry`, so that an app
 which passes the check does not stop a server from starting.
 
+Nor is `src/apps/app-testing.ts`: the implementation of `testApp`, with
+which a mini-app's own tests call its routes (`@hearth/sdk/testing`). It
+puts the app in a space of an in-memory database, migrated like the real
+one, and answers each call with the functions the routes use (`callApp`,
+`readAppSettings`, `changeAppSettings`), the access check, store and
+transaction included. `hearth-apps test` runs an app's tests here, with
+`vitest.apps.config.ts`, whose setup file (`src/apps/app-testing.setup.ts`)
+hands `testApp` this implementation. That configuration runs only the tests
+the command names in `HEARTH_APP_TESTS`; this package's own tests are
+`vitest.config.ts`.
+
 **An app in a space** is a row in `space_apps`.
 
 - `PUT .../apps/:appId` adds it. The person must be an owner of the space or

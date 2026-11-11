@@ -6,8 +6,9 @@ nothing else: no framework internals, no other mini-app.
 It is being built in steps; the design is
 [docs/mini-app-contract.md](../../docs/mini-app-contract.md). So far it holds
 the manifest, the UI kit, the hooks a widget and a page are written with,
-what an app's server file is written with, and the `hearth-apps` command that builds mini-apps into the framework and checks
-them.
+what an app's server file and its tests are written with, and the
+`hearth-apps` command that builds mini-apps into the framework, checks
+them, runs their tests and runs Hearth with them.
 
 ## What is here
 
@@ -16,13 +17,14 @@ them.
 | `@hearth/sdk` | `defineApp`, the manifest types (`Manifest`, `Setting`, `Localized`), `SettingsOf`, the message types (`MessageKey`, `PlaceholderArgs`, `Translate`), the lists `APP_ICONS` and `APP_COLORS`, `APP_ID_PATTERN`, `SDK_VERSION`. Imports nothing. | Mini-apps and the framework. |
 | `@hearth/sdk/web` | `appHooks`, which gives a widget or page `useApp`, `useQuery` and `useMutation`, and their types (`AppHooks`, `AppContext`, `MutationResult`, `QueryName`, `MutationName`, `InputArgs`, `Output`, `AppLike`). The UI kit: `Button`, `IconButton`, `Input`, `Field`, `Switch`, `Checkbox`, `Chip`, `Tag`, `Segmented`, `Rows`, `Row`, `EmptyState`, `Dialog`, `DialogBody`, `Icon`, and the class helpers `buttonClass` and `chipClass`. | A mini-app's widget and page; the kit also the shell. |
 | `@hearth/sdk/server` | `defineServer`, `AppError`, `z` (the one zod that mini-apps use), and the types of a handler's context and of rows and collections (`QueryCtx`, `MutationCtx`, `Row`, `ReadCollection`, `Collection`, `Json`, `InputOf`, `OutputOf`). | A mini-app's `server.ts`. |
+| `@hearth/sdk/testing` | `testApp`, which puts an app in a space of a database of its own and calls its routes as people in it, `AppCallError`, and their types (`TestApp`, `TestCaller`, `TestPerson`, `TestAppOptions`). | A mini-app's tests (`*.test.ts`). |
+| `@hearth/sdk/testing/host` | `provideTestApp`: how the framework hands `testApp` its implementation. | The framework only. |
 | `@hearth/sdk/manifest-schema` | `manifestSchema`, a zod schema that checks a manifest at run time, and `settingValueProblems`, which says whether a value fits a setting. | The framework only. |
 | `@hearth/sdk/eslint` | The ESLint configuration of a mini-apps repository, and `miniAppBoundary`, the part of it that holds an app to the SDK. | A mini-apps repository's `eslint.config.js`. |
 | `@hearth/sdk/tsconfig.app.json` | The compiler settings mini-apps are checked with. | A mini-apps repository's `tsconfig.json`. |
-| `hearth-apps` (`bin/hearth-apps.mjs`, `tools/`) | The command: `sync` and `check`. | The framework's build, and a mini-apps repository checking itself. |
+| `hearth-apps` (`bin/hearth-apps.mjs`, `tools/`) | The command: `sync`, `check`, `test` and `dev`. | The framework's build, and a mini-apps repository checking, testing and running its apps. |
 
-Still to come: `@hearth/sdk/testing`, and the commands `hearth-apps dev`,
-`test` and `new`.
+Still to come: the command `hearth-apps new`.
 
 ## A manifest
 
@@ -234,6 +236,56 @@ export default function Widget() {
   to another space, or the person's access was taken away), the shell loads
   the session again and the card or page goes with the app.
 
+## Tests of an app
+
+```ts
+// grocery/grocery.test.ts
+import { testApp } from "@hearth/sdk/testing";
+import { describe, expect, it } from "vitest";
+import server from "./server";
+
+describe("grocery", () => {
+  it("shows what one person adds to everyone in the family", () => {
+    const app = testApp(server);
+    const sam = app.as({ name: "Sam" });
+    const lin = app.as({ name: "Lin", access: "view" });
+
+    const milk = sam.mutation("add", { name: "Milk" });
+    expect(lin.query("list")).toMatchObject([{ name: "Milk", done: false, createdBy: sam.user.id }]);
+    expect(() => lin.mutation("tick", { id: milk.id, done: true })).toThrow("forbidden");
+  });
+});
+```
+
+- **`testApp(server)`** takes what `server.ts` exports and puts the app in
+  a space of a database of its own, empty and in memory: a group, unless the
+  manifest allows only personal spaces (`testApp(server, { space:
+  "personal" })` asks for one). Each call starts afresh. The app is checked
+  first as the server checks it when it starts, so an app that would stop a
+  deploy fails its tests too.
+- **`as({ name, access, locale })`** is someone in that space: `name`
+  (default "Sam") is who, and the same name is the same person, so their
+  rows carry their `user.id` and `mine` finds them; `access` is "view" or
+  "edit" (the default), kept by that caller; `locale` is what `ctx.locale`
+  says (default "en"). A personal space has one person, who may always
+  edit.
+- **A caller** has `query(name, input)` and `mutation(name, input)`, typed
+  from `typeof server` like the hooks, and `settings()` and
+  `saveSettings(values)`, by name as `ctx.settings` has them. The answer is
+  what the server would send a browser: the same check of who may do what
+  and of the input, the same `ctx` and store in one transaction, the input
+  and the answer passed through JSON. A setting of the space needs "edit"
+  to save; a person's own needs "view".
+- **A refusal throws `AppCallError`**, whose `code` is `invalid_request`,
+  `forbidden`, `not_found` or `conflict` and whose message starts with it:
+  `toThrow("forbidden")`. A handler that throws anything but `AppError`,
+  returns a promise or returns what JSON cannot hold throws the error the
+  server would log, and the test fails.
+- A test file may import `vitest` and `@hearth/sdk/testing` besides what the
+  app's other files may. Run the tests with `hearth-apps test` (`pnpm test`
+  in a mini-apps repository): they run inside the framework, which supplies
+  the store. `vitest` started by hand has none, and `testApp` says so.
+
 ## The UI kit
 
 ```tsx
@@ -275,20 +327,26 @@ one folder per app, named after the app's ID. `hearth-stones` is one; the
 framework's own sample apps in `packages/fixture-apps` have the same shape.
 
 ```
-package.json       "hearth": { "sdk": "^0.1.0" }, and @hearth/sdk as a link to ../hearth/packages/sdk
-tsconfig.json      { "extends": "@hearth/sdk/tsconfig.app.json" }
+package.json       "hearth": { "sdk": "^0.1.0" }, @hearth/sdk as a link to ../hearth/packages/sdk,
+                   and the scripts check, test and dev (hearth-apps check, test, dev)
+pnpm-lock.yaml     the link, and nothing else
+tsconfig.json      { "extends": "@hearth/sdk/tsconfig.app.json", "compilerOptions": { "noEmit": true } }
 eslint.config.js   export { default } from "@hearth/sdk/eslint";
 grocery/
   manifest.ts      required: what makes the folder an app
   widget.tsx       required: the body of the app's card on the dashboard
   page.tsx         optional: the app's own page
   server.ts        optional: collections, queries and mutations
+  *.test.ts        optional: the app's tests
   package.json     required: the app's name; no dependencies
   README.md        required
 ```
 
-The repository installs nothing but the link. The compiler, ESLint and
-React's types come with the SDK.
+The repository installs nothing but the link, so `pnpm install` there
+downloads nothing, and the server's deploy runs it offline. The compiler,
+ESLint, vitest and React's types come with the SDK. Leave out a
+`packageManager` field: pnpm would first fetch the version it names, which
+an offline install cannot.
 
 ### What a file of an app may import
 
@@ -318,7 +376,9 @@ A mini-app also leaves `fetch`, `process`, `localStorage`, `eval` and
 
 ```sh
 hearth-apps sync     # find the apps and tell the framework to build them in
-hearth-apps check    # sync, then check every app
+hearth-apps check    # sync, then check every app, its tests included
+hearth-apps test     # the apps' tests
+hearth-apps dev      # Hearth on this machine with the apps in
 ```
 
 - **`sync`** reads the folders named in `HEARTH_APPS_DIR` (several are
@@ -333,12 +393,25 @@ hearth-apps check    # sync, then check every app
 - **`check`** runs sync, then checks that every app has its `README.md` and
   `package.json`, that every manifest and server file is valid (the check
   the server makes when it starts), the types (`tsc` with the folder's
-  `tsconfig.json`) and lint (ESLint with the folder's configuration).
-  Without `HEARTH_APPS_DIR` it checks the folder it is run in. It does not
-  run tests yet.
+  `tsconfig.json`), lint (ESLint with the folder's configuration) and the
+  apps' tests, as `test` runs them. Every part runs even when one before it
+  failed. Without `HEARTH_APPS_DIR` it checks the folder it is run in.
+- **`test`** makes sync's checks without writing anything, then runs the
+  apps' test files (`.test.` and a JavaScript or TypeScript extension, not
+  in hidden or `node_modules` folders) with the vitest of the framework's
+  server package, which supplies `testApp` its store. The folders are
+  chosen as for `check`.
+- **`dev`** runs sync, then the framework's own `pnpm dev` with the apps in
+  and sign-in switched off: the web app at http://localhost:5173, everyone
+  signed in as `HEARTH_OWNER_EMAIL`, or `you@example.com` when that is not
+  set. A change to a widget or a page shows without reloading the page; a
+  change to a manifest or server file restarts the server. Start it again
+  after adding or taking away an app, a page or a server file. The folders
+  are chosen as for `check`.
 - Exit status: 0 when all is well; **3** when a folder of apps was written
-  for another version of the SDK, and for nothing else; 1 for any other
-  problem; 2 for a command it does not know.
+  for another version of the SDK, and for nothing else (`test` and `dev`
+  included); 1 for any other problem, a failing test among them; 2 for a
+  command it does not know.
 
 Neither the scan nor lint is a sandbox. Mini-apps are trusted code; the
 checks stop accidents.
