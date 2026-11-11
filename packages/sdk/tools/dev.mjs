@@ -49,6 +49,9 @@ export function devEnvironment(env, appsDirs) {
 /** How often `startDevServers` checks that the process that started it is still there. */
 const PARENT_CHECK_MS = 1000;
 
+/** The same stop signal again within this time is the same stop, and is not passed on twice. */
+const SAME_STOP_MS = 500;
+
 /**
  * Starts `pnpm dev` in the hearth checkout and resolves with its exit
  * status once it ends, or with 0 when it was stopped.
@@ -69,6 +72,12 @@ const PARENT_CHECK_MS = 1000;
  * as /bin/sh) stays between them: it keeps an interrupt to itself and dies
  * of SIGTERM alone, which the check catches as well.
  *
+ * One Ctrl+C there reaches this process twice at once: from the terminal,
+ * and passed on by pnpm. The second is not passed on, because the servers
+ * would take it for a second Ctrl+C, after which tsx kills the server
+ * before it has closed its database. The same signal half a second later
+ * or more is someone insisting, and is passed on again.
+ *
  * @param {object} options
  * @param {string} options.root The hearth checkout.
  * @param {NodeJS.ProcessEnv} options.env
@@ -80,8 +89,13 @@ export function startDevServers({ root, env, log, signals = process }) {
   return new Promise((resolve) => {
     const child = spawn("pnpm", ["run", "dev"], { cwd: root, env, stdio: "inherit", detached: true });
     let stopping = false;
+    /** @type {Map<NodeJS.Signals, number>} When each signal was last passed on. */
+    const passed = new Map();
     const pass = (/** @type {NodeJS.Signals} */ signal) => {
       stopping = true;
+      const now = performance.now();
+      if (now - (passed.get(signal) ?? -Infinity) < SAME_STOP_MS) return;
+      passed.set(signal, now);
       try {
         if (child.pid !== undefined) process.kill(-child.pid, signal);
       } catch {

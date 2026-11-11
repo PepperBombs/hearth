@@ -355,11 +355,15 @@ Things that bite:
   Debian and Ubuntu) keeps an interrupt to itself and dies of a terminate
   signal alone; `exec` puts the command in its place. pnpm dies of SIGHUP
   or SIGKILL without passing anything on, which is what the check of the
-  parent is for. `tools/dev.test.ts` holds all of it to that, through the
-  real `pnpm dev` of such a repository: each signal sent to pnpm alone
-  frees the stand-in servers' port. The ports 4310 and 5173 are fixed, so
-  a dev server already running, even one left from another session, makes
-  it fail to listen.
+  parent is for. One Ctrl+C then reaches the command twice at once (from
+  the terminal and from pnpm), and it passes the same signal on only once
+  within half a second: the servers would take the second for another
+  Ctrl+C, and tsx would kill the server before it has closed its database.
+  `tools/dev.test.ts` holds all of it to that, through the real `pnpm dev`
+  of such a repository: each signal sent to pnpm alone frees the stand-in
+  servers' port, and a Ctrl+C reaches them once. The ports 4310 and 5173
+  are fixed, so a dev server already running, even one left from another
+  session, makes it fail to listen.
 - A JSON config file may still name `HEARTH_APPS_DIR`; the server ignores
   it (`IGNORED_NAMES` in `packages/server/src/config.ts`), so that a file
   written for an earlier release does not fail the deploy's trial start.

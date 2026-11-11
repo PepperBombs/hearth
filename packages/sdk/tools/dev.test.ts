@@ -33,8 +33,10 @@ const listening = (port: number) =>
 /**
  * A stand-in for the framework's `pnpm dev`, written into `root`: a script
  * whose child holds a port, as the dev servers do below pnpm, a shell and
- * concurrently. `port` waits until it listens; `kill` makes sure that
- * nothing of it outlives the test, whatever happened.
+ * concurrently. The script itself notes each stop signal it gets and ends
+ * a moment later, as a server that closes what it holds; its child ends at
+ * once. `port` waits until it listens; `stops` is what the script got;
+ * `kill` makes sure that nothing of it outlives the test, whatever happened.
  */
 function standInServers(root: string) {
   write(root, {
@@ -45,16 +47,26 @@ function standInServers(root: string) {
       "const server = 'const fs = require(\"node:fs\"); require(\"node:net\").createServer().listen(0, \"127.0.0.1\", function () { fs.writeFileSync(\"port.part\", String(this.address().port)); fs.renameSync(\"port.part\", \"port\"); });';",
       'const child = spawn(process.execPath, ["-e", server], { stdio: "ignore" });',
       'fs.writeFileSync("pids", JSON.stringify([process.pid, child.pid]));',
+      'for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {',
+      "  process.on(signal, () => {",
+      '    fs.appendFileSync("stops", `${signal}\\n`);',
+      "    setTimeout(() => process.exit(0), 300);",
+      "  });",
+      "}",
       "setInterval(() => {}, 1000);",
       "",
     ].join("\n"),
   });
   const portFile = path.join(root, "port");
   const pidsFile = path.join(root, "pids");
+  const stopsFile = path.join(root, "stops");
   return {
     async port(why = () => ""): Promise<number> {
       await vi.waitFor(() => expect(fs.existsSync(portFile), why()).toBe(true), { timeout: 30_000, interval: 100 });
       return Number(fs.readFileSync(portFile, "utf8"));
+    },
+    stops(): string[] {
+      return fs.existsSync(stopsFile) ? fs.readFileSync(stopsFile, "utf8").split("\n").filter(Boolean) : [];
     },
     kill() {
       const pids: number[] = fs.existsSync(pidsFile) ? JSON.parse(fs.readFileSync(pidsFile, "utf8")) : [];
@@ -195,50 +207,81 @@ describe("startDevServers", () => {
 });
 
 describe("pnpm dev in a mini-apps repository", () => {
-  // A9's `pnpm dev`, in a repository set up as hearth-stones is, stopped as
-  // `kill` or a tool stops it: a signal to pnpm's own process, not to its
-  // group as Ctrl+C sends one. pnpm passes SIGTERM and SIGINT on to its
-  // script, which `exec` makes the command itself, and dies of SIGHUP or
-  // SIGKILL, after which the command finds that its parent is gone.
-  it.each(["SIGTERM", "SIGINT", "SIGHUP", "SIGKILL"] as const)(
-    "stops the dev servers when pnpm alone is sent %s",
-    { timeout: 60_000 },
-    async (signal) => {
-      const hearth = standInHearth();
-      const { stones, env } = setUpStones(hearth.root);
-      const pnpm = spawn("pnpm", ["dev"], {
-        cwd: stones,
-        env: { ...env, npm_config_loglevel: "silent" },
-        // A group of its own, so that the test can end everything in it.
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      const pid = pnpm.pid;
-      if (pid === undefined) throw new Error("pnpm could not be started.");
-      let output = "";
-      pnpm.stdout.on("data", (data) => (output += data));
-      pnpm.stderr.on("data", (data) => (output += data));
-      let ended = false;
-      pnpm.on("exit", () => (ended = true));
-
-      try {
-        const port = await hearth.servers.port(() => output);
-        expect(await listening(port)).toBe(true);
-        expect(output).toContain("hearth-apps dev: no mini-apps to run");
-
-        process.kill(pid, signal);
-        await vi.waitFor(async () => expect(await listening(port), output).toBe(false), { timeout: 10_000, interval: 100 });
-        await vi.waitFor(() => expect(ended).toBe(true), { timeout: 10_000, interval: 100 });
-      } finally {
+  /**
+   * A9's `pnpm dev`, in a repository set up as hearth-stones is, beside a
+   * stand-in for this checkout, started in a process group of its own as a
+   * terminal starts it. `kill` ends whatever is left of it.
+   */
+  function startPnpmDev() {
+    const hearth = standInHearth();
+    const { stones, env } = setUpStones(hearth.root);
+    const pnpm = spawn("pnpm", ["dev"], {
+      cwd: stones,
+      env: { ...env, npm_config_loglevel: "silent" },
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const pid = pnpm.pid;
+    if (pid === undefined) throw new Error("pnpm could not be started.");
+    let output = "";
+    pnpm.stdout.on("data", (data) => (output += data));
+    pnpm.stderr.on("data", (data) => (output += data));
+    let ended = false;
+    pnpm.on("exit", () => (ended = true));
+    return {
+      pid,
+      servers: hearth.servers,
+      output: () => output,
+      ended: () => ended,
+      kill() {
         try {
           process.kill(-pid, "SIGKILL");
         } catch {
           // Its group is gone, as it should be.
         }
         hearth.servers.kill();
+      },
+    };
+  }
+
+  // Stopped as `kill` or a tool stops it: a signal to pnpm's own process,
+  // not to its group. pnpm passes SIGTERM and SIGINT on to its script,
+  // which `exec` makes the command itself, and dies of SIGHUP or SIGKILL,
+  // after which the command finds that its parent is gone.
+  it.each(["SIGTERM", "SIGINT", "SIGHUP", "SIGKILL"] as const)(
+    "stops the dev servers when pnpm alone is sent %s",
+    { timeout: 60_000 },
+    async (signal) => {
+      const run = startPnpmDev();
+      try {
+        const port = await run.servers.port(run.output);
+        expect(await listening(port)).toBe(true);
+        expect(run.output()).toContain("hearth-apps dev: no mini-apps to run");
+
+        process.kill(run.pid, signal);
+        await vi.waitFor(async () => expect(await listening(port), run.output()).toBe(false), { timeout: 10_000, interval: 100 });
+        await vi.waitFor(() => expect(run.ended()).toBe(true), { timeout: 10_000, interval: 100 });
+      } finally {
+        run.kill();
       }
     },
   );
+
+  it("passes Ctrl+C on to the servers once, though it reaches the command twice", { timeout: 60_000 }, async () => {
+    // A terminal sends Ctrl+C to its whole foreground group, pnpm and the
+    // command, and pnpm passes its own on as well. Passed on twice, it
+    // would make tsx kill the server before it has closed its database.
+    const run = startPnpmDev();
+    try {
+      const port = await run.servers.port(run.output);
+      process.kill(-run.pid, "SIGINT");
+      await vi.waitFor(() => expect(run.ended(), run.output()).toBe(true), { timeout: 10_000, interval: 100 });
+      expect(await listening(port)).toBe(false);
+      expect(run.servers.stops()).toEqual(["SIGINT"]);
+    } finally {
+      run.kill();
+    }
+  });
 });
 
 describe("devEnvironment", () => {
