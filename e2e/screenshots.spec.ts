@@ -84,6 +84,9 @@ test.describe("screenshots", () => {
             await page.getByRole("main").getByRole("button", { name: /^(Move Feed|移动动态)$/ }).click();
             await page.getByRole("dialog").getByRole("radio").first().waitFor();
             await shot(page, file("apps-move"));
+            await page.getByRole("dialog").getByRole("button", { name: /^(Move|移动)$/ }).click();
+            await page.getByRole("main").getByText(/Feed was moved here|动态已移到这里/).waitFor();
+            await shot(page, file("apps-moved"));
           });
 
           test("a family in Settings", async ({ page, api }) => {

@@ -506,8 +506,9 @@ test("the owner moves a group's checklist into their own space and back: its dat
       [linItem, lin.id],
     ]);
     expect((await linApi.post(`${inGroup}/m/add`, { data: { input: { name: "Sample not allowed" } } })).status()).toBe(403);
-    // The owner's own pin made both trips.
+    // The owner's own pin and setting made both trips.
     expect((await ownerSession()).apps).toEqual([expect.objectContaining({ id: "checklist", spaceId: groupId, pinned: true })]);
+    expect(await (await request.get(`${inGroup}/settings`)).json()).toEqual({ space: { sections: ["Garden"] }, user: { hideDone: true } });
     expect(problems).toEqual([]);
   } finally {
     // The group stays (nothing deletes a space); the app and Lin leave it, and the owner's
