@@ -8,7 +8,7 @@ It is being built in steps; the design is
 the manifest, the UI kit, the hooks a widget and a page are written with,
 what an app's server file and its tests are written with, and the
 `hearth-apps` command that builds mini-apps into the framework, checks
-them, runs their tests and runs Hearth with them.
+them, runs their tests, runs Hearth with them and starts new ones.
 
 ## What is here
 
@@ -22,9 +22,7 @@ them, runs their tests and runs Hearth with them.
 | `@hearth/sdk/manifest-schema` | `manifestSchema`, a zod schema that checks a manifest at run time, and `settingValueProblems`, which says whether a value fits a setting. | The framework only. |
 | `@hearth/sdk/eslint` | The ESLint configuration of a mini-apps repository, and `miniAppBoundary`, the part of it that holds an app to the SDK. | A mini-apps repository's `eslint.config.js`. |
 | `@hearth/sdk/tsconfig.app.json` | The compiler settings mini-apps are checked with. | A mini-apps repository's `tsconfig.json`. |
-| `hearth-apps` (`bin/hearth-apps.mjs`, `tools/`) | The command: `sync`, `check`, `test` and `dev`. | The framework's build, and a mini-apps repository checking, testing and running its apps. |
-
-Still to come: the command `hearth-apps new`.
+| `hearth-apps` (`bin/hearth-apps.mjs`, `tools/`) | The command: `sync`, `check`, `test`, `dev` and `new`. | The framework's build, and a mini-apps repository checking, testing and running its apps and starting new ones. |
 
 ## A manifest
 
@@ -328,7 +326,7 @@ framework's own sample apps in `packages/fixture-apps` have the same shape.
 
 ```
 package.json       "hearth": { "sdk": "^0.1.0" }, @hearth/sdk as a link to ../hearth/packages/sdk,
-                   and the scripts check, test and dev (hearth-apps check, test, dev)
+                   and the scripts check, test, dev and new (hearth-apps check, test, dev, new)
 pnpm-lock.yaml     the link, and nothing else
 tsconfig.json      { "extends": "@hearth/sdk/tsconfig.app.json", "compilerOptions": { "noEmit": true } }
 eslint.config.js   export { default } from "@hearth/sdk/eslint";
@@ -375,10 +373,11 @@ A mini-app also leaves `fetch`, `process`, `localStorage`, `eval` and
 ### The command
 
 ```sh
-hearth-apps sync     # find the apps and tell the framework to build them in
-hearth-apps check    # sync, then check every app, its tests included
-hearth-apps test     # the apps' tests
-hearth-apps dev      # Hearth on this machine with the apps in
+hearth-apps sync       # find the apps and tell the framework to build them in
+hearth-apps check      # sync, then check every app, its tests included
+hearth-apps test       # the apps' tests
+hearth-apps dev        # Hearth on this machine with the apps in
+hearth-apps new <id>   # a new app in the folder <id>, copied from the sample checklist
 ```
 
 - **`sync`** reads the folders named in `HEARTH_APPS_DIR` (several are
@@ -408,10 +407,25 @@ hearth-apps dev      # Hearth on this machine with the apps in
   change to a manifest or server file restarts the server. Start it again
   after adding or taking away an app, a page or a server file. The folders
   are chosen as for `check`.
+- **`new <id>`** makes a new app in a folder named `<id>`, as a copy of the
+  framework's sample checklist (`packages/fixture-apps/checklist` in the
+  `hearth` checkout): a complete app that passes `check` as it is, to be
+  changed from there. The copy gets the new ID in its manifest, a test
+  file named `<id>.test.ts`, a package name after the repository
+  (`@hearth-stones/<id>`) and a README that says what to change first;
+  everything else, the texts in both languages included, is the
+  checklist's until its author changes it. The folder is chosen as for
+  `check`, one only, and must be one sync takes apps from: the SDK version
+  it declares and its link are checked first. It overwrites nothing: a
+  name that is taken, by an app or by anything else, is refused, and
+  nothing is written when anything is refused. In a mini-apps repository
+  it is `pnpm new <id>`; a running `dev` sees the new app once started
+  again.
 - Exit status: 0 when all is well; **3** when a folder of apps was written
-  for another version of the SDK, and for nothing else (`test` and `dev`
-  included); 1 for any other problem, a failing test among them; 2 for a
-  command it does not know.
+  for another version of the SDK, and for nothing else (`test`, `dev` and
+  `new` included); 1 for any other problem, a failing test among them; 2
+  for a command it does not know, or one given the wrong number of
+  arguments.
 
 Neither the scan nor lint is a sandbox. Mini-apps are trusted code; the
 checks stop accidents.

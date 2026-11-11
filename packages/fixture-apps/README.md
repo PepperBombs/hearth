@@ -1,11 +1,11 @@
 # Fixture apps
 
-Mini-apps that belong to the framework: its tests run against them, and the
-scaffold command will copy one as the template for a new app. This folder has
-the shape of a mini-apps repository such as `hearth-stones`: a `package.json`
-that says which SDK version the apps were written for, a `tsconfig.json`
-that extends the SDK's, and one folder per app, named after the app's ID,
-each using only `@hearth/sdk`.
+Mini-apps that belong to the framework: its tests run against them, and
+`hearth-apps new` copies the checklist as the template for a new app. This
+folder has the shape of a mini-apps repository such as `hearth-stones`: a
+`package.json` that says which SDK version the apps were written for, a
+`tsconfig.json` that extends the SDK's, and one folder per app, named after
+the app's ID, each using only `@hearth/sdk`.
 
 They are sample apps with sample data. Nobody's real app lives here.
 
@@ -26,6 +26,10 @@ of a page, the loading and failed states.
 - The tests of the `hearth-apps` command (`packages/sdk/tools`) run `sync`,
   `check` and `test` on this folder, and on copies of these apps in a
   repository of their own outside the checkout.
+- `hearth-apps new <id>` copies `checklist` into a folder of mini-apps as
+  a new app: the same files with the new ID, a test file named after it,
+  and a README of its own. Its tests check that the copy passes
+  `hearth-apps check` untouched, so the checklist must stay a complete app.
 - `pnpm test` at the repository's root runs the checklist's own tests, as
   `hearth-apps test` runs any mini-app's.
 - The end-to-end tests build the framework with them

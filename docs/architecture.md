@@ -118,6 +118,7 @@ from the SDK, and its commands are the SDK's `hearth-apps`:
 | `pnpm check` | `hearth-apps check` (above). CI runs it on every pull request, with `main` of this repository checked out beside it, then builds Hearth with the apps. |
 | `pnpm test` | `hearth-apps test`: the apps' own tests. |
 | `pnpm dev` | `hearth-apps dev`: sync, then this repository's `pnpm dev` with the apps in and sign-in switched off. A change to a widget or page shows without reloading the page; one to a manifest or server file restarts the server. |
+| `pnpm new <id>` | `hearth-apps new`: a new app in a folder named `<id>`, as a copy of this repository's sample checklist (`packages/fixture-apps/checklist`) with the new ID, a test file named after it and a README that says what to change first. It passes `pnpm check` as it is, and overwrites nothing. |
 
 An app's tests are written with `testApp(server)` from `@hearth/sdk/testing`:
 the app in a space of a database of its own, and people in it who call its
@@ -485,7 +486,9 @@ temporary folder outside the checkout, each with one thing wrong. Those
 tests send the generated files to a temporary folder too. One of them sets
 up a repository exactly as `hearth-stones` is, beside a folder named
 `hearth`, installs it with the real `pnpm install --frozen-lockfile
---offline` and runs `pnpm check` there, with no apps and with one.
+--offline` and runs `pnpm check` there, with no apps and with one; another
+makes an app there with `pnpm new` and checks it untouched, since an app
+made from the template must pass as it is.
 The end-to-end tests build with the fixture apps, so the whole path is
 tried: from an app's folder to a server that answers for it and a web app
 that draws its widget and page with their styles. One of them ticks an

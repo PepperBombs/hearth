@@ -303,6 +303,50 @@ describe("hearth-apps test", () => {
   });
 });
 
+describe("hearth-apps new", () => {
+  it("makes an app that passes check untouched, where it runs or in the folder HEARTH_APPS_DIR names", { timeout: SLOW }, () => {
+    // The Testable line of step 14.
+    const repo = makeRepo();
+    const here = hearthApps(["new", "stocks"], { cwd: repo });
+    expect(here.output).toContain(`made the mini-app "stocks" in ${path.join(repo, "stocks")}, a copy of the sample checklist`);
+    expect(here.status).toBe(0);
+    const named = hearthApps(["new", "notes"], { appsDir: repo });
+    expect(named.output).toContain(`made the mini-app "notes" in ${path.join(repo, "notes")}`);
+    expect(named.status).toBe(0);
+
+    const checked = hearthApps(["check"], { cwd: repo });
+    expect(checked.output).toContain("running the tests of 2 mini-apps (notes, stocks)");
+    expect(checked.output).toContain("2 mini-apps passed (notes, stocks)");
+    expect(checked.status).toBe(0);
+  });
+
+  it("takes exactly one ID, one that can name an app's folder and is not taken", () => {
+    const repo = makeRepo({ fixtures: ["feed"] });
+    const before = fs.readdirSync(repo).sort();
+    for (const args of [["new"], ["new", "notes", "diary"]]) {
+      expect(hearthApps(args, { cwd: repo })).toMatchObject({ status: 2, output: expect.stringContaining("new <id>  Make a new app") });
+    }
+    expect(hearthApps(["new", "Notes"], { cwd: repo })).toMatchObject({
+      status: 1,
+      output: expect.stringContaining('"Notes" cannot be the ID of a mini-app'),
+    });
+    expect(hearthApps(["new", "feed"], { cwd: repo })).toMatchObject({
+      status: 1,
+      output: expect.stringContaining(`${path.join(repo, "feed")} exists already, and hearth-apps new overwrites nothing.`),
+    });
+    expect(fs.readdirSync(repo).sort()).toEqual(before);
+  });
+
+  it("ends with status 3 in a folder written for another SDK version, and makes nothing", () => {
+    const repo = makeRepo({ sdk: "^0.9.0" });
+    expect(hearthApps(["new", "stocks"], { cwd: repo })).toMatchObject({
+      status: 3,
+      output: expect.stringContaining("were written for @hearth/sdk ^0.9.0"),
+    });
+    expect(fs.existsSync(path.join(repo, "stocks"))).toBe(false);
+  });
+});
+
 describe("hearth-apps dev", () => {
   /** Runs the command without --out, which dev does not take. */
   const devIn = (cwd: string) => {
@@ -337,7 +381,7 @@ describe("a mini-apps repository set up as hearth-stones is", () => {
         private: true,
         type: "module",
         hearth: { sdk: `^${SDK_VERSION}` },
-        scripts: { check: "hearth-apps check", test: "hearth-apps test", dev: "hearth-apps dev" },
+        scripts: { check: "hearth-apps check", test: "hearth-apps test", dev: "hearth-apps dev", new: "hearth-apps new" },
         devDependencies: { "@hearth/sdk": "link:../hearth/packages/sdk" },
       },
       null,
@@ -363,22 +407,29 @@ describe("a mini-apps repository set up as hearth-stones is", () => {
     "eslint.config.js": 'export { default } from "@hearth/sdk/eslint";\n',
   };
 
-  it("links the SDK beside it offline, and passes pnpm check with no apps and with one", { timeout: SLOW }, () => {
-    // Side by side, as on the server and in CI: "hearth" is this checkout.
+  /**
+   * The repository beside a folder named "hearth" that is this checkout, as
+   * on the server and in CI, linked to the SDK as they link it.
+   */
+  function setUpStones() {
     const base = tempDir();
     fs.symlinkSync(ROOT, path.join(base, "hearth"), "dir");
     const stones = path.join(base, "hearth-stones");
     write(stones, STONES);
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.HEARTH_APPS_DIR;
-    const out = tempDir();
     const pnpm = (args: string[]) => {
       const result = spawnSync("pnpm", args, { cwd: stones, env, encoding: "utf8" });
       expect(result.error).toBeUndefined();
       return { status: result.status, output: result.stdout + result.stderr };
     };
-
     expect(pnpm(["install", "--frozen-lockfile", "--offline"]).status).toBe(0);
+    return { stones, pnpm };
+  }
+
+  it("links the SDK beside it offline, and passes pnpm check with no apps and with one", { timeout: SLOW }, () => {
+    const { stones, pnpm } = setUpStones();
+    const out = tempDir();
     expect(fs.realpathSync(path.join(stones, "node_modules/@hearth/sdk"))).toBe(fs.realpathSync(SDK_DIR));
     expect(fs.existsSync(path.join(stones, "node_modules/.bin/hearth-apps"))).toBe(true);
 
@@ -394,12 +445,26 @@ describe("a mini-apps repository set up as hearth-stones is", () => {
     expect(one.output).toContain("1 mini-app passed (checklist)");
     expect(one.status).toBe(0);
   });
+
+  it("makes a new app with pnpm new, which passes pnpm check untouched", { timeout: SLOW }, () => {
+    // The Testable line of step 14, as A9 of the contract writes the two commands.
+    const { stones, pnpm } = setUpStones();
+    const made = pnpm(["new", "stocks"]);
+    expect(made.output).toContain(`made the mini-app "stocks" in ${path.join(stones, "stocks")}`);
+    expect(made.status).toBe(0);
+    expect(JSON.parse(fs.readFileSync(path.join(stones, "stocks/package.json"), "utf8")).name).toBe("@sample-stones/stocks");
+
+    const checked = pnpm(["check", "--out", tempDir()]);
+    expect(checked.output).toContain("the tests of stocks passed");
+    expect(checked.output).toContain("1 mini-app passed (stocks)");
+    expect(checked.status).toBe(0);
+  });
 });
 
 describe("hearth-apps", () => {
   it("says what it can do, and ends with status 2 for what it cannot", () => {
     expect(hearthApps([])).toMatchObject({ status: 2, output: expect.stringContaining("Usage: hearth-apps <command>") });
     expect(hearthApps(["publish"])).toMatchObject({ status: 2, output: expect.stringContaining('there is no command "publish"') });
-    expect(hearthApps(["new"])).toMatchObject({ status: 2, output: expect.stringContaining("hearth-apps new is not built yet") });
+    expect(hearthApps(["help"])).toMatchObject({ status: 0, output: expect.stringContaining("new <id>  Make a new app") });
   });
 });

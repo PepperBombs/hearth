@@ -154,13 +154,14 @@ function appsIn(/** @type {string} */ folder) {
 }
 
 /**
- * The handshake between one apps folder and this checkout.
+ * The handshake between one apps folder and this checkout. `hearth-apps new`
+ * asks it too, of the folder a new app goes into.
  *
  * @param {string} folder
  * @param {string} root
  * @returns {{ problems: string[], versionProblems: string[] }}
  */
-function handshake(folder, root) {
+export function handshake(folder, root) {
   const sdkDir = path.join(root, "packages/sdk");
   const sdkPackage = /** @type {{ version: string }} */ (readJson(path.join(sdkDir, "package.json")));
   const declared = `"hearth": { "sdk": "^${sdkPackage.version}" }`;

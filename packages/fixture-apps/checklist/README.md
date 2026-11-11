@@ -1,8 +1,9 @@
 # Checklist
 
 A sample mini-app that belongs to the framework: a list of things to do,
-ticked off as you go. The framework's tests run against it, and the scaffold
-command will copy it as the start of a new app.
+ticked off as you go. The framework's tests run against it, and
+`hearth-apps new <id>` copies it as the start of every new app, so a change
+here reaches each app made after it. The copy gets a README of its own.
 
 | File | Holds |
 |---|---|

@@ -67,7 +67,7 @@ const tseslint = await loadTypescriptEslint();
  *
  * In this repository it applies to every folder directly inside one of
  * MINI_APP_ROOTS: the framework's own sample apps, which tests run against
- * and the template will be copied from.
+ * and `hearth-apps new` copies the template from.
  *
  * It is imported by path, not as "@hearth/sdk/eslint": that entry point is a
  * whole configuration and loads typescript-eslint, which this file must be
