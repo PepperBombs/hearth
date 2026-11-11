@@ -1,6 +1,6 @@
 import { TriangleAlert, X } from "lucide-react";
+import { Button, IconButton } from "@hearth/sdk/web";
 import { usePreferences } from "../../session/preferences";
-import { Button, IconButton } from "../ui";
 
 /** Tells the person when a theme or language change did not reach the server, and offers to send it again. */
 export function SaveBanner() {

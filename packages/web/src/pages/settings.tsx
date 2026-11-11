@@ -1,8 +1,10 @@
 import { LogOut, Moon, UserRound } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { LOCALES, THEMES, preferencesPatchSchema, type Locale, type Theme } from "@hearth/shared";
+import { Field, Input, Segmented, buttonClass } from "@hearth/sdk/web";
 import { Page } from "../components/shell/page";
-import { Avatar, Card, CardHeader, Field, Input, Segmented, buttonClass } from "../components/ui";
+import { Avatar } from "../components/avatar";
+import { Card, CardHeader } from "../components/card";
 import type { PlainMessageKey } from "../i18n";
 import { HTML_LANG, LOCALE_NAMES } from "../i18n/locale";
 import { usePreferences } from "../session/preferences";

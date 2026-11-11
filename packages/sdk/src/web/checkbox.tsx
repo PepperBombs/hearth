@@ -41,7 +41,7 @@ export function Checkbox({ checked, onChange, children, label, className, ...res
           aria-label={label}
           onChange={(event) => onChange(event.currentTarget.checked)}
           className={cx(
-            "peer size-full cursor-[inherit] appearance-none rounded-check border border-fg-3 bg-surface",
+            "peer size-full appearance-none rounded-check border border-fg-3 bg-surface",
             "checked:border-accent checked:bg-accent",
           )}
           {...rest}

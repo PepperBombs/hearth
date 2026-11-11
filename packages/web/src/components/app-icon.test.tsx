@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { APP_COLORS, APP_ICONS, type Localized as SdkLocalized } from "@hearth/sdk";
 import type { Localized } from "@hearth/shared";
-import { AppIcon, appColorStyle } from "./app-icon";
+import { AppIcon } from "./app-icon";
 
 /** The Lucide class of the icon that was drawn, for example "lucide-shopping-bag". */
 function drawn(icon: string, color = "green"): { name: string; color: string } {
@@ -30,10 +30,10 @@ describe("AppIcon", () => {
   });
 
   it("colours the icon with the app's token, or leaves the text colour for an unknown colour", () => {
-    for (const color of APP_COLORS) expect(appColorStyle(color)).toEqual({ color: `var(--hearth-app-${color})` });
-    expect(drawn("box", "teal").color).toBe("var(--hearth-app-teal)");
-    expect(appColorStyle("red")).toBeUndefined();
+    for (const color of APP_COLORS) expect(drawn("box", color).color).toBe(`var(--hearth-app-${color})`);
     expect(drawn("box", "red").color).toBe("");
+    // Names that exist on every object must not be taken for colours.
+    expect(drawn("box", "constructor").color).toBe("");
   });
 });
 

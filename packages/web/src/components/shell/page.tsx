@@ -1,8 +1,8 @@
 import { Search } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
+import { IconButton } from "@hearth/sdk/web";
 import { cx } from "../../lib/cx";
 import { useI18n } from "../../session/preferences";
-import { IconButton } from "../ui";
 import { useSwitcher } from "./switcher-state";
 
 export type PageProps = {

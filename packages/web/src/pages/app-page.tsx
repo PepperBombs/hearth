@@ -1,7 +1,8 @@
 import { Link, useParams } from "react-router";
+import { EmptyState, buttonClass } from "@hearth/sdk/web";
 import { AppIcon } from "../components/app-icon";
 import { Page } from "../components/shell/page";
-import { Card, EmptyState, buttonClass } from "../components/ui";
+import { Card } from "../components/card";
 import { pickLocalized } from "../i18n";
 import { useI18n } from "../session/preferences";
 import { enabledApps, useSession } from "../session/session";
