@@ -62,16 +62,21 @@ The database file and secrets live in none of them.
 4. Grocery list mini-app.
 5. Scheduler, then the GitHub trending mini-app.
 
+Items 2 to 4 follow `docs/mini-app-contract.md`: the agreed design (section
+A), the owner's decisions at its top, and fifteen build steps (section B),
+each marked there once built. Built so far: step 1, the SDK package skeleton.
+
 ## Layout and commands
 
 | Folder | Holds |
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. |
+| `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/manifest-schema` is the run-time check of a manifest, for the framework only. Imports no other Hearth package. |
 | `packages/server` | Hono server: config, SQLite and migrations, identity, membership, `/api` routes, static files. |
 | `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/components/ui` (the future shared UI kit). |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
-| `docs` | `architecture.md` and `self-hosting.md`. |
+| `docs` | `architecture.md`, `self-hosting.md` and `mini-app-contract.md` (the agreed design for mini-apps and its build plan). |
 
 Commands, from the repository root (Node 22, pnpm 10):
 
@@ -79,7 +84,7 @@ Commands, from the repository root (Node 22, pnpm 10):
 |---|---|
 | `pnpm install` | Install dependencies. |
 | `HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@example.com pnpm dev` | Run server (port 4310) and web dev server (port 5173) with sign-in switched off. |
-| `pnpm check` | Type checking (the three packages and `e2e`), lint, unit tests and the deploy script's tests. Run before every push. |
+| `pnpm check` | Type checking (the four packages and `e2e`), lint, unit tests and the deploy script's tests. Run before every push. |
 | `pnpm build` | Build shared, web, then server. |
 | `pnpm e2e` | End-to-end tests against the built app. Run `pnpm build` first. |
 | `pnpm start` | Start the built server. |
@@ -100,4 +105,20 @@ Things that bite:
   database, and puts that copy back if the new release does not come up. A
   migration must therefore work on a copy of the real data in the trial start.
 - Mini-apps do not exist yet. The session lists no apps; pages show empty
-  states.
+  states. Nothing reads a manifest yet either: the SDK is used only for its
+  icon and colour names.
+- `SDK_VERSION` in `packages/sdk/src/index.ts` must equal `version` in
+  `packages/sdk/package.json`; a unit test fails otherwise. Below 1.0, a
+  breaking change to the SDK's types or to the manifest schema raises the
+  minor version.
+- The SDK's type tests (`expectTypeOf`, `@ts-expect-error` in
+  `packages/sdk/src/index.test.ts`) fail in `pnpm typecheck`, not in the test
+  runner.
+- A manifest has two descriptions that must agree: the types in
+  `packages/sdk/src/index.ts` and the schema in `manifest-schema.ts`. Change
+  both. `@hearth/sdk` itself must keep importing nothing (it ends up in the
+  web bundle with every manifest); zod stays in `manifest-schema.ts`.
+- Icon and colour names are listed in the SDK. A new icon also needs its
+  Lucide icon in `packages/web/src/components/app-icon.tsx` (a type error
+  until then); a new colour needs a `--hearth-app-*` token in light and dark
+  (the contrast test fails until then).

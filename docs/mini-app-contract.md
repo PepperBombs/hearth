@@ -517,10 +517,16 @@ add the app to a space on the Apps page # a saved setting, no redeploy
 
 ## B. Build plan
 
-Each step is one pull request; `pnpm check` passes at the end of each.
+Each step is one pull request; `pnpm check` passes at the end of each. A step that is built says so; the others are not built yet.
 
-1. **SDK package skeleton.** Add `packages/sdk` with `defineApp`, manifest types, the zod manifest schema, icon and colour unions moved from `app-icon.tsx`, and `SDK_VERSION`.
+1. **SDK package skeleton.** *Built.* Add `packages/sdk` with `defineApp`, manifest types, the zod manifest schema, icon and colour unions moved from `app-icon.tsx`, and `SDK_VERSION`.
    *Testable:* type tests for message keys, placeholders and `SettingsOf`; the schema rejects a missing language, an unknown icon and a bad ID.
+   *As built, where it differs from A1 and A2:*
+   - The schema is `manifestSchema` in `@hearth/sdk/manifest-schema`, an entry point for the framework that mini-apps do not import. `@hearth/sdk` itself imports nothing, so a manifest does not pull zod into a widget's bundle.
+   - `default` of a `multi-select` or `list` setting is typed `readonly string[]`, as `spaces` already is, so that a list declared `as const` is accepted too. `SettingsOf` still gives `string[]`.
+   - The message types are `MessageKey<A>`, `PlaceholderArgs<A, K>` and `Translate<A>` (the type of `t`). They take a manifest today; `typeof server` joins in step 5.
+   - The schema also checks what A7 lists under `hearth-apps check` for a single manifest: no empty text, defaults that fit their setting, the same placeholders in both languages. It refuses unknown properties, and a setting's name must be a plain identifier.
+   - `step` of a `number` setting is not applied to its default: A2 does not say whether it limits values or only sets the form's increment. Step 6 decides.
 2. **UI kit into the SDK.** Move `components/ui` to `@hearth/sdk/web`, add `Checkbox` and `Icon`, add the `@source` line; the shell imports from the SDK.
    *Testable:* existing UI tests, contrast test and screenshot e2e unchanged.
 3. **Shared contract and migration 2.** Extend `AppSummary`, `Space`, the error codes and the new request and response schemas; add the tables.

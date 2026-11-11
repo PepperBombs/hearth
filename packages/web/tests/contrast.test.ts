@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { APP_COLORS } from "@hearth/sdk";
 
 // Read from disk: the test runner replaces imported CSS with an empty module.
 const tokens = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../src/styles/tokens.css"), "utf8");
@@ -73,8 +74,9 @@ const pairs: Array<[string, string]> = [
 /**
  * App colours are used for icons only, never for text, and every icon sits next to a text label.
  * Graphics need 3:1 (WCAG 1.4.11), which the approved palette meets on every surface.
+ * The list is the SDK's, so a colour added there without a token here fails this test.
  */
-const iconPairs: Array<[string, string]> = ["green", "purple", "teal", "amber", "pink", "orange", "blue"].flatMap(
+const iconPairs: Array<[string, string]> = APP_COLORS.flatMap(
   (color): Array<[string, string]> => [
     [`--hearth-app-${color}`, "--hearth-surface"],
     [`--hearth-app-${color}`, "--hearth-side"],

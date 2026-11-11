@@ -1,11 +1,15 @@
 /**
  * An app's icon in the app's own colour.
  *
- * Apps name an icon and a colour token in their manifest. The icon set is a
- * short list of Lucide icons so that the whole library is not shipped; the
- * list will be settled together with the mini-app contract. An unknown name
- * falls back to a neutral box, and an unknown colour to the text colour.
+ * Apps name an icon and a colour in their manifest. Which names exist is
+ * decided by the SDK (`APP_ICONS` and `APP_COLORS` in `@hearth/sdk`); this
+ * file draws them. The icon set is a short list of Lucide icons so that the
+ * whole library is not shipped. The session describes apps with plain
+ * strings, and a browser may hold an older build than the server, so an
+ * unknown name falls back to a neutral box and an unknown colour to the text
+ * colour.
  */
+import { APP_COLORS, type AppIcon as AppIconName } from "@hearth/sdk";
 import {
   Bookmark,
   Box,
@@ -32,7 +36,8 @@ import {
 } from "lucide-react";
 import type { CSSProperties } from "react";
 
-const ICONS: Readonly<Record<string, LucideIcon>> = {
+/** One Lucide icon for every name in the SDK's list: a name without one is a type error. */
+const ICONS: Readonly<Record<AppIconName, LucideIcon>> = {
   bookmark: Bookmark,
   box: Box,
   calendar: Calendar,
@@ -56,15 +61,13 @@ const ICONS: Readonly<Record<string, LucideIcon>> = {
   wallet: Wallet,
 };
 
-/** Colour names an app may use, each backed by a --hearth-app-* token. */
-export const APP_COLORS = ["green", "purple", "teal", "amber", "pink", "orange", "blue"] as const;
-
+/** Each colour in the SDK's list is backed by a --hearth-app-* token in styles/tokens.css. */
 export function appColorStyle(color: string): CSSProperties | undefined {
   return (APP_COLORS as readonly string[]).includes(color) ? { color: `var(--hearth-app-${color})` } : undefined;
 }
 
 export function AppIcon({ icon, color, size = 16 }: { icon: string; color: string; size?: number }) {
-  const Icon = ICONS[icon] ?? Box;
+  const Icon = Object.hasOwn(ICONS, icon) ? ICONS[icon as AppIconName] : Box;
   return <Icon size={size} aria-hidden="true" className="text-fg-2" style={appColorStyle(color)} />;
 }
 

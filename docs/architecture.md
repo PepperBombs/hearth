@@ -8,13 +8,16 @@ that exist today (the app shell) and the rules later steps build on.
 | Folder | What it is |
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web. This is the contract between them: change it first, then both sides. |
+| `packages/sdk` | `@hearth/sdk`, the only thing a mini-app imports. So far: `defineApp`, the manifest types and the run-time check of a manifest. It imports no other Hearth package. |
 | `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. |
 | `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings, quick switcher, themes, English and Chinese. |
 | `e2e` | Playwright end-to-end tests. |
 | `deploy` | The pull-based deploy script and service files. |
 
 Mini-apps, their storage and the scheduler do not exist yet. The session
-always lists no apps, and screens show empty states.
+always lists no apps, and screens show empty states. The design they are being
+built to, and how far the build has come, is in
+[mini-app-contract.md](mini-app-contract.md).
 
 ## Spaces and roles
 
@@ -78,11 +81,14 @@ self-hosted GitHub Actions runner, because the repositories are public. See
 `pnpm check` runs type checking, lint and unit tests; `pnpm e2e` runs the
 end-to-end tests. CI runs all of them on GitHub's own runners.
 
-Type checking covers the three packages and, with its own `tsconfig.json`,
-the `e2e` folder and `playwright.config.ts`. `pnpm test` also runs
-`deploy/tests/deploy.test.sh`, which drives the real deploy script through a
-failed trial, a failed switch with the database put back, and a restart that
-cannot be confirmed, using stand-ins for git, pnpm and systemctl.
+Type checking covers the four packages and, with its own `tsconfig.json`,
+the `e2e` folder and `playwright.config.ts`. The SDK's types are themselves
+under test: `packages/sdk/src/index.test.ts` states what a manifest's settings
+and strings must come out as, and a wrong type there fails the type check.
+`pnpm test` also runs `deploy/tests/deploy.test.sh`, which drives the real
+deploy script through a failed trial, a failed switch with the database put
+back, and a restart that cannot be confirmed, using stand-ins for git, pnpm
+and systemctl.
 
 TypeScript is held at version 6 on purpose. The lint tooling
 (`typescript-eslint`) does not yet support TypeScript 7; if TypeScript is

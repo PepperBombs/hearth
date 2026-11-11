@@ -74,8 +74,10 @@ const tseslint = await loadTypescriptEslint();
  *        import { miniAppBoundary } from "../hearth/eslint.config.js";
  *        export default [...miniAppBoundary({ roots: ["."] })];
  *
- *    Once the SDK is a package, this block should move into it so that
- *    hearth-stones imports it from "@hearth/sdk" instead of by path.
+ *    The SDK is now a package (packages/sdk). This block moves into it as
+ *    "@hearth/sdk/eslint" together with the build pipeline for mini-apps
+ *    (docs/mini-app-contract.md, section A7), so that hearth-stones imports
+ *    it from the SDK instead of by path.
  *
  * Inside a mini-app (one folder directly inside a root) an import may name:
  *  - a file inside the same mini-app folder, by relative path;
@@ -208,6 +210,11 @@ const NOT_THE_WEB_APP = [
   "The web app and the server share only @hearth/shared, the contract between them.",
 ];
 
+const NOT_THE_FRAMEWORK = [
+  "^@hearth/(server|web|shared)($|/)|/packages/(server|web|shared)/|^(\\.\\./)+(server|web|shared)/src/",
+  "The SDK is what mini-apps are written against, also in other repositories. It stands alone and imports no framework package.",
+];
+
 export default defineConfig([
   globalIgnores([
     "**/node_modules/",
@@ -276,6 +283,11 @@ export default defineConfig([
     name: "hearth/shared-boundary",
     files: ["packages/shared/src/**"],
     rules: { "no-restricted-imports": forbidImports(NOT_THE_SERVER, NOT_THE_WEB_APP) },
+  },
+  {
+    name: "hearth/sdk-boundary",
+    files: ["packages/sdk/src/**"],
+    rules: { "no-restricted-imports": forbidImports(NOT_THE_FRAMEWORK) },
   },
   {
     name: "hearth/web-boundary",
