@@ -14,6 +14,7 @@ import { Button, Dialog, DialogBody, Field, Input } from "@hearth/sdk/web";
 import { LogOut, Plus, RefreshCw, Users } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Card, CardFooter, CardHeader } from "../components/card";
+import { LinkedText } from "../components/linked-text";
 import { failureCode } from "../session/api";
 import { useI18n } from "../session/preferences";
 import { useSession } from "../session/session";
@@ -123,7 +124,11 @@ function GroupCard({ space }: { space: Space }) {
         {owner ? <GroupName space={space} /> : null}
         {/* Only while they own it: a cached list from before stepping down is not theirs to see any more. */}
         <People space={space} list={owner ? list.data : undefined} />
-        {!owner && space.canAddApps ? <p className="text-xs text-fg-2">{t("groups.youCanAddApps")}</p> : null}
+        {!owner && space.canAddApps ? (
+          <p className="text-xs text-fg-2">
+            <LinkedText text={t("groups.youCanAddApps")} to="/apps" />
+          </p>
+        ) : null}
         {owner ? (
           list.data ? (
             <AccessTable space={space} list={list.data} />

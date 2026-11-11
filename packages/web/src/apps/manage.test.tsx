@@ -6,7 +6,7 @@
  * setting types the samples do not use, and a stand-in for the server.
  */
 import { defineApp, type Manifest } from "@hearth/sdk";
-import type { AppSettings, AppSummary, Session } from "@hearth/shared";
+import type { AppSettings, AppSummary, Session, SpaceApps } from "@hearth/shared";
 import { QueryClient } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentType } from "react";
@@ -103,9 +103,15 @@ function sessionWith(apps: AppSummary[], options: { locale?: "en" | "zh"; family
 
 type Failure = { status: number; code: string };
 
-/** Stands in for the server: the session, adding and removing apps, switches and pins, settings. */
+/**
+ * Stands in for the server: the session, adding and removing apps, switches
+ * and pins, settings, and the owners' list of a space, which also has the
+ * apps the space removed and kept the data of.
+ */
 class FakeServer {
   session: Session = sessionWith([]);
+  /** Apps removed from a space whose data was kept, by space ID, with how many entries each holds. */
+  removed: Record<string, { id: string; rowCount: number }[]> = {};
   settings: Record<string, AppSettings> = {
     checklist: { space: { sections: [] }, user: { hideDone: false } },
     feed: { space: {}, user: { topics: [], period: "day" } },
@@ -134,18 +140,29 @@ class FakeServer {
     }
     if (path === "/api/session") return json(200, this.session);
 
+    const owners = /^\/api\/spaces\/([^/]+)\/apps$/.exec(path);
+    if (owners && method === "GET") {
+      const space = this.session.spaces.find((candidate) => candidate.id === owners[1]);
+      if (!space) return json(404, { error: { code: "not_found", message: "No such space." } });
+      if (space.role !== "owner") return json(403, { error: { code: "forbidden", message: "For owners." } });
+      return json(200, this.ownersList(space.id));
+    }
+
     const match = /^\/api\/spaces\/([^/]+)\/apps\/([^/]+)(?:\/(.+))?$/.exec(path);
     const [, spaceId = "", appId = "", rest = ""] = match ?? [];
     const listed = this.session.apps.find((app) => app.spaceId === spaceId && app.id === appId);
     if (match && rest === "" && method === "PUT") {
       const manifest = MANIFESTS[appId];
       if (!manifest) return json(404, { error: { code: "not_found", message: "No such app." } });
+      // Adding a removed app brings it back.
+      this.removed[spaceId] = (this.removed[spaceId] ?? []).filter((entry) => entry.id !== appId);
       if (!listed) this.session = { ...this.session, apps: [...this.session.apps, summary(manifest, spaceId)] };
       return json(204, null);
     }
     if (!listed) return json(404, { error: { code: "not_found", message: "No such app." } });
     if (rest === "" && method === "DELETE") {
       this.session = { ...this.session, apps: this.session.apps.filter((app) => app !== listed) };
+      this.removed[spaceId] = [...(this.removed[spaceId] ?? []), { id: appId, rowCount: 0 }];
       return json(204, null);
     }
     if (rest === "move" && method === "POST") {
@@ -172,6 +189,26 @@ class FakeServer {
     if (rest === "q/list") return json(200, { output: [] });
     return json(404, { error: { code: "not_found", message: "No such route." } });
   };
+
+  ownersList(spaceId: string): SpaceApps {
+    const space = this.session.spaces.find((candidate) => candidate.id === spaceId);
+    const entry = (id: string, removedAt: string | null, rowCount: number) => ({
+      id,
+      hasCode: true,
+      removedAt,
+      rowCount,
+      memberAccess: "none" as const,
+      members: {},
+    });
+    return {
+      apps: [
+        ...this.session.apps.filter((app) => app.spaceId === spaceId).map((app) => entry(app.id, null, 0)),
+        ...(this.removed[spaceId] ?? []).map((removed) => entry(removed.id, "2026-11-01T08:00:00.000Z", removed.rowCount)),
+      ],
+      members: (space?.members ?? []).map((member) => ({ ...member, email: `${member.id}@example.com`, canAddApps: member.role === "owner" })),
+      invitations: [],
+    };
+  }
 }
 
 function start(server: FakeServer, at = "/apps", bundled: readonly BundledApp[] = BUNDLED) {
@@ -331,6 +368,153 @@ describe("the Apps page", () => {
     const add = await dialog("Add an app to Family");
     fireEvent.click(within(add).getByRole("button", { name: "Add" }));
     expect(await within(add).findByText("This app cannot be added here. Ask an owner of the space.")).toBeTruthy();
+    // A member who may add apps does not read the owners' list; the server turns down what is not theirs to add.
+    expect(server.count(`GET /api/spaces/${FAMILY}/apps`)).toBe(0);
+  });
+
+  it("says that adding an app the space removed brings its data back, and still asks who else may use it", async () => {
+    const server = new FakeServer();
+    server.removed[FAMILY] = [{ id: "checklist", rowCount: 3 }];
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Add an app" }));
+    const add = await dialog("Add an app to Family");
+    expect(await within(add).findByText("Removed earlier: adding it again brings back its data, 3 saved entries.")).toBeTruthy();
+    const checklist = within(add).getByRole("radio", { name: /Checklist/ }) as HTMLInputElement;
+    expect(checklist.checked).toBe(true);
+    expect(within(add).getByRole("button", { name: "Bring back" })).toBeTruthy();
+    const who = within(add).getByRole("group", { name: "Who else can use it" });
+    expect((within(who).getByRole("radio", { name: "Only me for now" }) as HTMLInputElement).checked).toBe(true);
+    // An app the space never had is added as before.
+    fireEvent.click(within(add).getByRole("radio", { name: /Feed/ }));
+    expect(within(add).getByRole("button", { name: "Add" })).toBeTruthy();
+    expect(within(add).queryByRole("button", { name: "Bring back" })).toBeNull();
+
+    fireEvent.click(checklist);
+    fireEvent.click(within(who).getByRole("radio", { name: "Everyone can view" }));
+    fireEvent.click(within(add).getByRole("button", { name: "Bring back" }));
+    await waitFor(() => expect(server.changes).toEqual([`PUT /api/spaces/${FAMILY}/apps/checklist {"memberAccess":"view"}`]));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(within(await spaceCard("Family")).getByRole("switch", { name: "Show Checklist in Family" })).toBeTruthy();
+  });
+
+  it("counts what comes back, and says when it is only the settings", async () => {
+    const server = new FakeServer();
+    server.removed[PERSONAL] = [
+      { id: "checklist", rowCount: 1 },
+      { id: "feed", rowCount: 0 },
+    ];
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
+    const add = await dialog("Add an app to your personal space");
+    expect(await within(add).findByText("Removed earlier: adding it again brings back its data, 1 saved entry.")).toBeTruthy();
+    expect(within(add).getByText("Removed earlier: adding it again brings back its settings.")).toBeTruthy();
+    // The counter was never here.
+    expect(within(add).getByRole("radio", { name: /Counter/ }).closest("label")?.textContent).not.toMatch(/Removed earlier/);
+  });
+
+  it("adds nothing for an owner until it knows which apps the space removed, and offers to look again", async () => {
+    const server = new FakeServer();
+    server.fail = { ending: `GET /api/spaces/${PERSONAL}/apps`, with: { status: 500, code: "internal" } };
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
+    const add = await dialog("Add an app to your personal space");
+    expect(await within(add).findByText("Whether these apps were in this space before could not be checked.")).toBeTruthy();
+    expect((within(add).getByRole("button", { name: "Add" }) as HTMLButtonElement).disabled).toBe(true);
+
+    server.fail = null;
+    server.removed[PERSONAL] = [{ id: "checklist", rowCount: 2 }];
+    fireEvent.click(within(add).getByRole("button", { name: "Try again" }));
+    expect(await within(add).findByText("Removed earlier: adding it again brings back its data, 2 saved entries.")).toBeTruthy();
+    expect((within(add).getByRole("button", { name: "Bring back" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(server.changes).toEqual([]);
+  });
+
+  it("reads the session again when adding is turned down, and tells an owner that the app may be here already", async () => {
+    const server = new FakeServer();
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Add an app" }));
+    const add = await dialog("Add an app to Family");
+    // Meanwhile another owner added the checklist, for everyone to view: "only me for now" is not what it has.
+    server.session = sessionWith([summary(checklistManifest, FAMILY)]);
+    server.fail = { ending: `PUT /api/spaces/${FAMILY}/apps/checklist`, with: { status: 409, code: "conflict" } };
+    const sessions = server.count("GET /api/session");
+    fireEvent.click(within(add).getByRole("button", { name: "Add" }));
+
+    expect(
+      await within(add).findByText("The app could not be added: it may have been added here meanwhile. This page now shows what the space has."),
+    ).toBeTruthy();
+    expect(server.count("GET /api/session")).toBe(sessions + 1);
+    // The family has the checklist now, so it is no longer offered, and the next app is chosen instead.
+    expect(within(add).queryByRole("radio", { name: /Checklist/ })).toBeNull();
+    expect((within(add).getByRole("radio", { name: /Feed/ }) as HTMLInputElement).checked).toBe(true);
+    expect(within(await spaceCard("Family")).getByRole("switch", { name: "Show Checklist in Family" })).toBeTruthy();
+  });
+
+  it("closes the dialog when someone else added the last app it offered", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([summary(checklistManifest, PERSONAL), summary(feedManifest, PERSONAL)]);
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
+    const add = await dialog("Add an app to your personal space");
+    expect(within(add).getAllByRole("radio").map((radio) => (radio as HTMLInputElement).value)).toEqual(["counter"]);
+    server.session = sessionWith([summary(checklistManifest, PERSONAL), summary(feedManifest, PERSONAL), summary(counter, PERSONAL)]);
+    server.fail = { ending: `PUT /api/spaces/${PERSONAL}/apps/counter`, with: { status: 409, code: "conflict" } };
+    fireEvent.click(within(add).getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const personal = await spaceCard("Personal");
+    expect(within(personal).getByText("Every app this server holds is already here.")).toBeTruthy();
+
+    // Removed again, the counter can be added again; the dialog waits to be asked for.
+    server.fail = null;
+    fireEvent.click(within(personal).getByRole("button", { name: "Remove Counter" }));
+    fireEvent.click(within(await dialog("Remove Counter?")).getByRole("button", { name: "Remove" }));
+    expect(await within(personal).findByRole("button", { name: "Add an app" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("says when the server no longer holds the app asked for", async () => {
+    const server = new FakeServer();
+    server.fail = { ending: `PUT /api/spaces/${PERSONAL}/apps/checklist`, with: { status: 404, code: "not_found" } };
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
+    const add = await dialog("Add an app to your personal space");
+    fireEvent.click(await within(add).findByRole("button", { name: "Add" }));
+    expect(await within(add).findByText("This server no longer holds this app. Reload the page to update.")).toBeTruthy();
+  });
+
+  it("says why there is nothing to add: no apps on the server, every one here already, or none for this kind of space", async () => {
+    const server = new FakeServer();
+    start(server, "/apps", []);
+    const personal = await spaceCard("Personal");
+    expect(within(personal).getByText("No apps are installed on this server yet.")).toBeTruthy();
+    expect(within(personal).queryByRole("button", { name: "Add an app" })).toBeNull();
+    expect(within(await spaceCard("Family")).getByText("No apps are installed on this server yet.")).toBeTruthy();
+
+    cleanup();
+    server.session = sessionWith([summary(checklistManifest, PERSONAL), summary(feedManifest, PERSONAL), summary(counter, PERSONAL)]);
+    start(server);
+    expect(within(await spaceCard("Personal")).getByText("Every app this server holds is already here.")).toBeTruthy();
+
+    cleanup();
+    const chores = defineApp({
+      id: "chores",
+      name: { en: "Chores", zh: "家务" },
+      description: { en: "Who does what at home.", zh: "家里谁做什么。" },
+      icon: "calendar",
+      color: "teal",
+      spaces: ["group"],
+      widget: { size: "small" },
+    });
+    server.session = sessionWith([]);
+    start(server, "/apps", [{ id: "chores", manifest: chores, hasPage: false, widget: () => Promise.resolve({ default: Empty }) }]);
+    expect(within(await spaceCard("Personal")).getByText("The other apps on this server cannot be added to this space.")).toBeTruthy();
+    expect(within(await spaceCard("Family")).getByRole("button", { name: "Add an app" })).toBeTruthy();
   });
 
   it("offers adding only where the person may, and removing only to an owner", async () => {
@@ -344,6 +528,38 @@ describe("the Apps page", () => {
     // Pin and switch are everyone's own.
     expect(within(family).getByRole("button", { name: "Pin Checklist in Family" })).toBeTruthy();
     expect(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" })).toBeTruthy();
+  });
+
+  it("takes an app someone else removed off the page when removing it is turned down", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([summary(checklistManifest, FAMILY), summary(feedManifest, FAMILY)]);
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Remove Feed in Family" }));
+    const remove = await dialog("Remove Feed in Family?");
+    // Meanwhile another owner removed it.
+    server.session = sessionWith([summary(checklistManifest, FAMILY)]);
+    fireEvent.click(within(remove).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const family = await spaceCard("Family");
+    expect(within(family).queryByRole("switch", { name: "Show Feed in Family" })).toBeNull();
+    expect(within(family).getByRole("switch", { name: "Show Checklist in Family" })).toBeTruthy();
+    expect(server.changes).toEqual([`DELETE /api/spaces/${FAMILY}/apps/feed null`]);
+  });
+
+  it("tells someone who is no longer an owner that removing is for owners", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([summary(checklistManifest, FAMILY)]);
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Remove Checklist in Family" }));
+    const remove = await dialog("Remove Checklist in Family?");
+    // Meanwhile another owner made Sam a plain member.
+    server.session = sessionWith([summary(checklistManifest, FAMILY)], { familyRole: "member" });
+    server.fail = { ending: `DELETE /api/spaces/${FAMILY}/apps/checklist`, with: { status: 403, code: "forbidden" } };
+    fireEvent.click(within(remove).getByRole("button", { name: "Remove" }));
+    expect(await within(remove).findByText("Only an owner of this space can remove an app.")).toBeTruthy();
+    expect(within(await spaceCard("Family")).queryByRole("button", { name: "Remove Checklist in Family" })).toBeNull();
   });
 
   it("removes an app from a space after asking, and says that its data is kept", async () => {
@@ -366,12 +582,15 @@ describe("the Apps page", () => {
   it("speaks Chinese", async () => {
     const server = new FakeServer();
     server.session = sessionWith([summary(checklistManifest, FAMILY)], { locale: "zh" });
+    server.removed[FAMILY] = [{ id: "feed", rowCount: 2 }];
     start(server);
     const family = await spaceCard("Family");
     expect(within(family).getByRole("switch", { name: "显示Family的清单" })).toBeTruthy();
     fireEvent.click(within(family).getByRole("button", { name: "添加应用" }));
     const add = await dialog("向Family添加应用");
     expect(within(add).getByRole("radio", { name: "暂时只有我" })).toBeTruthy();
+    expect(await within(add).findByText("曾被移除：再次添加会恢复它的数据，共 2 条。")).toBeTruthy();
+    expect(within(add).getByRole("button", { name: "恢复" })).toBeTruthy();
   });
 });
 

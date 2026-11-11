@@ -2,6 +2,8 @@
  * English interface strings. This file defines the set of keys: zh.ts must
  * provide exactly the same ones, or the project does not compile.
  * Placeholders are written {like_this} and are checked by the `t` helper's types.
+ * Words in [brackets] name a page and are drawn as a link to it by
+ * `LinkedText` (src/components/linked-text.tsx), in both languages.
  */
 export const en = {
   "app.loading": "Loading Hearth…",
@@ -31,6 +33,7 @@ export const en = {
   "dashboard.emptyTitle": "No widgets yet",
   "dashboard.emptyBody":
     "Widgets appear here when apps are added. Each app can show a small summary on this page, such as a list or today's numbers.",
+  "dashboard.goToApps": "Go to the Apps page",
   "dashboard.appInSpace": "{app} in {space}",
   "dashboard.open": "Open",
 
@@ -51,15 +54,25 @@ export const en = {
   "apps.addToPersonal": "Add an app to your personal space",
   "apps.addChoose": "App",
   "apps.addNothing": "Every app this server holds is already here.",
+  "apps.addNothingFits": "The other apps on this server cannot be added to this space.",
+  "apps.addNoneInstalled": "No apps are installed on this server yet.",
+  "apps.addRestoreNone": "Removed earlier: adding it again brings back its settings.",
+  "apps.addRestoreOne": "Removed earlier: adding it again brings back its data, 1 saved entry.",
+  "apps.addRestoreMany": "Removed earlier: adding it again brings back its data, {count} saved entries.",
+  "apps.addCheckFailed": "Whether these apps were in this space before could not be checked.",
+  "apps.retry": "Try again",
   "apps.addWho": "Who else can use it",
   "apps.addWhoHint": "The space's owners can always use it. People who join later get the same as everyone else.",
   "apps.accessNone": "Only me for now",
   "apps.accessView": "Everyone can view",
   "apps.accessEdit": "Everyone can edit",
   "apps.addConfirm": "Add",
+  "apps.addRestoreConfirm": "Bring back",
   "apps.cancel": "Cancel",
   "apps.addFailed": "The app could not be added. Try again.",
   "apps.addRefused": "This app cannot be added here. Ask an owner of the space.",
+  "apps.addConflict": "The app could not be added: it may have been added here meanwhile. This page now shows what the space has.",
+  "apps.addGone": "This server no longer holds this app. Reload the page to update.",
   "apps.pin": "Pin {app}",
   "apps.show": "Show {app}",
   "apps.off": "Switched off. Hidden from your dashboard and search, for you alone.",
@@ -70,6 +83,8 @@ export const en = {
     "It disappears for everyone in this space. Its data is kept: adding the app again brings everything back.",
   "apps.removeConfirm": "Remove",
   "apps.removeFailed": "The app could not be removed. Try again.",
+  "apps.removeGone": "This app is no longer in this space.",
+  "apps.removeRefused": "Only an owner of this space can remove an app.",
   "apps.move": "Move {app}",
   "apps.moveTitle": "Move {app} to another space",
   "apps.moveTo": "Move to",
@@ -171,7 +186,7 @@ export const en = {
   "groups.owner": "Owner",
   "groups.canAddApps": "Can add apps",
   "groups.invited": "Invited",
-  "groups.youCanAddApps": "You can add apps to this group on the Apps page.",
+  "groups.youCanAddApps": "You can add apps to this group on [the Apps page].",
   "groups.add": "Add a person",
   "groups.addTitle": "Add a person to {group}",
   "groups.addEmail": "Email address",
@@ -212,7 +227,7 @@ export const en = {
   "groups.access": "Who can use each app",
   "groups.accessHint":
     "Everyone is what each member gets, people who join later included, unless you choose otherwise for them. Owners can always use every app.",
-  "groups.accessNoApps": "No apps in this group yet. Add one on the Apps page.",
+  "groups.accessNoApps": "No apps in this group yet. Add one on [the Apps page].",
   "groups.accessApp": "App",
   "groups.accessEveryone": "Everyone",
   "groups.accessEveryoneFor": "Everyone's access to {app}",

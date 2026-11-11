@@ -14,6 +14,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useId } from "react";
 import { useBundledApps } from "../apps/bundled";
 import { AppIcon } from "../components/app-icon";
+import { LinkedText } from "../components/linked-text";
 import { pickLocalized, type PlainMessageKey } from "../i18n";
 import { useI18n } from "../session/preferences";
 import { SESSION_QUERY_KEY, useSession } from "../session/session";
@@ -93,7 +94,9 @@ export function AccessTable({ space, list }: { space: Space; list: SpaceApps }) 
         {t("groups.access")}
       </h3>
       {apps.length === 0 ? (
-        <p className="text-xs text-fg-3">{t("groups.accessNoApps")}</p>
+        <p className="text-xs text-fg-3">
+          <LinkedText text={t("groups.accessNoApps")} to="/apps" />
+        </p>
       ) : (
         // On a phone the table scrolls sideways inside the card; the page itself does not.
         <div className="-mx-1 overflow-x-auto px-1" data-testid="access-scroller">

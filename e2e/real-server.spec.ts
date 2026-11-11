@@ -221,13 +221,19 @@ test("on the Apps page an app is added without a rebuild, pinned, given settings
   const spaceCard = (name: string) => page.getByRole("main").getByRole("region", { name });
 
   try {
+    // The test before this one, or an earlier run, left the checklist removed from the personal space
+    // with its data kept. Make sure of it: the dialog then says that adding it again brings that back.
+    expect((await request.put(checklist, { data: {} })).status()).toBe(204);
+    expect((await request.delete(checklist)).status()).toBe(204);
     await page.goto("/apps");
-    // Nothing is in the personal space yet, and the build holds two apps to choose from.
+    // Nothing is in the personal space now, and the build holds two apps to choose from.
     const mine = spaceCard("Personal");
     await mine.getByRole("button", { name: "Add an app" }).click();
     const add = page.getByRole("dialog", { name: "Add an app to your personal space" });
     await add.getByRole("radio", { name: /Checklist/ }).check();
-    await add.getByRole("button", { name: "Add", exact: true }).click();
+    const choice = add.locator("label", { has: page.getByRole("radio", { name: /Checklist/ }) });
+    await expect(choice.getByText(/^Removed earlier: adding it again brings back/)).toBeVisible();
+    await add.getByRole("button", { name: "Bring back", exact: true }).click();
     await expect(add).toBeHidden();
     await expect(mine.getByRole("switch", { name: "Show Checklist" })).toBeChecked();
     expect((await sessionNow()).apps).toEqual([expect.objectContaining({ id: "checklist", enabled: true })]);
@@ -399,7 +405,16 @@ test("two people share a family: the owner invites Lin, decides what she may do 
     expect(((await (await linApi.get("/api/session")).json()) as Session).apps).toContainEqual(
       expect.objectContaining({ id: "feed", spaceId: groupId, access: "edit" }),
     );
-    // Everyone else gets what the member who added it chose: "only me for now".
+    // Every other member gets what she chose, "only me for now": the owners' list says what was
+    // stored, nothing for members and an exception for Lin, who added it. The owners can use it
+    // whatever she chose.
+    const linId = ((await (await linApi.get("/api/session")).json()) as { user: { id: string } }).user.id;
+    const stored = (await (await request.get(`/api/spaces/${groupId}/apps`)).json()) as {
+      apps: { id: string; memberAccess: string; members: Record<string, string> }[];
+    };
+    expect(stored.apps.find((app) => app.id === "feed")).toEqual(
+      expect.objectContaining({ memberAccess: "none", members: { [linId]: "edit" } }),
+    );
     expect((await ownerSession()).apps).toContainEqual(expect.objectContaining({ id: "feed", spaceId: groupId, access: "edit" }));
     expect(problems).toEqual([]);
   } finally {

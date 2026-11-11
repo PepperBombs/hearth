@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type MouseEvent, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import { cx } from "./cx";
 
 export type DialogProps = {
@@ -44,9 +44,21 @@ export function Dialog({ open, onClose, label, children, layoutClassName = DEFAU
     if (!ref.current?.open) onClose();
   };
 
-  /** A click on the backdrop lands on the <dialog> element itself, never on its content. */
+  /**
+   * A click on the backdrop lands on the <dialog> element itself, never on
+   * its content. So does a click whose press was on the content and whose
+   * release was over the backdrop, as when someone selects text in a field
+   * and lets go outside: the browser sends it to what the two have in
+   * common. Only a press that was on the backdrop too closes the dialog.
+   */
+  const pressedOnBackdrop = useRef(false);
+  const notePress = (event: PointerEvent<HTMLDialogElement>) => {
+    pressedOnBackdrop.current = event.target === event.currentTarget;
+  };
   const closeOnBackdrop = (event: MouseEvent<HTMLDialogElement>) => {
-    if (event.target === event.currentTarget) onClose();
+    const fromBackdrop = pressedOnBackdrop.current;
+    pressedOnBackdrop.current = false;
+    if (fromBackdrop && event.target === event.currentTarget) onClose();
   };
 
   return (
@@ -54,6 +66,7 @@ export function Dialog({ open, onClose, label, children, layoutClassName = DEFAU
       ref={ref}
       aria-label={label}
       onClose={closedByBrowser}
+      onPointerDown={notePress}
       onClick={closeOnBackdrop}
       className={cx(
         "overflow-hidden border-line bg-surface p-0 text-fg shadow-pop backdrop:bg-overlay",

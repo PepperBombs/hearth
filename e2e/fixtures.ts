@@ -10,8 +10,9 @@
  * another space, and each person's switch and pin. And it keeps groups:
  * creating one, renaming it, adding,
  * changing and removing people, invitations, the owners' list of a group
- * and who can use each app (`groups`, `people`). All names and addresses
- * are made up.
+ * and who can use each app (`groups`, `people`). The owners' list of a
+ * space no test set up, a personal one included, is drawn from the
+ * session. All names and addresses are made up.
  */
 import { expect, test as base, type Page, type Route } from "@playwright/test";
 import {
@@ -300,9 +301,12 @@ export class FakeApi {
         if (!space || (appId !== "checklist" && appId !== "feed")) return fail({ status: 404, code: "not_found", message: "No such app" });
         if (!space.canAddApps) return fail({ status: 403, code: "forbidden", message: "Sample failure" });
         if (!listed) this.setSession({ ...this.current, apps: [...this.current.apps, sampleApp(appId, spaceId)] });
-        if (owners && !owners.apps.some((entry) => entry.id === appId)) {
+        const entry = owners?.apps.find((candidate) => candidate.id === appId);
+        if (owners && !entry) {
           owners.apps.push({ id: appId, hasCode: true, removedAt: null, rowCount: 0, memberAccess: parsed.data.memberAccess ?? "none", members: {} });
         }
+        // A removed app comes back with its data, and who can use it starts afresh, as on the server.
+        if (entry && entry.removedAt !== null) Object.assign(entry, { removedAt: null, memberAccess: parsed.data.memberAccess ?? "none", members: {} });
         return route.fulfill({ status: 204 });
       }
       if (method === "DELETE" && listed) {
@@ -384,6 +388,12 @@ export class FakeApi {
     if (method !== "GET") record();
     const space = this.current.spaces.find((candidate) => candidate.id === spaceId);
     const details = this.groups[spaceId];
+    // The owners' list is there for a personal space too. One a test did not set up is drawn from the session.
+    if (part === "apps" && method === "GET") {
+      if (!space) return refuse(404, "not_found");
+      if (space.role !== "owner") return refuse(403, "forbidden");
+      return { json: spaceAppsSchema.parse(details ?? this.listFromSession(space)) };
+    }
     if (!space || space.kind !== "group") return refuse(404, "not_found");
     const owner = space.role === "owner";
     const changeSpace = (change: (members: SpaceMember[]) => SpaceMember[], name = space.name) => {
@@ -406,10 +416,6 @@ export class FakeApi {
       if (!owner) return refuse(403, "forbidden");
       changeSpace((members) => members, parsed.data.name ?? space.name);
       return {};
-    }
-    if (part === "apps" && method === "GET") {
-      if (!owner || !details) return refuse(403, "forbidden");
-      return { json: spaceAppsSchema.parse(details) };
     }
     if (!owner && !(part === "members" && method === "DELETE" && id === me.id)) return refuse(403, "forbidden");
     if (!details) return refuse(404, "not_found");
@@ -472,6 +478,21 @@ export class FakeApi {
       return {};
     }
     return refuse(404, "not_found");
+  }
+
+  /** The owners' list of a space a test gave none: its apps as the session lists them, and its people. */
+  private listFromSession(space: Session["spaces"][number]): SpaceApps {
+    const me = this.current.user;
+    return {
+      apps: this.current.apps
+        .filter((app) => app.spaceId === space.id)
+        .map((app) => ({ id: app.id, hasCode: true, removedAt: null, rowCount: 0, memberAccess: "none" as const, members: {} })),
+      members: space.members.map((member) => {
+        const known = member.id === me.id ? me : this.people.find((person) => person.id === member.id);
+        return { ...member, email: known?.email ?? `${member.id}@example.com`, canAddApps: false };
+      }),
+      invitations: [],
+    };
   }
 
   /**
@@ -609,3 +630,37 @@ export const test = base.extend<{ api: FakeApi }>({
 export { expect };
 
 export const PHONE = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
+
+/** The parts of the shell meant to scroll sideways by themselves on a phone: the table of who can use each app. */
+export const SIDEWAYS_SCROLLERS: readonly string[] = ['[data-testid="access-scroller"]'];
+
+/**
+ * Nothing may reach past the edge of the screen. The document's own width
+ * says nothing about that: the shell clips what does not fit and the content
+ * area scrolls by itself, so the page never grows. Each part is measured.
+ *
+ * What is inside an element meant to scroll sideways by itself is left to
+ * that element, which must still fit: `scrollers` names such elements by
+ * selector, the shell's own (`SIDEWAYS_SCROLLERS`) unless told otherwise.
+ */
+export async function expectNothingPastTheEdge(page: Page, scrollers: readonly string[] = SIDEWAYS_SCROLLERS): Promise<void> {
+  const problems = await page.evaluate((selectors) => {
+    const width = document.documentElement.clientWidth;
+    const found: string[] = [];
+    if (document.documentElement.scrollWidth > width) found.push("the document scrolls sideways");
+    const main = document.querySelector("main#content");
+    if (!main) found.push("there is no main#content");
+    else if (main.scrollWidth > main.clientWidth) found.push("the content area scrolls sideways");
+    for (const element of document.querySelectorAll("header, header *, main#content *, nav, nav *")) {
+      if (selectors.some((selector) => element.parentElement?.closest(selector))) continue;
+      const box = element.getBoundingClientRect();
+      if (box.width === 0 || box.height === 0) continue;
+      if (box.left < -0.5 || box.right > width + 0.5) {
+        const text = (element.textContent ?? "").trim().slice(0, 40);
+        found.push(`<${element.tagName.toLowerCase()}> "${text}" spans ${box.left} to ${box.right}`);
+      }
+    }
+    return found;
+  }, scrollers);
+  expect(problems).toEqual([]);
+}

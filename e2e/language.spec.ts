@@ -10,6 +10,7 @@ test("the language toggle switches the interface to Chinese and it survives a re
   await expect(html).toHaveAttribute("lang", "zh-Hans");
   const sidebar = page.getByRole("navigation", { name: "主导航" });
   await expect(sidebar.getByRole("link", { name: "仪表盘" })).toBeVisible();
+  await expect(sidebar.getByRole("link", { name: "应用" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "设置" })).toBeVisible();
   await expect(sidebar.getByRole("button", { name: /搜索或跳转/ })).toBeVisible();
   await expect(sidebar.getByRole("heading", { name: "个人" })).toBeVisible();

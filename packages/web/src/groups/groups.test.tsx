@@ -66,6 +66,8 @@ class FakeServer {
   ];
   /** Answer requests whose "METHOD path" ends like this with a failure, until cleared. */
   fail: { ending: string; with: Failure } | null = null;
+  /** Answer requests whose "METHOD path" ends like this only after a while, as a slow network would. */
+  slow: { ending: string; ms: number } | null = null;
   readonly changes: string[] = [];
 
   person(id: string): Person {
@@ -139,6 +141,8 @@ class FakeServer {
       new Response(status === 204 ? null : JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
     const refuse = (status: number, code: string) => json(status, { error: { code, message: "Sample failure" } });
     if (this.fail && `${method} ${path}`.endsWith(this.fail.ending)) return refuse(this.fail.with.status, this.fail.with.code);
+    const slow = this.slow;
+    if (slow && `${method} ${path}`.endsWith(slow.ending)) await new Promise((resolve) => setTimeout(resolve, slow.ms));
 
     if (path === "/api/session") return json(200, this.session());
     if (path === "/api/spaces" && method === "POST") {
@@ -378,6 +382,68 @@ describe("groups in Settings", () => {
     await waitFor(() => expect(server.changes[2]).toBe(`DELETE /api/spaces/${FAMILY}/members/${LIN.id} null`));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(peopleIn(family).some((row) => row?.includes("Lin"))).toBe(false);
+  });
+
+  it("does not open someone's dialog by itself when they are added back after being removed", async () => {
+    const server = new FakeServer();
+    // The owners' list answers after the session, as it does on a real network, where it is asked for second.
+    server.slow = { ending: `GET /api/spaces/${FAMILY}/apps`, ms: 50 };
+    start(server);
+    const family = await card("Family");
+
+    fireEvent.click(await within(family).findByRole("button", { name: "Manage Lin Example" }));
+    fireEvent.click(within(await dialog("Lin Example in Family")).getByRole("button", { name: "Remove from the group" }));
+    fireEvent.click(within(await dialog("Remove Lin Example from Family?")).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(peopleIn(family).some((row) => row?.includes("Lin"))).toBe(false));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // Added again, perhaps after a slip: only the list changes.
+    fireEvent.click(within(family).getByRole("button", { name: "Add a person" }));
+    const add = await dialog("Add a person to Family");
+    fireEvent.change(within(add).getByLabelText("Email address"), { target: { value: "lin@example.com" } });
+    fireEvent.click(within(add).getByRole("button", { name: "Add" }));
+    expect(await within(family).findByText("lin@example.com was added to the group.")).toBeTruthy();
+    await waitFor(() => expect(peopleIn(family).at(-1)).toBe("LLin Examplelin@example.com"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(server.changes).toEqual([
+      `DELETE /api/spaces/${FAMILY}/members/${LIN.id} null`,
+      `POST /api/spaces/${FAMILY}/members {"email":"lin@example.com","role":"member","canAddApps":false}`,
+    ]);
+  });
+
+  it("does not open an owner's own dialog by itself when they are made an owner again after stepping down", async () => {
+    const server = new FakeServer();
+    server.groups[0]!.members[1]!.role = "owner";
+    start(server);
+    const family = await card("Family");
+
+    fireEvent.click(await within(family).findByRole("button", { name: "Manage Sam Example" }));
+    fireEvent.click(within(await dialog("Sam Example in Family")).getByRole("button", { name: "Member" }));
+    await waitFor(() => expect(within(family).getByText("You are a member")).toBeTruthy());
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // An owner again, Sam starts adding someone, but Lin makes Sam a member first: the refusal reloads the session, which says so.
+    server.groups[0]!.members[0]!.role = "owner";
+    fireEvent.click(within(await card("Groups")).getByRole("button", { name: "Create a group" }));
+    fireEvent.change(within(await dialog("Create a group")).getByLabelText("Name"), { target: { value: "Choir" } });
+    fireEvent.click(within(await dialog("Create a group")).getByRole("button", { name: "Create" }));
+    fireEvent.click(await within(family).findByRole("button", { name: "Add a person" }));
+    const add = await dialog("Add a person to Family");
+    server.groups[0]!.members[0]!.role = "member";
+    fireEvent.change(within(add).getByLabelText("Email address"), { target: { value: "noa@example.com" } });
+    fireEvent.click(within(add).getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(within(family).getByText("You are a member")).toBeTruthy());
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // Lin, the other owner, makes Sam an owner again; Sam's screen learns of it with the next change Sam makes.
+    server.groups[0]!.members[0]!.role = "owner";
+    fireEvent.click(within(await card("Groups")).getByRole("button", { name: "Create a group" }));
+    const create = await dialog("Create a group");
+    fireEvent.change(within(create).getByLabelText("Name"), { target: { value: "Book club" } });
+    fireEvent.click(within(create).getByRole("button", { name: "Create" }));
+    expect(await card("Book club")).toBeTruthy();
+    await waitFor(() => expect(within(family).getByText("You are an owner")).toBeTruthy());
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("tells the last owner to make someone else an owner before stepping down or leaving", async () => {

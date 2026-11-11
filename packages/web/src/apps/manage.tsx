@@ -5,14 +5,16 @@
  * them; the dashboard's cards and an app's page offer the settings.
  *
  * After each change the session is loaded again, since every screen draws
- * its lists from it. A switch or pin shows at once, before the server has
- * answered; if the server turns it down, loading the session again puts the
- * screen back to what is saved.
+ * its lists from it, whether the server made the change or turned it down:
+ * a refusal usually means that the screen was out of date, for example
+ * because someone else added or removed the app first. A switch or pin shows
+ * at once, before the server has answered; if the server turns it down,
+ * loading the session again puts the screen back to what is saved.
  */
 import type { Manifest } from "@hearth/sdk";
 import { IconButton } from "@hearth/sdk/web";
 import type { AppPrefsPatch, AppSummary, MemberAccess, Session, Space } from "@hearth/shared";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Settings2 } from "lucide-react";
 import { useState } from "react";
 import { spaceAppsKey } from "../groups/queries";
@@ -52,13 +54,25 @@ export function useAppPrefs(app: AppSummary) {
   });
 }
 
+/**
+ * Once the server has answered a change to a space's apps, whatever it
+ * answered, the session and the space's owners' list are loaded again; the
+ * change counts as finished when they are.
+ */
+function reloadAfter(client: QueryClient, install: Install) {
+  return Promise.all([
+    client.invalidateQueries({ queryKey: SESSION_QUERY_KEY }),
+    client.invalidateQueries({ queryKey: spaceAppsKey(install.spaceId) }),
+  ]);
+}
+
 /** Adds an app to a space, or brings a removed one back with its data. */
 export function useAddApp() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: ({ install, memberAccess }: { install: Install; memberAccess?: MemberAccess }) =>
       addAppToSpace(install, memberAccess === undefined ? {} : { memberAccess }),
-    onSuccess: () => client.invalidateQueries({ queryKey: SESSION_QUERY_KEY }),
+    onSettled: (_result, _error, { install }) => reloadAfter(client, install),
   });
 }
 
@@ -67,7 +81,7 @@ export function useRemoveApp() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (install: Install) => removeAppFromSpace(install),
-    onSuccess: () => client.invalidateQueries({ queryKey: SESSION_QUERY_KEY }),
+    onSettled: (_result, _error, install) => reloadAfter(client, install),
   });
 }
 

@@ -2,7 +2,7 @@ import { ArrowRight, LayoutDashboard } from "lucide-react";
 import { useMemo } from "react";
 import { Link } from "react-router";
 import type { AppSummary, WidgetSize } from "@hearth/shared";
-import { EmptyState, Tag } from "@hearth/sdk/web";
+import { EmptyState, Tag, buttonClass } from "@hearth/sdk/web";
 import { AppView } from "../apps/app-view";
 import { AppSettingsButton } from "../apps/manage";
 import { AppIcon } from "../components/app-icon";
@@ -47,7 +47,16 @@ export function Dashboard() {
     <Page title={t("dashboard.title")} note={<span className="num">{today}</span>}>
       {apps.length === 0 ? (
         <Card className="min-h-[320px] justify-center">
-          <EmptyState icon={<LayoutDashboard size={20} />} title={t("dashboard.emptyTitle")}>
+          <EmptyState
+            icon={<LayoutDashboard size={20} />}
+            title={t("dashboard.emptyTitle")}
+            action={
+              // Apps are added, and switched back on, on the Apps page.
+              <Link to="/apps" className={buttonClass({ variant: "primary" })}>
+                {t("dashboard.goToApps")}
+              </Link>
+            }
+          >
             {t("dashboard.emptyBody")}
           </EmptyState>
         </Card>

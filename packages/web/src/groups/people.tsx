@@ -34,7 +34,14 @@ export function People({ space, list }: { space: Space; list: SpaceApps | undefi
   const [added, setAdded] = useState<Added | null>(null);
   const withdraw = useGroupChange(space.id, (email: string) => withdrawInvitation(space.id, email));
   const detailOf = (id: string) => list?.members.find((member) => member.id === id);
-  const managed = space.members.find((member) => member.id === managing);
+  // The person whose dialog is open, while they are in the group and this person owns it.
+  const managed = owner ? space.members.find((member) => member.id === managing) : undefined;
+  // When either stops, whoever made the change, the dialog is gone for good: it must not open
+  // again by itself if they come back, added again or made an owner again. Removing someone
+  // cannot close it itself: the session that no longer lists them can take the dialog away first.
+  if (managing !== null && managed === undefined) setManaging(null);
+  // Likewise the dialog that adds someone, which is an owner's.
+  if (adding && !owner) setAdding(false);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -79,7 +86,7 @@ export function People({ space, list }: { space: Space; list: SpaceApps | undefi
         </CardFooter>
       ) : null}
       {owner ? <AddPersonDialog space={space} open={adding} onClose={() => setAdding(false)} onAdded={setAdded} /> : null}
-      {owner && managed ? (
+      {managed ? (
         <ManageDialog
           space={space}
           member={managed}

@@ -6,7 +6,7 @@
  * between two people on the real server in e2e/real-server.spec.ts.
  */
 import type { Page } from "@playwright/test";
-import { FAMILY_SPACE, KIM, LIN, PHONE, emptySession, expect, ownAFamily, sampleApp, test } from "./fixtures.ts";
+import { FAMILY_SPACE, KIM, LIN, PHONE, emptySession, expect, expectNothingPastTheEdge, ownAFamily, sampleApp, test } from "./fixtures.ts";
 
 const card = (page: Page, name: string) => page.getByRole("main").getByRole("region", { name });
 
@@ -41,9 +41,9 @@ test.describe("groups in Settings", () => {
     await expect(family.getByText("pat@example.com is invited, and joins the group when they first open Hearth.")).toBeVisible();
     await expect(family.getByRole("listitem").filter({ hasText: "pat@example.com" })).toContainText("InvitedOwner");
 
-    // No apps yet; one added on the Apps page, "everyone can view", shows in the table.
+    // No apps yet; the card leads to the Apps page, where one added "everyone can view" then shows in the table.
     await expect(family.getByText("No apps in this group yet. Add one on the Apps page.")).toBeVisible();
-    await page.goto("/apps");
+    await family.getByRole("link", { name: "the Apps page" }).click();
     await card(page, "Family").getByRole("button", { name: "Add an app" }).click();
     const addApp = page.getByRole("dialog", { name: "Add an app to Family" });
     await addApp.getByRole("radio", { name: "Everyone can view" }).check();
@@ -98,6 +98,32 @@ test.describe("groups in Settings", () => {
     ]);
   });
 
+  test("selecting text in a dialog and letting go outside it keeps the dialog and what was typed", async ({ page, api }) => {
+    ownAFamily(api);
+    await page.goto("/settings");
+    await card(page, "Family").getByRole("button", { name: "Add a person" }).click();
+    const add = page.getByRole("dialog", { name: "Add a person to Family" });
+    const email = add.getByLabel("Email address");
+    await email.fill("noa@example.com");
+    // The dialog opens with a slight zoom; measure it once that is over.
+    await add.evaluate((element) => Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished)));
+    const field = (await email.boundingBox())!;
+    const box = (await add.boundingBox())!;
+
+    // Pressed in the field, dragged to its start and past the dialog's edge, let go over the backdrop.
+    await page.mouse.move(field.x + field.width - 4, field.y + field.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x - 40, field.y + field.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await expect(add).toBeVisible();
+    await expect(email).toHaveValue("noa@example.com");
+
+    // A click on the backdrop still closes it.
+    await page.mouse.click(box.x - 40, box.y + 10);
+    await expect(add).toBeHidden();
+    expect(api.groupChanges).toEqual([]);
+  });
+
   test("a member sees who is in the group and leaves it", async ({ page, api }) => {
     const session = emptySession();
     api.setSession({
@@ -149,7 +175,8 @@ test.describe("groups in Settings", () => {
       const family = card(page, "Family");
       const table = family.getByRole("table", { name: "每个应用谁可以使用" });
       await expect(table.getByRole("combobox", { name: "Lin Example对清单的权限" })).toBeVisible();
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      // The table scrolls inside its own scroller, which fits; nothing else reaches past the edge.
+      await expectNothingPastTheEdge(page);
       const scroller = family.getByTestId("access-scroller");
       expect(await scroller.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
       const familyBox = await family.boundingBox();

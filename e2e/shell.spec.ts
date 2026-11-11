@@ -1,31 +1,12 @@
-import type { Page } from "@playwright/test";
-import { FAMILY_SPACE, PHONE, expect, sessionWithApps, sessionWithSampleApps, test } from "./fixtures.ts";
-
-/**
- * Nothing may reach past the edge of the screen. The document's own width
- * says nothing about that: the shell clips what does not fit and the content
- * area scrolls by itself, so the page never grows. Each part is measured.
- */
-async function expectNothingPastTheEdge(page: Page): Promise<void> {
-  const problems = await page.evaluate(() => {
-    const width = document.documentElement.clientWidth;
-    const found: string[] = [];
-    if (document.documentElement.scrollWidth > width) found.push("the document scrolls sideways");
-    const main = document.querySelector("main#content");
-    if (!main) found.push("there is no main#content");
-    else if (main.scrollWidth > main.clientWidth) found.push("the content area scrolls sideways");
-    for (const element of document.querySelectorAll("header, header *, main#content *, nav, nav *")) {
-      const box = element.getBoundingClientRect();
-      if (box.width === 0 || box.height === 0) continue;
-      if (box.left < -0.5 || box.right > width + 0.5) {
-        const text = (element.textContent ?? "").trim().slice(0, 40);
-        found.push(`<${element.tagName.toLowerCase()}> "${text}" spans ${box.left} to ${box.right}`);
-      }
-    }
-    return found;
-  });
-  expect(problems).toEqual([]);
-}
+import {
+  FAMILY_SPACE,
+  PHONE,
+  expect,
+  expectNothingPastTheEdge,
+  sessionWithApps,
+  sessionWithSampleApps,
+  test,
+} from "./fixtures.ts";
 
 test.describe("shell on a desktop", () => {
   test("shows the sidebar, top bar and an empty dashboard", async ({ page, api }) => {
@@ -36,6 +17,7 @@ test.describe("shell on a desktop", () => {
     await expect(sidebar.getByText("Hearth", { exact: true })).toBeVisible();
     await expect(sidebar.getByRole("button", { name: /Search or jump to/ })).toContainText("Ctrl K");
     await expect(sidebar.getByRole("link", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
+    await expect(sidebar.getByRole("link", { name: "Apps" })).toBeVisible();
     await expect(sidebar.getByRole("heading", { name: "Personal" })).toBeVisible();
     await expect(sidebar.getByText("No apps yet")).toBeVisible();
     await expect(sidebar.getByRole("link", { name: "Settings" })).toBeVisible();
@@ -46,9 +28,26 @@ test.describe("shell on a desktop", () => {
     await expect(page).toHaveTitle("Dashboard · Hearth");
     await expect(page.getByRole("heading", { name: "No widgets yet" })).toBeVisible();
     await expect(page.getByText("Widgets appear here when apps are added.")).toBeVisible();
+    await expect(page.getByRole("main").getByRole("link", { name: "Go to the Apps page" })).toBeVisible();
 
     await expect(page.getByRole("navigation", { name: "Tabs" })).toBeHidden();
     expect(api.sessionRequests).toBe(1);
+  });
+
+  test("leads to the Apps page, where apps are added, from the sidebar and from the empty dashboard", async ({ page, api }) => {
+    void api;
+    await page.goto("/");
+    const sidebar = page.getByRole("navigation", { name: "Main" });
+
+    await sidebar.getByRole("link", { name: "Apps" }).click();
+    await expect(page).toHaveURL(/\/apps$/);
+    await expect(page.getByRole("heading", { level: 1, name: "Apps" })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Apps" })).toHaveAttribute("aria-current", "page");
+    await expect(sidebar.getByRole("link", { name: "Dashboard" })).not.toHaveAttribute("aria-current", "page");
+
+    await sidebar.getByRole("link", { name: "Dashboard" }).click();
+    await page.getByRole("main").getByRole("link", { name: "Go to the Apps page" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Apps" })).toBeVisible();
   });
 
   test("lists enabled apps under Personal and under each group space", async ({ page, api }) => {
@@ -67,6 +66,20 @@ test.describe("shell on a desktop", () => {
     await expect(page).toHaveURL(/\/apps\/space-family\/grocery$/);
     await expect(page.getByRole("heading", { level: 1, name: "Grocery" })).toBeVisible();
     await expect(family.getByRole("link", { name: "Grocery" })).toHaveAttribute("aria-current", "page");
+    // The app's own page is not the Apps page.
+    await expect(sidebar.getByRole("link", { name: "Apps" })).not.toHaveAttribute("aria-current", "page");
+  });
+
+  test("says that a space's apps are widgets only when none of them has a page", async ({ page, api }) => {
+    // The feed in the personal space has only a widget; the family's checklist has a page.
+    api.setSession(sessionWithSampleApps());
+    await page.goto("/");
+    const sidebar = page.getByRole("navigation", { name: "Main" });
+    const personal = sidebar.getByRole("region", { name: "Personal" });
+    await expect(personal.getByText("Widgets only, on the dashboard")).toBeVisible();
+    await expect(personal.getByText("No apps yet")).toHaveCount(0);
+    await expect(sidebar.getByRole("region", { name: "Family" }).getByRole("link")).toHaveText(["Checklist"]);
+    await expect(page.getByTestId("widget-grid").getByRole("heading", { level: 2 })).toHaveText(["Checklist", "Feed"]);
   });
 
   test("lays widgets out in four columns, then two, then one", async ({ page, api }) => {
@@ -331,5 +344,29 @@ test.describe("shell on a phone", () => {
     // The measure the old check used does not move at all.
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
     await expect(expectNothingPastTheEdge(page)).rejects.toThrow();
+  });
+
+  test("the edge check leaves what scrolls inside a named element to it, and that element must fit", async ({ page, api }) => {
+    void api;
+    await page.goto("/");
+    await page.getByRole("heading", { level: 1 }).waitFor();
+    await page.evaluate(() => {
+      const scroller = document.createElement("div");
+      scroller.dataset.testid = "sideways";
+      scroller.style.overflowX = "auto";
+      const wide = document.createElement("div");
+      wide.style.width = "2000px";
+      wide.style.height = "10px";
+      scroller.append(wide);
+      document.querySelector("main#content")?.append(scroller);
+    });
+    await expectNothingPastTheEdge(page, ['[data-testid="sideways"]']);
+    // Not named, the same content is a problem; named, but letting its content out, so is the element.
+    await expect(expectNothingPastTheEdge(page)).rejects.toThrow();
+    await page.evaluate(() => {
+      const scroller = document.querySelector<HTMLElement>('[data-testid="sideways"]');
+      if (scroller) scroller.style.overflowX = "visible";
+    });
+    await expect(expectNothingPastTheEdge(page, ['[data-testid="sideways"]'])).rejects.toThrow();
   });
 });

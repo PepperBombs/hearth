@@ -6,7 +6,17 @@
  * languages and on a phone. The same is done against the real server in
  * e2e/real-server.spec.ts.
  */
-import { FAMILY_SPACE, PERSONAL_SPACE, PHONE, emptySession, expect, ownAFamily, sampleApp, test } from "./fixtures.ts";
+import {
+  FAMILY_SPACE,
+  PERSONAL_SPACE,
+  PHONE,
+  emptySession,
+  expect,
+  expectNothingPastTheEdge,
+  ownAFamily,
+  sampleApp,
+  test,
+} from "./fixtures.ts";
 import type { Page } from "@playwright/test";
 
 const spaceCard = (page: Page, name: string) => page.getByRole("main").getByRole("region", { name });
@@ -46,6 +56,26 @@ test.describe("the Apps page", () => {
     // Now on the dashboard too, with its own widget: no rebuild, no reload.
     await page.getByRole("link", { name: "Dashboard" }).click();
     await expect(page.getByTestId("widget-grid").getByRole("checkbox", { name: "Water the plants" })).toBeVisible();
+  });
+
+  test("says, before an app the family removed is added again, that its data comes back with it", async ({ page, api }) => {
+    ownAFamily(api);
+    api.groups[FAMILY_SPACE]!.apps.push({ id: "feed", hasCode: true, removedAt: "2026-11-01T08:00:00.000Z", rowCount: 4, memberAccess: "view", members: {} });
+    await page.goto("/apps");
+
+    await spaceCard(page, "Family").getByRole("button", { name: "Add an app" }).click();
+    const dialog = page.getByRole("dialog", { name: "Add an app to Family" });
+    await expect(dialog.getByRole("radio", { name: /Feed/ })).toBeChecked();
+    await expect(dialog.getByText("Removed earlier: adding it again brings back its data, 4 saved entries.")).toBeVisible();
+    await expect(dialog.getByRole("radio", { name: "Only me for now" })).toBeChecked();
+    await dialog.getByRole("button", { name: "Bring back" }).click();
+    await expect(dialog).toBeHidden();
+    expect(api.appChanges).toEqual([`PUT /api/spaces/${FAMILY_SPACE}/apps/feed {"memberAccess":"none"}`]);
+
+    // Back for the owners alone: the family's table in Settings says so.
+    await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Settings" }).click();
+    const table = spaceCard(page, "Family").getByRole("table", { name: "Who can use each app" });
+    await expect(table.getByRole("combobox", { name: "Everyone's access to Feed" })).toHaveValue("none");
   });
 
   test("pins an app and switches one off, for this person alone", async ({ page, api }) => {
@@ -163,7 +193,7 @@ test.describe("the Apps page", () => {
       await page.goto("/apps");
       const move = spaceCard(page, "Personal").getByRole("button", { name: "Move Feed", exact: true });
       expect((await move.boundingBox())?.height).toBeGreaterThanOrEqual(44);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await expectNothingPastTheEdge(page);
 
       await move.tap();
       const dialog = page.getByRole("dialog", { name: "Move Feed to another space" });
@@ -186,7 +216,7 @@ test.describe("the Apps page", () => {
       await page.goto("/apps");
       const personal = spaceCard(page, "Personal");
       await expect(personal.getByRole("switch", { name: "Show Checklist" })).toBeVisible();
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await expectNothingPastTheEdge(page);
       for (const name of ["Pin Checklist", "Settings of Checklist", "Remove Checklist"]) {
         const box = await personal.getByRole("button", { name }).boundingBox();
         expect(box?.height).toBeGreaterThanOrEqual(44);

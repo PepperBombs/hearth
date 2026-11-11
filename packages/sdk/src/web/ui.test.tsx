@@ -81,8 +81,11 @@ describe("Dialog", () => {
     expect(screen.getByText("Move")).toBeTruthy();
 
     // A click on the content is not a click on the backdrop.
+    fireEvent.pointerDown(screen.getByText("Move"));
     fireEvent.click(screen.getByText("Move"));
     expect(onClose).not.toHaveBeenCalled();
+    // A click on the backdrop lands on the dialog itself, pressed and released there.
+    fireEvent.pointerDown(dialog);
     fireEvent.click(dialog);
     expect(onClose).toHaveBeenCalledTimes(1);
 
@@ -93,6 +96,29 @@ describe("Dialog", () => {
     );
     expect(dialog.open).toBe(false);
     expect(screen.queryByText("Move")).toBeNull();
+  });
+
+  it("is not closed by a drag that starts inside and ends over the backdrop, as when selecting text", () => {
+    const onClose = vi.fn();
+    render(
+      <Dialog open onClose={onClose} label="Add a person">
+        <input aria-label="Email address" defaultValue="lin@example.com" />
+      </Dialog>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Add a person" });
+    const field = screen.getByRole("textbox", { name: "Email address" });
+
+    // Pressed in the field, released over the backdrop: the browser sends the click to what the
+    // two have in common, which is the dialog itself.
+    fireEvent.pointerDown(field);
+    fireEvent.click(dialog);
+    expect(onClose).not.toHaveBeenCalled();
+
+    // The other way round, pressed over the backdrop and released on the content, the click lands
+    // on the dialog too; that press was outside.
+    fireEvent.pointerDown(dialog);
+    fireEvent.click(dialog);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("is not closed by the browser's late report of an earlier close", () => {

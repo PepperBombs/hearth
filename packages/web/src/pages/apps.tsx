@@ -13,13 +13,18 @@
  *   rebuild, no restart. In a group the person adding is asked who else may
  *   use it, "only me for now" first (owner's decision 1). Moving an app into
  *   a group asks the same.
+ * - An app the space had and removed kept its data, and adding it again
+ *   brings that back (owner's decision 2). Only an owner can, and for an
+ *   owner the dialog reads the owners' list first and says so, with how many
+ *   entries come back, so that who else may use it is chosen knowing that.
  */
-import { ArrowRightLeft, ChevronRight, LayoutGrid, Pin, Plus, Trash2, UserRound, Users } from "lucide-react";
+import { ArrowRightLeft, ChevronRight, LayoutGrid, Pin, Plus, RefreshCw, Trash2, UserRound, Users } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router";
-import type { AppSummary, Localized, MemberAccess, Space } from "@hearth/shared";
+import type { AppSummary, InstalledApp, Localized, MemberAccess, Space } from "@hearth/shared";
 import { Button, Dialog, DialogBody, EmptyState, IconButton, Row, Rows, Switch, Tag } from "@hearth/sdk/web";
 import { useBundledApps, type BundledApp } from "../apps/bundled";
+import { useSpaceApps } from "../groups/queries";
 import {
   AppSettingsButton,
   useAddApp,
@@ -32,7 +37,7 @@ import {
 import { AppIcon } from "../components/app-icon";
 import { Page } from "../components/shell/page";
 import { Card, CardFooter, CardHeader } from "../components/card";
-import { pickLocalized, type PlainMessageKey } from "../i18n";
+import { pickLocalized, type PlainMessageKey, type Translate } from "../i18n";
 import { cx } from "../lib/cx";
 import { failureCode } from "../session/api";
 import { useI18n } from "../session/preferences";
@@ -370,14 +375,19 @@ function RemoveDialog({ app, open, onClose }: { app: AppSummary; open: boolean; 
     remove.reset();
     onClose();
   };
+  // By the time a refusal shows, the session is loaded again: an app someone else removed has gone
+  // from the page with this dialog, and someone who is no longer an owner has lost "Remove".
+  const failure = remove.error ? failureCode(remove.error) : null;
+  const problem =
+    failure === "not_found" ? "apps.removeGone" : failure === "forbidden" ? "apps.removeRefused" : failure ? "apps.removeFailed" : null;
   return (
     <Dialog open={open} onClose={close} label={title}>
       <DialogBody>
         <h2 className="text-md font-semibold">{title}</h2>
         <p className="text-fg-2">{t("apps.removeBody")}</p>
-        {remove.isError ? (
+        {problem ? (
           <p role="status" className="text-xs text-down">
-            {t("apps.removeFailed")}
+            {t(problem)}
           </p>
         ) : null}
         <div className="flex justify-end gap-2">
@@ -395,22 +405,35 @@ function RemoveDialog({ app, open, onClose }: { app: AppSummary; open: boolean; 
   );
 }
 
-/** The apps this build holds that a space does not have yet and whose manifest allows its kind. */
-function useAddable(space: Space): BundledApp[] {
+/**
+ * The apps this build holds that a space does not list for this person and
+ * whose manifest allows its kind, and when there are none, why: the build
+ * holds no apps at all (a plain `pnpm build` holds none), every one of them
+ * is here already, or the others are not for this kind of space.
+ */
+function useAddable(space: Space): { apps: BundledApp[]; none: PlainMessageKey } {
   const session = useSession();
   const bundled = useBundledApps();
   const present = new Set(session.apps.filter((app) => app.spaceId === space.id).map((app) => app.id));
-  return bundled.filter((app) => !present.has(app.id) && (!app.manifest.spaces || app.manifest.spaces.includes(space.kind)));
+  const apps = bundled.filter((app) => !present.has(app.id) && (!app.manifest.spaces || app.manifest.spaces.includes(space.kind)));
+  const none: PlainMessageKey =
+    bundled.length === 0 ? "apps.addNoneInstalled" : bundled.every((app) => present.has(app.id)) ? "apps.addNothing" : "apps.addNothingFits";
+  return { apps, none };
 }
 
 function AddApp({ space }: { space: Space }) {
   const { t } = useI18n();
-  const addable = useAddable(space);
+  const { apps: addable, none } = useAddable(space);
+  // Asked for with the page, for an owner only, so that the dialog knows which apps the space removed.
+  useSpaceApps(space);
   const [open, setOpen] = useState(false);
+  // Nothing left to add, as when the session showed that someone else added it first: the dialog
+  // goes, and must not open again by itself once there is something to add again.
+  if (open && addable.length === 0) setOpen(false);
   return (
     <CardFooter className="flex flex-wrap items-center gap-3">
       {addable.length === 0 ? (
-        <p className="text-xs text-fg-3">{t("apps.addNothing")}</p>
+        <p className="text-xs text-fg-3">{t(none)}</p>
       ) : (
         <>
           <Button size="sm" aria-haspopup="dialog" onClick={() => setOpen(true)}>
@@ -442,26 +465,51 @@ function AddAppDialog(props: { space: Space; addable: BundledApp[]; open: boolea
   );
 }
 
+/** What adding an app the space removed brings back, as the owners' list counts it. */
+function restoreNote(entry: InstalledApp, t: Translate): string {
+  if (entry.rowCount === 0) return t("apps.addRestoreNone");
+  return entry.rowCount === 1 ? t("apps.addRestoreOne") : t("apps.addRestoreMany", { count: entry.rowCount });
+}
+
 /** Mounted each time the dialog opens, so that it starts from the first app and "only me for now". */
 function AddAppForm({ space, addable, onClose, title }: { space: Space; addable: BundledApp[]; onClose: () => void; title: string }) {
   const { locale, t } = useI18n();
   const name = useId();
   const add = useAddApp();
-  const [chosen, setChosen] = useState(addable[0]?.id ?? "");
+  const list = useSpaceApps(space);
+  const [chosenId, setChosenId] = useState(addable[0]?.id ?? "");
   const [memberAccess, setMemberAccess] = useState<MemberAccess>("none");
+  // The session is loaded again after a refusal; an app it no longer offers is not chosen.
+  const chosen = addable.find((app) => app.id === chosenId) ?? addable[0];
   const group = space.kind === "group";
+  const owner = space.role === "owner";
+  // Only an owner brings a removed app back (anyone else is turned down), and only an owner may read
+  // the list that says which were removed. Until it is known, nothing is added.
+  const known = !owner || list.data !== undefined;
+  const removed = (appId: string) => (owner ? list.data?.apps.find((entry) => entry.id === appId && entry.removedAt !== null) : undefined);
+  const restoring = chosen ? removed(chosen.id) !== undefined : false;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!addable.some((app) => app.id === chosen) || add.isPending) return;
-    add.mutate(
-      { install: { spaceId: space.id, appId: chosen }, memberAccess: group ? memberAccess : undefined },
-      { onSuccess: onClose },
-    );
+    if (!chosen || !known || add.isPending) return;
+    // Closed whether or not the dialog is still there when the session is loaded again.
+    add
+      .mutateAsync({ install: { spaceId: space.id, appId: chosen.id }, memberAccess: group ? memberAccess : undefined })
+      .then(onClose, () => undefined);
   };
 
+  // By the time a refusal shows, the session is loaded again, and the space says what it has.
   const failure = add.error ? failureCode(add.error) : null;
-  const refused = failure === "forbidden" || failure === "conflict";
+  const problem: PlainMessageKey | null =
+    failure === null
+      ? null
+      : failure === "not_found"
+        ? "apps.addGone"
+        : failure === "forbidden" || failure === "conflict"
+          ? owner
+            ? "apps.addConflict"
+            : "apps.addRefused"
+          : "apps.addFailed";
 
   return (
     <form onSubmit={submit} className="flex max-h-[calc(100dvh-34px)] flex-col">
@@ -469,26 +517,30 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
         <h2 className="text-md font-semibold">{title}</h2>
         <fieldset className="flex min-w-0 flex-col gap-1">
           <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("apps.addChoose")}</legend>
-          {addable.map((app) => (
-            <label
-              key={app.id}
-              className="flex min-w-0 cursor-pointer items-center gap-2.5 rounded-ctl border border-line px-2.5 py-2 has-checked:border-accent has-checked:bg-accent-soft"
-            >
-              <input
-                type="radio"
-                name={`${name}-app`}
-                value={app.id}
-                className={RADIO}
-                checked={chosen === app.id}
-                onChange={() => setChosen(app.id)}
-              />
-              <AppIcon icon={app.manifest.icon} color={app.manifest.color} />
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="font-medium">{pickLocalized(app.manifest.name, locale)}</span>
-                <span className="text-xs text-fg-3">{pickLocalized(app.manifest.description, locale)}</span>
-              </span>
-            </label>
-          ))}
+          {addable.map((app) => {
+            const entry = removed(app.id);
+            return (
+              <label
+                key={app.id}
+                className="flex min-w-0 cursor-pointer items-center gap-2.5 rounded-ctl border border-line px-2.5 py-2 has-checked:border-accent has-checked:bg-accent-soft"
+              >
+                <input
+                  type="radio"
+                  name={`${name}-app`}
+                  value={app.id}
+                  className={RADIO}
+                  checked={chosen?.id === app.id}
+                  onChange={() => setChosenId(app.id)}
+                />
+                <AppIcon icon={app.manifest.icon} color={app.manifest.color} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="font-medium">{pickLocalized(app.manifest.name, locale)}</span>
+                  <span className="text-xs text-fg-3">{pickLocalized(app.manifest.description, locale)}</span>
+                  {entry ? <span className="text-xs font-medium text-fg-2">{restoreNote(entry, t)}</span> : null}
+                </span>
+              </label>
+            );
+          })}
         </fieldset>
         {group ? (
           <fieldset className="flex min-w-0 flex-col gap-1.5">
@@ -509,15 +561,24 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
             <p className="text-xs text-fg-3">{t("apps.addWhoHint")}</p>
           </fieldset>
         ) : null}
-        {failure ? (
+        {owner && list.isError && !known ? (
+          <div role="alert" className="flex flex-wrap items-center gap-2">
+            <p className="text-xs text-down">{t("apps.addCheckFailed")}</p>
+            <Button size="sm" onClick={() => void list.refetch()}>
+              <RefreshCw size={14} aria-hidden="true" />
+              {t("apps.retry")}
+            </Button>
+          </div>
+        ) : null}
+        {problem ? (
           <p role="status" className="text-xs text-down">
-            {t(refused ? "apps.addRefused" : "apps.addFailed")}
+            {t(problem)}
           </p>
         ) : null}
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>{t("apps.cancel")}</Button>
-          <Button type="submit" variant="primary" disabled={add.isPending || chosen === ""}>
-            {t("apps.addConfirm")}
+          <Button type="submit" variant="primary" disabled={add.isPending || !chosen || !known}>
+            {t(restoring ? "apps.addRestoreConfirm" : "apps.addConfirm")}
           </Button>
         </div>
       </DialogBody>
