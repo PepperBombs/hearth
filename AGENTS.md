@@ -627,8 +627,10 @@ Things that bite:
   start) while the server stops listening, then closes the database,
   within 5 seconds whatever holds things up (`STOP_LIMIT_MS`, on the clock
   it was given). `src/serve.test.ts` holds all of this to it: no scheduler
-  with `HEARTH_JOBS=off`, the stand-in file as the way out, the wake from
-  both routes, the stop's order and its limit.
+  with `HEARTH_JOBS=off`, a scheduler that starts only once the server
+  listens (a job due before the start is not claimed until then, and never
+  by a server that cannot listen), the stand-in file as the way out, the
+  wake from both routes, the stop's order and its limit.
 - `main.ts` only hands the build's list of apps to `serveHearth`
   (`src/serve.ts`), which is the whole process: the settings and the apps
   checked before the database opens (status 1 for either), the

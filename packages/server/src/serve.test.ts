@@ -1,18 +1,20 @@
 /**
  * The server as a process runs it (src/serve.ts): what HEARTH_JOBS and
- * HEARTH_FETCH_STANDINS decide, the routes that wake the scheduler, a stop
- * that ends the run going on before the database is closed, and a whole
- * process, as main.ts starts one.
+ * HEARTH_FETCH_STANDINS decide, a scheduler that starts only once the
+ * server listens, the routes that wake it, a stop that ends the run going
+ * on before the database is closed, and a whole process, as main.ts starts
+ * one.
  *
- * The scheduler's clock moves only when told, so a job runs only when
- * something wakes the scheduler. The jobs' requests are answered by a file
- * of stand-ins, and the global fetch answers this machine alone: a request
- * that would leave it is refused and counted, so nothing reaches a network
- * whatever the wiring does.
+ * The scheduler's clock moves only when told, so a job runs only when it
+ * is due at the scheduler's first look or something wakes the scheduler
+ * after that. The jobs' requests are answered by a file of stand-ins, and
+ * the global fetch answers this machine alone: a request that would leave
+ * it is refused and counted, so nothing reaches a network whatever the
+ * wiring does.
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer, connect } from "node:net";
+import { createServer, connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,9 +23,12 @@ import { defineServer, FetchError, z } from "@hearth/sdk/server";
 import type { JobStatus, Session } from "@hearth/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BundledApp } from "./apps/registry";
+import { LONGEST_WAIT_MS } from "./apps/scheduler";
 import { fakeClock } from "./apps/test-clock";
+import { install } from "./apps/test-world";
 import type { Config } from "./config";
 import { migrate, openDatabase, type Db } from "./db/database";
+import { createUserWithPersonalSpace } from "./db/people";
 import { startServer, STOP_LIMIT_MS, unhandledRejectionLine, type RunningServer } from "./serve";
 import { FIXTURE_APPS, OWNER_EMAIL, testConfig } from "./testing";
 
@@ -91,8 +96,11 @@ afterEach(async () => {
   expect(outside).toEqual([]);
 });
 
-/** A server on this machine, at a port of its own, signed in as the owner. */
-async function start(overrides: Partial<Config> = {}): Promise<RunningServer> {
+/**
+ * A server on this machine, at a port of its own unless one is given,
+ * signed in as the owner: started, and not listening yet.
+ */
+function launch(overrides: Partial<Config> = {}): RunningServer {
   const config = testConfig({
     port: 0,
     dbPath: file,
@@ -104,10 +112,33 @@ async function start(overrides: Partial<Config> = {}): Promise<RunningServer> {
   });
   const log = (kind: string) => (line: string) => void lines.push(`${kind}: ${line}`);
   running = startServer({ config, db, apps: APPS, clock: fake.clock, log: { info: log("info"), warn: log("warn"), error: log("error") } });
-  const { port } = await running.listening;
-  base = `http://127.0.0.1:${port}`;
   return running;
 }
+
+/** Waits for a server to listen, and sends the tests' requests to it from then on. */
+async function listened(server: RunningServer): Promise<RunningServer> {
+  const { port } = await server.listening;
+  base = `http://127.0.0.1:${port}`;
+  return server;
+}
+
+/** A server on this machine, as `launch` makes it, once it listens. */
+const start = (overrides: Partial<Config> = {}): Promise<RunningServer> => listened(launch(overrides));
+
+/**
+ * The owner, with the sample headlines put in their personal space before
+ * any server starts: the job has never run there, so it is due as soon as
+ * a scheduler looks. Returns that space's ID.
+ */
+function headlinesDue(): string {
+  const owner = createUserWithPersonalSpace(db, { email: OWNER_EMAIL, locale: "en" });
+  const { id } = db.prepare("SELECT id FROM spaces WHERE created_by = ? AND kind = 'personal'").get(owner.id) as { id: string };
+  install(db, id, "headlines", owner.id);
+  return id;
+}
+
+/** Every run claimed so far, whatever became of it: a claim makes the job's row. */
+const claimed = () => db.prepare("SELECT app_id AS appId, job, last_started_at AS lastStartedAt FROM app_jobs").all();
 
 async function call<T>(method: string, address: string, body?: unknown): Promise<{ status: number; body: T }> {
   const response = await realFetch(`${base}${address}`, {
@@ -148,13 +179,43 @@ describe("HEARTH_JOBS", () => {
     expect(db.prepare("SELECT count(*) AS n FROM app_jobs").get()).toEqual({ n: 0 });
   });
 
-  it("on: a scheduler, which starts once the server listens", async () => {
-    const server = await start();
+  it("on: a scheduler, which starts once the server listens and then runs what was due before it started", async () => {
+    const spaceId = headlinesDue();
+    const server = launch();
     expect(server.scheduler).not.toBeNull();
+    // Started, not listening yet: nothing is claimed.
+    expect(claimed()).toEqual([]);
+
+    await listened(server);
+    // Nothing woke the scheduler: it found the job due when it started.
+    await vi.waitFor(async () => expect((await statusOf(spaceId, "headlines", "refresh")).lastSucceededAt).not.toBeNull(), soon);
     expect(lines.filter((line) => line.includes("Jobs are switched off"))).toEqual([]);
     expect(lines).toContain(
       `warn: Jobs reach no network (HEARTH_FETCH_STANDINS): every ctx.fetch is answered from the stand-ins in ${standIns}. This is for end-to-end tests only.`,
     );
+  });
+
+  it("on, but the server cannot listen: the scheduler never starts, and a job that is due is never claimed", async () => {
+    headlinesDue();
+    // Something else listens on the port already.
+    const taken = createServer();
+    await new Promise<void>((resolve) => taken.listen(0, "127.0.0.1", () => resolve()));
+    try {
+      const server = launch({ port: (taken.address() as AddressInfo).port });
+      expect(server.scheduler).not.toBeNull();
+      await expect(server.listening).rejects.toMatchObject({ code: "EADDRINUSE" });
+      // However long it waits: real time for whatever the process would start by itself, and the
+      // scheduler's own clock moved on past the longest it sleeps between two looks, ten times over.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await fake.advance(10 * LONGEST_WAIT_MS);
+      expect(claimed()).toEqual([]);
+      expect(lines.filter((line) => line.includes("is listening"))).toEqual([]);
+      // A server that never listened stops all the same, its database closed.
+      await server.stop();
+      expect(db.open).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => taken.close(() => resolve()));
+    }
   });
 });
 

@@ -48,9 +48,9 @@ export type Config = {
   groupPolicy: GroupPolicy;
   version: string;
   /**
-   * Whether main.ts starts the scheduler (src/apps/scheduler.ts). Off, no
-   * job runs; a job's status still answers, and a run asked for waits until
-   * jobs run again.
+   * Whether startServer (src/serve.ts) starts the scheduler
+   * (src/apps/scheduler.ts). Off, no job runs; a job's status still
+   * answers, and a run asked for waits until jobs run again.
    */
   jobs: JobsSwitch;
   /**

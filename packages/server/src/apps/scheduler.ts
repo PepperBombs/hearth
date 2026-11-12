@@ -19,10 +19,11 @@
  * after failures in a row 5, 10, 20 ... minutes, never more than the
  * interval (the backoff).
  *
- * Only main.ts makes one, when HEARTH_JOBS is "on", and starts it once the
- * server listens: createApp starts none, so tests run no job unless one
- * asks. It is given its clock, its randomness and its way out, so that its
- * tests neither wait nor reach a network.
+ * Only startServer (src/serve.ts, which main.ts runs) makes one, when
+ * HEARTH_JOBS is "on", and starts it once the server listens: createApp
+ * starts none, so tests run no job unless one asks. It is given its clock,
+ * its randomness and its way out, so that its tests neither wait nor reach
+ * a network.
  *
  * Design: docs/mini-app-contract.md, section C ("The scheduler",
  * "Switches"), and the owner's decision 15.
