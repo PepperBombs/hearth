@@ -1,8 +1,8 @@
 /**
- * Migration 2: the tables behind apps in spaces (docs/mini-app-contract.md,
- * section A5), tested as SQL. Nothing in the server writes to these tables
- * yet; the rules below are the ones the database itself keeps, whatever the
- * code above it does.
+ * Migrations 2 and 3: the tables behind apps in spaces
+ * (docs/mini-app-contract.md, section A5) and their jobs' status (section
+ * C, "Table"), tested as SQL. The rules below are the ones the database
+ * itself keeps, whatever the code above it does.
  */
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +19,7 @@ const all = (db: Db, sql: string, ...params: unknown[]) => db.prepare(sql).all(.
 const count = (db: Db, table: string, where = "1 = 1", ...params: unknown[]) =>
   (db.prepare(`SELECT count(*) AS n FROM ${table} WHERE ${where}`).get(...params) as { n: number })
     .n;
+const schema = (db: Db) => all(db, "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name");
 
 /** A database with two people, their personal spaces and one group. */
 function family() {
@@ -86,15 +87,25 @@ function addPrefs(db: Db, spaceId: string, appId: string, userId: string): void 
   ).run(spaceId, appId, userId);
 }
 
+/** A job's status in an install, as a run that went well leaves it. */
+function addJob(db: Db, spaceId: string, appId: string, job = "refresh"): void {
+  db.prepare(
+    `INSERT INTO app_jobs (space_id, app_id, job, next_run_at, last_started_at, last_succeeded_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(spaceId, appId, job, LATER, NOW, NOW);
+}
+
+/** The migrations up to this one, as an earlier release had them. */
+const upTo = (id: number) => MIGRATIONS.filter((migration) => migration.id <= id);
+
 describe("migration 2 on a database that migration 1 made", () => {
   it("applies with data in place and leaves that data as it was", () => {
     const path = join(mkdtempSync(join(tmpdir(), "hearth-migrate-")), "hearth.db");
-    const first = MIGRATIONS.filter((migration) => migration.id === 1);
 
     // What a server of the previous release leaves behind, written with the
     // statements that release used.
     let db = openDatabase(path);
-    expect(migrate(db, first).map((migration) => migration.id)).toEqual([1]);
+    expect(migrate(db, upTo(1)).map((migration) => migration.id)).toEqual([1]);
     const user = db.prepare(
       "INSERT INTO users (id, email, name, locale, theme, created_at) VALUES (?, ?, ?, ?, ?, ?)",
     );
@@ -123,12 +134,12 @@ describe("migration 2 on a database that migration 1 made", () => {
     };
     db.close();
 
-    // The new release starts on the same file.
+    // The release with migration 2 starts on the same file.
     db = openDatabase(path);
     try {
-      expect(migrate(db).map((migration) => migration.id)).toEqual([2]);
+      expect(migrate(db, upTo(2)).map((migration) => migration.id)).toEqual([2]);
       expect(all(db, "SELECT id, name FROM migrations ORDER BY id")).toEqual(
-        MIGRATIONS.map(({ id, name }) => ({ id, name })),
+        upTo(2).map(({ id, name }) => ({ id, name })),
       );
 
       expect(all(db, "SELECT * FROM users ORDER BY id")).toEqual(before.users);
@@ -164,17 +175,167 @@ describe("migration 2 on a database that migration 1 made", () => {
   });
 
   it("gives a new database the same schema as one migrated in two starts", () => {
-    const schema = (db: Db) =>
-      all(db, "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name");
     const inOneStart = openDatabase(":memory:");
     migrate(inOneStart);
     const inTwoStarts = openDatabase(":memory:");
-    migrate(
-      inTwoStarts,
-      MIGRATIONS.filter((migration) => migration.id === 1),
-    );
+    migrate(inTwoStarts, upTo(1));
     migrate(inTwoStarts);
     expect(schema(inTwoStarts)).toEqual(schema(inOneStart));
+  });
+
+  it("gives a new database the same schema as one migrated a release at a time", () => {
+    const inOneStart = openDatabase(":memory:");
+    migrate(inOneStart);
+    const releaseByRelease = openDatabase(":memory:");
+    for (const { id } of MIGRATIONS) {
+      expect(migrate(releaseByRelease, upTo(id)).map((migration) => migration.id)).toEqual([id]);
+    }
+    expect(schema(releaseByRelease)).toEqual(schema(inOneStart));
+  });
+});
+
+describe("migration 3 on a database that migration 2 made", () => {
+  it("applies with data in place, leaves that data as it was, and starts every job afresh", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "hearth-migrate-")), "hearth.db");
+
+    // What a server of the release before jobs leaves behind: people, a group,
+    // apps in spaces (one of them removed), their rows, settings, access,
+    // switches and an invitation, written with the statements that release used.
+    let db = openDatabase(path);
+    expect(migrate(db, upTo(2)).map((migration) => migration.id)).toEqual([1, 2]);
+    const user = db.prepare(
+      "INSERT INTO users (id, email, name, locale, theme, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    );
+    const space = db.prepare(
+      "INSERT INTO spaces (id, kind, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)",
+    );
+    const member = db.prepare(
+      "INSERT INTO space_members (space_id, user_id, role, can_add_apps, created_at) VALUES (?, ?, ?, ?, ?)",
+    );
+    user.run("u-sam", "sam@example.com", "Sam Example", "en", "dark", NOW);
+    user.run("u-lin", "lin@example.com", "Lin Example", "zh", "system", LATER);
+    space.run("s-sam", "personal", "", "u-sam", NOW);
+    space.run("s-lin", "personal", "", "u-lin", LATER);
+    space.run("family", "group", "Family", "u-sam", NOW);
+    member.run("s-sam", "u-sam", "owner", 0, NOW);
+    member.run("s-lin", "u-lin", "owner", 0, LATER);
+    member.run("family", "u-sam", "owner", 0, NOW);
+    member.run("family", "u-lin", "member", 1, LATER);
+    addApp(db, "family", "checklist", "u-sam");
+    addApp(db, "family", "feed", "u-lin");
+    db.prepare("UPDATE space_apps SET removed_at = ? WHERE space_id = 'family' AND app_id = 'feed'").run(LATER);
+    addRow(db, "row-1", "family", "checklist", "u-lin");
+    addRow(db, "row-2", "family", "feed", "u-sam");
+    addSettings(db, "family", "checklist", null, "u-sam");
+    addSettings(db, "family", "checklist", "u-lin", "u-lin");
+    addAccess(db, "family", "checklist", "u-lin", "u-sam");
+    addPrefs(db, "family", "checklist", "u-lin");
+    db.prepare(
+      "INSERT INTO space_invitations (space_id, email, role, invited_by, created_at) VALUES ('family', ?, 'member', ?, ?)",
+    ).run("kim@example.com", "u-sam", NOW);
+    const kept = [
+      "users",
+      "spaces",
+      "space_members",
+      "space_invitations",
+      "invitations",
+      "space_apps",
+      "app_rows",
+      "app_settings",
+      "app_access",
+      "app_prefs",
+    ];
+    const before = Object.fromEntries(kept.map((table) => [table, all(db, `SELECT * FROM ${table} ORDER BY rowid`)]));
+    expect(before.app_rows).toHaveLength(2);
+    db.close();
+
+    // The release with jobs starts on the same file.
+    db = openDatabase(path);
+    try {
+      expect(migrate(db).map((migration) => migration.id)).toEqual([3]);
+      expect(all(db, "SELECT id, name FROM migrations ORDER BY id")).toEqual(
+        MIGRATIONS.map(({ id, name }) => ({ id, name })),
+      );
+      for (const table of kept) {
+        expect(all(db, `SELECT * FROM ${table} ORDER BY rowid`), table).toEqual(before[table]);
+      }
+      // No job has run anywhere yet: each runs at once, and its row is made then.
+      expect(count(db, "app_jobs")).toBe(0);
+      expect(all(db, "PRAGMA foreign_key_check")).toEqual([]);
+      expect(db.pragma("integrity_check", { simple: true })).toBe("ok");
+
+      // The old rows can be built on: a job's status for each install from before,
+      // which follows its app when it moves and goes when the app's data is deleted.
+      addJob(db, "family", "checklist");
+      addJob(db, "family", "feed");
+      // As moveApp does: what is about Lin, who is not in Sam's own space, goes first.
+      for (const table of ["app_access", "app_prefs", "app_settings"]) {
+        db.prepare(`DELETE FROM ${table} WHERE app_id = 'checklist' AND user_id = 'u-lin'`).run();
+      }
+      db.prepare("UPDATE space_apps SET space_id = 's-sam' WHERE space_id = 'family' AND app_id = 'checklist'").run();
+      expect(all(db, "SELECT space_id AS spaceId, app_id AS appId FROM app_jobs ORDER BY app_id")).toEqual([
+        { spaceId: "s-sam", appId: "checklist" },
+        { spaceId: "family", appId: "feed" },
+      ]);
+      db.prepare("DELETE FROM app_rows WHERE space_id = 'family' AND app_id = 'feed'").run();
+      db.prepare("DELETE FROM space_apps WHERE space_id = 'family' AND app_id = 'feed'").run();
+      expect(all(db, "SELECT app_id AS appId FROM app_jobs")).toEqual([{ appId: "checklist" }]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("app_jobs", () => {
+  let f: ReturnType<typeof family>;
+  beforeEach(() => {
+    f = family();
+    addApp(f.db, f.family, "checklist", f.sam.id);
+  });
+
+  const set = (assignments: string) =>
+    f.db.prepare(`UPDATE app_jobs SET ${assignments} WHERE space_id = 'family' AND app_id = 'checklist'`).run();
+
+  it("holds one row for each job of an app in a space", () => {
+    addJob(f.db, f.family, "checklist", "refresh");
+    addJob(f.db, f.family, "checklist", "tidy");
+    expect(() => addJob(f.db, f.family, "checklist", "refresh")).toThrow(/UNIQUE|PRIMARY KEY/);
+    expect(count(f.db, "app_jobs")).toBe(2);
+  });
+
+  it("is refused for an app the space does not have", () => {
+    for (const [spaceId, appId] of [
+      [f.family, "feed"],
+      [f.linsSpace, "checklist"],
+      ["nowhere", "checklist"],
+    ] as const) {
+      expect(() => addJob(f.db, spaceId, appId)).toThrow(/FOREIGN KEY/);
+    }
+  });
+
+  it("holds a run's ID and its time together, failures that are not below zero and a short error", () => {
+    addJob(f.db, f.family, "checklist");
+    set("run_id = 'run-1', run_until = '2026-02-01T00:06:00.000Z'");
+    expect(() => set("run_id = NULL")).toThrow(/CHECK/);
+    expect(() => set("run_until = NULL")).toThrow(/CHECK/);
+    set("run_id = NULL, run_until = NULL");
+    expect(() => set("run_id = 'run-2'")).toThrow(/CHECK/);
+
+    expect(() => set("failures = -1")).toThrow(/CHECK/);
+    set("failures = 3");
+    set(`last_error = '${"x".repeat(200)}'`);
+    expect(() => set(`last_error = '${"x".repeat(201)}'`)).toThrow(/CHECK/);
+    // Characters, not bytes: two hundred Chinese ones fit.
+    set(`last_error = '${"错".repeat(200)}'`);
+    expect(() => set("next_run_at = NULL")).toThrow(/NOT NULL/);
+  });
+
+  it("stays when the app is removed, and goes with the app's entry", () => {
+    addJob(f.db, f.family, "checklist");
+    f.db.prepare("UPDATE space_apps SET removed_at = ? WHERE space_id = 'family' AND app_id = 'checklist'").run(LATER);
+    expect(count(f.db, "app_jobs")).toBe(1);
+    f.db.prepare("DELETE FROM space_apps WHERE space_id = 'family' AND app_id = 'checklist'").run();
+    expect(count(f.db, "app_jobs")).toBe(0);
   });
 });
 
@@ -366,6 +527,8 @@ describe("rows that belong to an app in a space", () => {
     addSettings(db, f.family, "checklist", sam.id, sam.id);
     addPrefs(db, f.family, "checklist", sam.id);
     addAccess(db, f.family, "feed", lin.id, sam.id);
+    addJob(db, f.family, "checklist");
+    addJob(db, f.family, "feed");
 
     db.prepare(
       "UPDATE space_apps SET space_id = ? WHERE space_id = ? AND app_id = 'checklist'",
@@ -385,6 +548,11 @@ describe("rows that belong to an app in a space", () => {
     ]);
     expect(where("app_prefs")).toEqual([{ space_id: f.samsSpace, app_id: "checklist" }]);
     expect(where("app_access")).toEqual([{ space_id: f.family, app_id: "feed" }]);
+    // A job's status follows its app, with how its runs went.
+    expect(all(db, "SELECT space_id, app_id, job, last_succeeded_at FROM app_jobs ORDER BY app_id")).toEqual([
+      { space_id: f.samsSpace, app_id: "checklist", job: "refresh", last_succeeded_at: NOW },
+      { space_id: f.family, app_id: "feed", job: "refresh", last_succeeded_at: NOW },
+    ]);
     expect(all(db, "PRAGMA foreign_key_check")).toEqual([]);
   });
 
@@ -457,13 +625,15 @@ describe("rows that belong to an app in a space", () => {
       expect(count(f.db, "space_apps", "app_id = 'checklist'")).toBe(0);
     });
 
-    it("but not by access rows or a person's switch, which go with it", () => {
+    it("but not by access rows, a person's switch or a job's status, which go with it", () => {
       addAccess(f.db, f.family, "checklist", f.lin.id, f.sam.id);
       addPrefs(f.db, f.family, "checklist", f.lin.id);
+      addJob(f.db, f.family, "checklist");
       remove();
       expect(count(f.db, "space_apps", "app_id = 'checklist'")).toBe(0);
       expect(count(f.db, "app_access")).toBe(0);
       expect(count(f.db, "app_prefs")).toBe(0);
+      expect(count(f.db, "app_jobs")).toBe(0);
     });
   });
 
@@ -584,7 +754,7 @@ describe("every table that belongs to an app in a space", () => {
       const columns = (db.pragma(`table_info(${table})`) as { name: string }[]).map((c) => c.name);
       return table !== "space_apps" && columns.includes("space_id") && columns.includes("app_id");
     });
-    expect(scoped.sort()).toEqual(["app_access", "app_prefs", "app_rows", "app_settings"]);
+    expect(scoped.sort()).toEqual(["app_access", "app_jobs", "app_prefs", "app_rows", "app_settings"]);
 
     for (const table of scoped) {
       const keys = db.pragma(`foreign_key_list(${table})`) as {
