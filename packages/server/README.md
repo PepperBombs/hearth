@@ -183,6 +183,8 @@ app.
 | `PATCH /api/spaces/:spaceId/apps/:appId/settings` | yes | Saves the settings named in `{ space?, user? }`; answers like the `GET`. `space` needs edit access, `user` only view. |
 | `POST /api/spaces/:spaceId/apps/:appId/q/:name` | yes | Runs the app's query of that name. Takes `{ input? }`; answers `{ output }`. Needs view access. |
 | `POST /api/spaces/:spaceId/apps/:appId/m/:name` | yes | Runs the app's mutation of that name. Takes `{ input? }`; answers `{ output }`, or `{}` when it returns nothing. Needs edit access. |
+| `GET /api/spaces/:spaceId/apps/:appId/jobs/:job` | yes | How the app's job of that name went in this space: `{ lastStartedAt, lastSucceededAt, lastFailedAt, lastError, nextRunAt, state }`, `state` being `idle`, `requested` or `running`. Needs view access. |
+| `POST /api/spaces/:spaceId/apps/:appId/jobs/:job/run` | yes | Asks for a run now. No body. Answers `202` with the status, as the `GET`. Needs edit access. |
 
 Every failure has the shape `{ error: { code, message } }`. The message is
 English text for logs and network traces; the web app chooses what to show
@@ -488,8 +490,9 @@ one asks.
   asks who may use the app.
 - With nothing due it sleeps until the next job is due, at most 30
   seconds, so that a change made by another process sharing the database
-  is seen within that. Adding an app to a space or bringing one back wakes
-  it at once (`wakeJobs`, which `main.ts` hands `createApp`).
+  is seen within that. Adding an app to a space or bringing one back, and
+  a run asked for, wake it at once (`wakeJobs`, which `main.ts` hands
+  `createApp`).
 - Timing is the runs': at most 5 minutes each, the next an interval to a
   tenth more after a run that went well, and 5, 10, 20 ... minutes after
   failures in a row, never more than the interval.
@@ -511,10 +514,14 @@ was. `jobStatus` says how its runs went, for anyone who may see the app:
 when the last run started, the last one went well and the last one went
 wrong, the last error, the next run, and `running`, `requested` or
 `idle`. Both answer `404` when the app is not there for the person, has no
-server file or has no job of that name, and `requestRun` then `403` for
-someone who may only view. The routes that call them come in a later
-step; the one that asks for a run will wake the scheduler, as adding an
-app does.
+server file or has no job of that name (a query's or a mutation's name
+included), and `requestRun` then `403` for someone who may only view.
+The two routes of a job call them (`GET .../jobs/:job` and `POST
+.../jobs/:job/run`, which answers `202`); the second wakes the scheduler
+when a run was asked for, as adding an app does. With
+`HEARTH_FETCH_STANDINS` the gap after the last run's start is 5 seconds
+instead of 5 minutes (`requestGapFor`), so that an end-to-end test can
+ask for two runs in a row.
 
 **Outgoing connections.** The server reaches out to two kinds of host:
 Cloudflare Access, for the keys that sign its identity header

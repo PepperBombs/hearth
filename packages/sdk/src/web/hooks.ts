@@ -15,26 +15,28 @@
  * }
  * ```
  *
- * `appHooks` is called once, at the top of the file, so that the three hooks
- * are plain names that begin with "use". Its type argument is what the app's
- * `server.ts` exports (imported with `import type`, so that none of the
- * server's code reaches the browser), or the manifest for an app without a
- * server file. From it follow the names of the routes, what each takes and
- * answers, the message keys of `t` and the type of `settings`.
+ * `appHooks` is called once, at the top of the file, so that the hooks are
+ * plain names that begin with "use" (`useJob` too, for an app with a job).
+ * Its type argument is what the app's `server.ts` exports (imported with
+ * `import type`, so that none of the server's code reaches the browser), or
+ * the manifest for an app without a server file. From it follow the names
+ * of the routes and jobs, what each route takes and answers, the message
+ * keys of `t` and the type of `settings`.
  *
  * The hooks hold no logic: they read what the shell put around the widget
  * (see ./scope.ts). An app never builds an address and never sees a space
  * ID; the shell knows which app in which space it is drawing.
  *
- * Design: docs/mini-app-contract.md, section A4.
+ * Design: docs/mini-app-contract.md, section A4, and for `useJob` section C
+ * ("Hooks").
  */
 import { useContext } from "react";
 import type { Locale, SettingsOf, SpaceKind, Translate } from "../index";
-import type { AppLike, InputArgs, JobName, MutationName, Output, QueryName } from "../routes";
+import type { AppLike, InputArgs, JobName, JobState, MutationName, Output, QueryName } from "../routes";
 import { AppScopeContext, type AppScopeValue } from "./scope";
 
 // The route types are shared with @hearth/sdk/testing, which cannot load React.
-export type { AppLike, InputArgs, JobName, MutationName, Output, QueryName };
+export type { AppLike, InputArgs, JobName, JobState, MutationName, Output, QueryName };
 
 /** What `useApp()` gives a widget or page. */
 export type AppContext<S> = {
@@ -75,7 +77,7 @@ export type MutationResult<S, K> = {
   error: { code: string } | null;
 };
 
-/** The three hooks, typed for one app. */
+/** The hooks, typed for one app. */
 export type AppHooks<S> = {
   /** What the widget is being drawn for: the reader, the space, the settings and `t`. */
   useApp(): AppContext<S>;
@@ -89,6 +91,15 @@ export type AppHooks<S> = {
   useQuery<K extends QueryName<S>>(name: K, ...input: InputArgs<S, K>): Output<S, K>;
   /** A way to call one of the app's mutations. Nothing is sent until `run` is called. */
   useMutation<K extends MutationName<S>>(name: K): MutationResult<S, K>;
+  /**
+   * How one of the app's jobs is doing here: when its last run went well
+   * and whether the last one failed, whether one is going on, and a way to
+   * ask for one now. The component waits (suspends) for the first status,
+   * as for a query. It is read again with the queries, every 3 seconds
+   * while a run is going on or asked for, and once a run went well, every
+   * query of the app is read again, so the new data shows by itself.
+   */
+  useJob<K extends JobName<S>>(name: K): JobState;
 };
 
 function useScope(): AppScopeValue {
@@ -103,12 +114,13 @@ const HOOKS = {
   useApp: () => useScope().app,
   useQuery: (name: string, input?: unknown) => useScope().useQuery(name, input),
   useMutation: (name: string) => useScope().useMutation(name),
+  useJob: (name: string) => useScope().useJob(name),
 };
 
 /**
  * The hooks for one app. `S` is `typeof server` (the default export of the
  * app's `server.ts`) or, for an app without one, `typeof manifest`; then
- * there are no queries or mutations to name.
+ * there are no queries, mutations or jobs to name.
  */
 export function appHooks<S extends AppLike>(): AppHooks<S> {
   return HOOKS as unknown as AppHooks<S>;

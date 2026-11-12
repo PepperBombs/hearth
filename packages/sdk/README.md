@@ -15,7 +15,7 @@ them, runs their tests, runs Hearth with them and starts new ones.
 | Import | Holds | For |
 |---|---|---|
 | `@hearth/sdk` | `defineApp`, the manifest types (`Manifest`, `Setting`, `Localized`), `SettingsOf` and `SpaceSettingsOf`, the message types (`MessageKey`, `PlaceholderArgs`, `Translate`), the lists `APP_ICONS` and `APP_COLORS`, `APP_ID_PATTERN`, `SDK_VERSION`. Imports nothing. | Mini-apps and the framework. |
-| `@hearth/sdk/web` | `appHooks`, which gives a widget or page `useApp`, `useQuery` and `useMutation`, and their types (`AppHooks`, `AppContext`, `MutationResult`, `QueryName`, `MutationName`, `JobName`, `InputArgs`, `Output`, `AppLike`). The UI kit: `Button`, `IconButton`, `Input`, `Field`, `Switch`, `Checkbox`, `Chip`, `Tag`, `Segmented`, `Rows`, `Row`, `EmptyState`, `Dialog`, `DialogBody`, `Icon`, and the class helpers `buttonClass` and `chipClass`. | A mini-app's widget and page; the kit also the shell. |
+| `@hearth/sdk/web` | `appHooks`, which gives a widget or page `useApp`, `useQuery`, `useMutation` and `useJob`, and their types (`AppHooks`, `AppContext`, `MutationResult`, `JobState`, `QueryName`, `MutationName`, `JobName`, `InputArgs`, `Output`, `AppLike`). The UI kit: `Button`, `IconButton`, `Input`, `Field`, `Switch`, `Checkbox`, `Chip`, `Tag`, `Segmented`, `Rows`, `Row`, `EmptyState`, `Dialog`, `DialogBody`, `Icon`, and the class helpers `buttonClass` and `chipClass`. | A mini-app's widget and page; the kit also the shell. |
 | `@hearth/sdk/server` | `defineServer`, `AppError`, `FetchError`, `z` (the one zod that mini-apps use), the types of a handler's context and of rows and collections (`QueryCtx`, `MutationCtx`, `Row`, `ReadCollection`, `Collection`, `Json`, `InputOf`, `OutputOf`), and those of a job (`JobAbout`, `Job`, `JobCtx`, `FetchInit`, `FetchResponse`, `FetchErrorCode`). | A mini-app's `server.ts`. |
 | `@hearth/sdk/testing` | `testApp`, which puts an app in a space of a database of its own and calls its routes as people in it, `AppCallError`, and their types (`TestApp`, `TestCaller`, `TestPerson`, `TestAppOptions`). | A mini-app's tests (`*.test.ts`). |
 | `@hearth/sdk/testing/host` | `provideTestApp`: how the framework hands `testApp` its implementation. | The framework only. |
@@ -272,9 +272,9 @@ The manifest of this app lists `network: ["feeds.example.com"]`.
   fail, and what it did is undone. Work cannot call `ctx.read` or
   `ctx.write` itself: do it all in one.
 - **A job is not a route.** `useQuery`, `useMutation` and a test's `query`
-  and `mutation` cannot name it (`JobName<typeof server>` names an app's
-  jobs), and the server answers 404 when one is asked for as a query or a
-  mutation.
+  and `mutation` cannot name it, only `useJob` can (`JobName<typeof
+  server>` names an app's jobs), and the server answers 404 when one is
+  asked for as a query or a mutation.
 - **When it runs.** The server's scheduler runs a job in each space the
   app is in: the first time as soon as the app is added there, then about
   every `everyMinutes`, as above. It runs one job at a time on the whole
@@ -282,6 +282,10 @@ The manifest of this app lists `network: ["feeds.example.com"]`.
   for many pages, puts the others off. A server with `HEARTH_JOBS=off`
   runs none. `pnpm dev` runs them, and `ctx.fetch` there reaches the real
   hosts the manifest names.
+- **Someone with edit access may ask for a run now** ("Refresh now", with
+  `useJob` in the widget, below). It starts at once, or 5 minutes after
+  the last run started, never sooner, so asking again and again cannot
+  hammer a host. Anyone who can see the app may read how the runs went.
 
 ## A widget and a page
 
@@ -346,6 +350,42 @@ export default function Widget() {
   rejects when the change was not made; the shell tells the person, so a
   caller that does not wait for it need not catch it. Disable what calls a
   mutation when `canEdit` is false: the server refuses it then.
+- **`useJob(name)`** says how one of the app's jobs is doing in this
+  space, for "Updated 12 min ago", a banner when the last run failed, and
+  "Refresh now". It gives `succeededAt` (when the last run that went well
+  ended: the data is from then; null before the first), `failedAt` (when
+  the last run ended, if it went wrong; null otherwise), `running` (a run
+  is going on, or was asked for and has not started: show
+  "Refreshing…"), `canRun` (edit access), `run()` and `pending`. The
+  times are ISO strings: read them with `new Date(...)`. The component
+  waits (suspends) for the first status, as for a query. The status is
+  read again with the queries, and every 3 seconds while `running`; once
+  a run went well, every query of the app here is read again before the
+  new status shows, so the screen never says "Updated just now" beside
+  the old data. `run()` asks for a run and resolves once the server has
+  the request (`running` is true by then), not when the run is done; it
+  is refused and reported as a mutation is. Why a run failed is not
+  given: the server keeps that message, in English, for its logs, and
+  what a person reads comes from the app's own strings.
+
+  ```tsx
+  const { useApp, useJob } = appHooks<typeof server>();
+
+  function Refresh() {
+    const { t } = useApp();
+    const refresh = useJob("refresh");
+    return (
+      <div>
+        {refresh.failedAt !== null ? <p>{t("failed")}</p> : null}
+        {refresh.canRun ? (
+          <Button disabled={refresh.running || refresh.pending} onClick={() => void refresh.run()}>
+            {refresh.running ? t("refreshing") : t("refresh")}
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
+  ```
 - When any call answers that the app is not there (it was removed or moved
   to another space, or the person's access was taken away), the shell loads
   the session again and the card or page goes with the app.

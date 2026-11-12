@@ -114,25 +114,31 @@ end-to-end tests; C4, running a job
 (`packages/server/src/apps/jobs.ts`): migration 3's table `app_jobs`, a
 run claimed, run with its `ctx` and its five minutes, and recorded with
 the backoff and the jitter, and the work behind asking for a run and
-reading a job's status, which the routes of C6 will call; and C5, the
-scheduler (`packages/server/src/apps/scheduler.ts`), which `main.ts`
-starts once the server listens: due jobs one at a time across the
-server, the one that fell due first first, a sleep of at most 30 seconds
-that adding an app or bringing one back cuts short, and a stop that ends
-the run going on before the database closes; and `HEARTH_JOBS`, which
-switches jobs off, as the deploy's trial start and every end-to-end
-server do. The document's last two sections, the questions behind
+reading a job's status; C5, the scheduler
+(`packages/server/src/apps/scheduler.ts`), which `main.ts` starts once
+the server listens: due jobs one at a time across the server, the one
+that fell due first first, a sleep of at most 30 seconds that adding an
+app or bringing one back cuts short, and a stop that ends the run going
+on before the database closes; and `HEARTH_JOBS`, which switches jobs
+off, as the deploy's trial start and every end-to-end server do; and C6,
+a job's two routes (`GET .../jobs/:job`, its status for anyone who can
+see the app, and `POST .../jobs/:job/run`, a run asked for with edit, at
+most one every 5 minutes, or 5 seconds with stand-ins), `jobStatusSchema`
+and `jobStateOf` in `@hearth/shared`, and `useJob` in `appHooks`, which
+`<AppScope>` fills: the status, read every 3 seconds while a run is going
+on or asked for, the app's queries read again when a run went well, and
+`run()`. The document's last two sections, the questions behind
 decisions 1 to 5 and the risks, are D and E.
 
 ## Layout and commands
 
 | Folder | Holds |
 |---|---|
-| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. Every route of the mini-app contract's section A8 is built. |
-| `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too, and `appHooks` (`src/web/hooks.ts`), the hooks a widget or page is written with. `@hearth/sdk/web/scope` is the React context those hooks read, which the shell fills; for the framework only. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer` (queries, mutations and jobs), `AppError`, `FetchError`, `z`, the types of a handler's `ctx` and those of a job's (`JobCtx`, `FetchInit`, `FetchResponse`); it holds no logic. `@hearth/sdk/testing` (`src/testing.ts`) is what an app's tests are written with: `testApp`, `AppCallError` and their types; it holds no logic, only the hand-over to what the framework installs through `@hearth/sdk/testing/host` (`src/testing-host.ts`, for the framework only). `src/routes.ts` holds the types that name an app's routes and jobs (`QueryName`, `MutationName`, `JobName`), shared by the hooks and the tests and exported from `@hearth/sdk/web`. `@hearth/sdk/manifest-schema` is the run-time check of a manifest and of a setting's value (`settingValueProblems`), for the framework only. `bin/hearth-apps.mjs` and `tools` are the `hearth-apps` command, plain JavaScript: `sync.mjs` (finds the apps, the version handshake, writes the generated lists), `import-scan.mjs` (what a file of an app may import), `default-export.mjs` (whether `widget.tsx`, `page.tsx` and `server.ts` have the default export the generated lists import), `check.mjs`, `test.mjs` (runs the apps' tests), `dev.mjs` (the dev servers with the apps in), `new.mjs` (a new app, copied from the sample checklist), `eslint-boundary.mjs`. `@hearth/sdk/eslint` (`eslint.js`) and `tsconfig.app.json` are the ESLint and TypeScript configuration of a mini-apps repository. Imports no other Hearth package. |
-| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file, its jobs included), `installs.ts` (who may use which app where; add, remove, bring back, move to another space, delete data, each person's switch and pin), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db` and the `db` a job's work gets, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds, a handler's and a job's), `fetch.ts` (`ctx.fetch`: the rules, the pace, Node's transport and the stand-in file; `outboundFor` picks the last two from the settings), `jobs.ts` (running a job: `claimRun`, the run (`runClaimed`), `recordRun`, and `runOnce`, which does the three; `nextJob`, which job falls due first; `requestRun` and `jobStatus`; the only SQL for `app_jobs`), `scheduler.ts` (the scheduler: due jobs one at a time, through `runOnce`; `start`, `wake` and `stop`; only `main.ts` makes one), `routes.ts`, `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports), `check-bundle.ts` (run by `hearth-apps check`, not by the server), `test-world.ts` and `test-clock.ts` (a world of people, spaces and apps, and a clock that moves only when told, for the server's tests), and `app-testing.ts` with `app-testing.setup.ts` (the implementation of `testApp` for an app's own tests, which `vitest.apps.config.ts` at the package's root installs; not part of the server). `installs.ts` also holds the owners' list of a space's apps (`listSpaceApps`) and the access route's work (`setAppAccess`). `src/groups` is groups and their people: `policy.ts` (`groupRights`: who may create groups and invite), `members.ts` (create, rename, add or invite, change, remove or leave, take an invitation back) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
+| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. Every route of the mini-app contract's section A8 is built, and a job's two routes of section C. Besides schemas it holds one function, `jobStateOf`: what a job's status means to the people who see the app. |
+| `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too, and `appHooks` (`src/web/hooks.ts`), the hooks a widget or page is written with (`useApp`, `useQuery`, `useMutation`, `useJob`). `@hearth/sdk/web/scope` is the React context those hooks read, which the shell fills; for the framework only. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer` (queries, mutations and jobs), `AppError`, `FetchError`, `z`, the types of a handler's `ctx` and those of a job's (`JobCtx`, `FetchInit`, `FetchResponse`); it holds no logic. `@hearth/sdk/testing` (`src/testing.ts`) is what an app's tests are written with: `testApp`, `AppCallError` and their types; it holds no logic, only the hand-over to what the framework installs through `@hearth/sdk/testing/host` (`src/testing-host.ts`, for the framework only). `src/routes.ts` holds the types that name an app's routes and jobs (`QueryName`, `MutationName`, `JobName`) and `JobState`, what `useJob` gives, shared by the hooks and the tests and exported from `@hearth/sdk/web`. `@hearth/sdk/manifest-schema` is the run-time check of a manifest and of a setting's value (`settingValueProblems`), for the framework only. `bin/hearth-apps.mjs` and `tools` are the `hearth-apps` command, plain JavaScript: `sync.mjs` (finds the apps, the version handshake, writes the generated lists), `import-scan.mjs` (what a file of an app may import), `default-export.mjs` (whether `widget.tsx`, `page.tsx` and `server.ts` have the default export the generated lists import), `check.mjs`, `test.mjs` (runs the apps' tests), `dev.mjs` (the dev servers with the apps in), `new.mjs` (a new app, copied from the sample checklist), `eslint-boundary.mjs`. `@hearth/sdk/eslint` (`eslint.js`) and `tsconfig.app.json` are the ESLint and TypeScript configuration of a mini-apps repository. Imports no other Hearth package. |
+| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file, its jobs included), `installs.ts` (who may use which app where; add, remove, bring back, move to another space, delete data, each person's switch and pin), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db` and the `db` a job's work gets, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds, a handler's and a job's), `fetch.ts` (`ctx.fetch`: the rules, the pace, Node's transport and the stand-in file; `outboundFor` picks the last two from the settings), `jobs.ts` (running a job: `claimRun`, the run (`runClaimed`), `recordRun`, and `runOnce`, which does the three; `nextJob`, which job falls due first; `requestRun` and `jobStatus`; the only SQL for `app_jobs`), `scheduler.ts` (the scheduler: due jobs one at a time, through `runOnce`; `start`, `wake` and `stop`; only `main.ts` makes one), `routes.ts` (every route about apps in a space, a job's status and a run asked for among them), `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports), `check-bundle.ts` (run by `hearth-apps check`, not by the server), `test-world.ts` and `test-clock.ts` (a world of people, spaces and apps, and a clock that moves only when told, for the server's tests), and `app-testing.ts` with `app-testing.setup.ts` (the implementation of `testApp` for an app's own tests, which `vitest.apps.config.ts` at the package's root installs; not part of the server). `installs.ts` also holds the owners' list of a space's apps (`listSpaceApps`) and the access route's work (`setAppAccess`). `src/groups` is groups and their people: `policy.ts` (`groupRights`: who may create groups and invite), `members.ts` (create, rename, add or invite, change, remove or leave, take an invitation back) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file, a widget, a page and tests of its own (`checklist.test.ts`, written with `testApp`), and is the template `hearth-apps new` copies; `feed` a manifest and a widget, no server file. |
-| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card, the avatar and `LinkedText` in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes and settings, and adding, removing, moving, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, moving, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page, with the dialogs that add, move and remove an app; the one that adds names the hosts an app's manifest lists in `network`. `src/groups` is the groups' cards in Settings: `groups.tsx` (the cards, creating, renaming, leaving), `people.tsx` (the people, adding, the dialog for one person, invitations), `access-table.tsx` (the member-by-app table), `api.ts` and `queries.ts`. |
+| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card, the avatar and `LinkedText` in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes, settings and jobs' statuses, a run asked for, and adding, removing, moving, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, moving, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page, with the dialogs that add, move and remove an app; the one that adds names the hosts an app's manifest lists in `network`. `src/groups` is the groups' cards in Settings: `groups.tsx` (the cards, creating, renaming, leaving), `people.tsx` (the people, adding, the dialog for one person, invitations), `access-table.tsx` (the member-by-app table), `api.ts` and `queries.ts`. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). `servers.ts` holds the addresses, the people and the command that starts a copy of the built server. `e2e/mini-apps` holds the tests of mini-apps from another repository, one file per app named after its ID (`grocery.spec.ts`), which `playwright.mini-apps.config.ts` runs against Hearth built with them. |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Each release is built with the mini-apps of `APPS_REPO` at the same moment, copied in beside the framework and linked to its SDK. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
 | `.github/workflows` | `ci.yml`: the framework by itself (`check`), end to end with the sample apps (`e2e`), and with `main` of `hearth-stones` checked out beside it, checked, built and end to end (`mini-apps`). |
@@ -280,6 +286,18 @@ Things that bite:
   the reloaded session still lists it. Everything cached for one
   install starts with `installQueryKey`, so invalidating that key refreshes
   the whole app.
+- A job's status (`useJob`) is read with the queries, and every 3 seconds
+  (`RUNNING_REFRESH_MS`) while a run is going on or was asked for, which
+  includes one waiting out its 5 minutes. When a status that has just
+  come names a later run that went well than the cached one, `<AppScope>`
+  reads the app's queries again and waits for them before it shows that
+  status, so the data is never older than "Updated ..." says. `run()`
+  shows the `POST`'s answer, after calling off a reading on its way that
+  would put the job back as it was; a refused `run()` goes through the
+  mutations' own `afterFailedChange`. What a status means (`failedAt`
+  only when the last run to end failed, `running` for `running` and
+  `requested`) is `jobStateOf` in `@hearth/shared`; read it there, never
+  again by hand.
 - `@hearth/sdk/web/scope` is for the framework: the import scan refuses it
   in a mini-app (only the exact names in `import-scan.mjs` are allowed).
   The hooks of `appHooks` are one shared object whatever the type argument,
@@ -516,10 +534,11 @@ Things that bite:
   seconds), so that a change made by another process sharing the
   database is seen within that. Its `wake` cuts the sleep short:
   `createApp` takes it as `wakeJobs`, and the route that adds an app or
-  brings one back calls it; the route that asks for a run (C6) must call
-  it too. On SIGTERM or SIGINT `main.ts` stops the scheduler first (the
-  run going on ends at once, its job due again at the next start), then
-  closes the database, within 5 seconds whatever holds things up.
+  brings one back calls it, as does the route that asks for a run when
+  the run was asked for (not during a run). On SIGTERM or SIGINT
+  `main.ts` stops the scheduler first (the run going on ends at once, its
+  job due again at the next start), then closes the database, within 5
+  seconds whatever holds things up.
 - Nothing automated starts a real server with jobs that may reach a real
   host. `HEARTH_JOBS=off` switches them off (`jobs` in the config, `on` or
   `off` only): `realServerCommand` (`e2e/servers.ts`) gives it to every
@@ -530,11 +549,16 @@ Things that bite:
   server gives stand-ins instead (`HEARTH_FETCH_STANDINS`). `pnpm dev`
   runs jobs against the real hosts their manifests name (owner's decision
   15).
-- `requestRun` and `jobStatus` (`jobs.ts`) hold the checks of the routes
-  that C6 adds: 404 when `resolveInstall` gives null, the app has no
+- `requestRun` and `jobStatus` (`jobs.ts`) hold the checks of a job's two
+  routes (`GET .../jobs/:job`, `POST .../jobs/:job/run`, in
+  `apps/routes.ts`): 404 when `resolveInstall` gives null, the app has no
   server file or no job of that name, then 403 for a run asked for with
   view. A run asked for starts at once, or 5 minutes after the last one
-  started, never sooner, and nothing changes during a run.
+  started, never sooner, and nothing changes during a run. The gap is
+  `requestGapFor(config)`, which `createApp` hands the routes: 5 seconds
+  (`STAND_IN_REQUEST_GAP_MS`) when `HEARTH_FETCH_STANDINS` is set, so
+  that an end-to-end test can ask twice. Their answer's shape is
+  `jobStatusSchema` in `@hearth/shared`.
 - `ctx.fetch` is `fetchFor` in `packages/server/src/apps/fetch.ts`, in
   three parts. The rules, at every request: GET to https on the default
   port, no user name or password, a host the manifest lists exactly;

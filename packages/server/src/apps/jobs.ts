@@ -23,7 +23,8 @@
  * `runOnce` does the three in order: the scheduler (scheduler.ts) and an
  * app's own tests run jobs through it. `nextJob` is what the scheduler asks
  * which job to run next. `requestRun` and `jobStatus` are what a person may
- * do and see: ask for a run now (edit), and read how the runs went (view).
+ * do and see: ask for a run now (edit), and read how the runs went (view),
+ * through the two routes of routes.ts.
  *
  * The table is `app_jobs` (migration 3), whose SQL is in this file only.
  * An app's rows and settings are still read and written by store.ts, one
@@ -34,7 +35,8 @@
  * "Running a job"), and the owner's decisions 14 and 15.
  */
 import type { Job } from "@hearth/sdk/server";
-import type { SettingValue, SpaceKind } from "@hearth/shared";
+import type { JobStatus, SettingValue, SpaceKind } from "@hearth/shared";
+import type { Config } from "../config";
 import type { Db } from "../db/database";
 import { newId } from "../db/ids";
 import { notFound, Refusal } from "../http/errors";
@@ -57,6 +59,12 @@ export const RUN_TIME_LIMIT_MS = 5 * MINUTE_MS;
 export const CLAIM_GRACE_MS = MINUTE_MS;
 /** The least time between the start of a run and that of a run a person asked for. */
 export const REQUEST_GAP_MS = 5 * MINUTE_MS;
+/**
+ * The same, on a server whose jobs are answered by stand-ins
+ * (HEARTH_FETCH_STANDINS): they reach no host, so nothing needs protecting,
+ * and an end-to-end test can ask for two runs in a row.
+ */
+export const STAND_IN_REQUEST_GAP_MS = 5_000;
 /** A run that went well is followed by the next after its interval and up to this part of it again. */
 export const JITTER = 0.1;
 /** When the next run after one that went well would be due already, it is due this long after that run ended. */
@@ -129,22 +137,6 @@ export type RunWorld = {
   readonly random: () => number;
   /** Aborts when the server is stopping: the run ends at once and counts for nothing. */
   readonly stop?: AbortSignal;
-};
-
-/** A job's status in an install, as a person who may see the app reads it. */
-export type JobStatus = {
-  /** When the last run started. */
-  readonly lastStartedAt: string | null;
-  /** When the last run that went well ended: the app's data is from then. */
-  readonly lastSucceededAt: string | null;
-  /** When the last run that went wrong ended. */
-  readonly lastFailedAt: string | null;
-  /** Why, in English, for owners and logs; never interface text. */
-  readonly lastError: string | null;
-  /** When it runs next, unless someone asks for a run sooner. */
-  readonly nextRunAt: string;
-  /** "running" while a run holds the job, "requested" while a run asked for has not started, else "idle". */
-  readonly state: "idle" | "requested" | "running";
 };
 
 /**
@@ -739,20 +731,37 @@ export function jobStatus(db: Db, registry: Registry, request: JobRequest, now: 
 }
 
 /**
+ * The least time between the start of a run and that of one asked for, on
+ * a server with these settings: five minutes, or five seconds where
+ * stand-ins answer every fetch. The route hands it to `requestRun`.
+ */
+export function requestGapFor(config: Pick<Config, "fetchStandIns">): number {
+  return config.fetchStandIns === null ? REQUEST_GAP_MS : STAND_IN_REQUEST_GAP_MS;
+}
+
+/**
  * Asks for a run of a job now, as "Refresh now" does, and answers with the
  * job's status afterwards, in one immediate transaction.
  *
  * Unless a run is going on, `requested_at` becomes now, and `next_run_at`
- * the earlier of itself and the later of now and five minutes after the
- * last run started. A run asked for starts at once, or five minutes after
- * the last one started, never sooner, so that asking again and again
- * cannot hammer a host; a request is never refused for being early, and
- * during a run it changes nothing.
+ * the earlier of itself and the later of now and `gapMs` (five minutes)
+ * after the last run started. A run asked for starts at once, or five
+ * minutes after the last one started, never sooner, so that asking again
+ * and again cannot hammer a host; a request is never refused for being
+ * early, and during a run it changes nothing. The route passes the gap of
+ * its server (`requestGapFor`): five seconds where stand-ins answer every
+ * fetch.
  *
  * Throws a Refusal: 404 as `jobStatus` does, then 403 for someone who may
  * only view the app.
  */
-export function requestRun(db: Db, registry: Registry, request: JobRequest, now: Date = new Date()): JobStatus {
+export function requestRun(
+  db: Db,
+  registry: Registry,
+  request: JobRequest,
+  now: Date = new Date(),
+  gapMs: number = REQUEST_GAP_MS,
+): JobStatus {
   const { userId, spaceId, appId, job } = request;
   return db
     .transaction((): JobStatus => {
@@ -769,7 +778,7 @@ export function requestRun(db: Db, registry: Registry, request: JobRequest, now:
       const lastStart = row?.lastStartedAt == null ? -Infinity : Date.parse(row.lastStartedAt);
       // A job that has not run here is due at once.
       const due = row === undefined ? time : Date.parse(row.nextRunAt);
-      const next = Math.min(due, Math.max(time, lastStart + REQUEST_GAP_MS));
+      const next = Math.min(due, Math.max(time, lastStart + gapMs));
       db.prepare(
         `INSERT INTO app_jobs (space_id, app_id, job, next_run_at, requested_at)
          VALUES (@spaceId, @appId, @job, @next, @now)

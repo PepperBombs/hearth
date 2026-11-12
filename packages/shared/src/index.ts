@@ -425,3 +425,62 @@ export type AppCallRequest = z.infer<typeof appCallRequestSchema>;
 /** The answer to a query or mutation. `output` is left out when the route returns nothing. */
 export const appCallResponseSchema = z.object({ output: z.json().optional() });
 export type AppCallResponse = z.infer<typeof appCallResponseSchema>;
+
+/* -------------------------------------------------------------------------
+ * An app's jobs (docs/mini-app-contract.md, section C, "Routes")
+ *
+ * A job is something an app does by itself, every so often, once for each
+ * space it is in. It is never called like a query or a mutation; these two
+ * routes only say how its runs went and ask for one now. Both answer 404
+ * `not_found` when the app is not there for the caller, has no server file,
+ * or has no job of that name (a query's or a mutation's name included).
+ * ---------------------------------------------------------------------- */
+
+/** Where a job stands: "idle", "requested" (a run was asked for and has not started) or "running" (a run holds it). */
+export const JOB_STATES = ["idle", "requested", "running"] as const;
+
+/**
+ * GET /api/spaces/:spaceId/apps/:appId/jobs/:job: how the job's runs went
+ * in this space, for anyone who can see the app. Also the answer of
+ * POST .../jobs/:job/run, which asks for a run now: it needs edit access
+ * (403 `forbidden` with view, after the 404s above), takes no body and
+ * answers 202. A run asked for starts at once, or 5 minutes after the last
+ * one started if that is later, never sooner; during a run, asking changes
+ * nothing.
+ *
+ * Times are ISO strings. A job that has not run in this space yet answers
+ * nulls, `nextRunAt` now and "idle".
+ */
+export const jobStatusSchema = z.object({
+  /** When the last run started. */
+  lastStartedAt: z.string().nullable(),
+  /** When the last run that went well ended: the app's data is from then. */
+  lastSucceededAt: z.string().nullable(),
+  /** When the last run that went wrong ended. */
+  lastFailedAt: z.string().nullable(),
+  /** Why, in English, for owners and logs; never interface text. */
+  lastError: z.string().nullable(),
+  /** When it runs next, unless someone asks for a run sooner. */
+  nextRunAt: z.string(),
+  /** "running" while a run holds the job, "requested" while a run asked for has not started, else "idle". */
+  state: z.enum(JOB_STATES),
+});
+export type JobStatus = z.infer<typeof jobStatusSchema>;
+
+/**
+ * What a job's status means to the people who see the app, as a widget's
+ * `useJob` hands it on: when the app's data is from (the end of the last
+ * run that went well), when the last run failed, if the last one to end
+ * did, and whether a run is going on or was asked for. Why it failed stays
+ * out: that message is English, for logs.
+ */
+export function jobStateOf(status: JobStatus): { succeededAt: string | null; failedAt: string | null; running: boolean } {
+  const { lastSucceededAt, lastFailedAt } = status;
+  const failedLast =
+    lastFailedAt !== null && (lastSucceededAt === null || Date.parse(lastFailedAt) > Date.parse(lastSucceededAt));
+  return {
+    succeededAt: lastSucceededAt,
+    failedAt: failedLast ? lastFailedAt : null,
+    running: status.state === "running" || status.state === "requested",
+  };
+}

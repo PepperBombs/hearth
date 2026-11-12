@@ -13,6 +13,9 @@
  */
 import { createContext } from "react";
 import type { Locale, SpaceKind } from "../index";
+import type { JobState } from "../routes";
+
+export type { JobState };
 
 /** What `useApp()` returns, before the app's own types are laid over it. */
 export type AppInfo = {
@@ -49,15 +52,18 @@ export type MutationHandle = {
 };
 
 /**
- * Everything a widget or page can reach. `useQuery` and `useMutation` are
- * hooks: they are called while the app's component renders, so a provider
- * must hand over the same two functions for as long as it is mounted.
+ * Everything a widget or page can reach. `useQuery`, `useMutation` and
+ * `useJob` are hooks: they are called while the app's component renders,
+ * so a provider must hand over the same three functions for as long as it
+ * is mounted.
  */
 export type AppScopeValue = {
   app: AppInfo;
   /** Gives the answer of a query, and suspends the component until there is one. */
   useQuery(name: string, input: unknown): unknown;
   useMutation(name: string): MutationHandle;
+  /** Gives how one of the app's jobs is doing here, and suspends the component until its status is known. */
+  useJob(name: string): JobState;
 };
 
 export const AppScopeContext = createContext<AppScopeValue | null>(null);

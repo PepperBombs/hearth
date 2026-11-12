@@ -7,6 +7,7 @@
  */
 import { defineApp } from "@hearth/sdk";
 import { AppError, defineServer, FetchError, z, type JobCtx } from "@hearth/sdk/server";
+import type { JobStatus } from "@hearth/shared";
 import { beforeEach, describe, expect, it } from "vitest";
 import { Refusal } from "../http/errors";
 import type { TransportRequest } from "./fetch";
@@ -20,14 +21,15 @@ import {
   nextJob,
   recordRun,
   REQUEST_GAP_MS,
+  requestGapFor,
   requestRun,
   RUN_OVER,
   RUN_TIME_LIMIT_MS,
   runClaimed,
   runOnce,
   RunRefusedError,
+  STAND_IN_REQUEST_GAP_MS,
   type Claim,
-  type JobStatus,
   type RunOutcome,
   type RunWorld,
 } from "./jobs";
@@ -1265,6 +1267,18 @@ describe("requestRun", () => {
     expect(jobRow(place.family)?.requested_at).toBe(iso(4 * MINUTE));
     expect(claimRun(place.db, registry, key(place.family), { now: at(5 * MINUTE - 1) })).toBe("not_due");
     expect(claim(place.family, 5 * MINUTE)).toBeTruthy();
+  });
+
+  it("keeps the gap it is given, which is 5 seconds on a server whose fetches stand-ins answer", () => {
+    expect(requestGapFor({ fetchStandIns: null })).toBe(REQUEST_GAP_MS);
+    expect(requestGapFor({ fetchStandIns: "/nonexistent/stand-ins.json" })).toBe(STAND_IN_REQUEST_GAP_MS);
+    expect(STAND_IN_REQUEST_GAP_MS).toBe(5_000);
+    recordRun(place.db, claim(place.family, 0), { kind: "succeeded" }, { now: at(1_000), random: () => 0 });
+    const asked = (ms: number) =>
+      requestRun(place.db, registry, { userId: place.sam.id, spaceId: place.family, appId: "ticker", job: "refresh" }, at(ms), 5_000);
+    expect(asked(2_000)).toMatchObject({ nextRunAt: iso(5_000), state: "requested" });
+    expect(claimRun(place.db, registry, key(place.family), { now: at(4_999) })).toBe("not_due");
+    expect(asked(7_000)).toMatchObject({ nextRunAt: iso(5_000), state: "requested" });
   });
 
   it("never puts a run off: one due sooner stays as it is", () => {

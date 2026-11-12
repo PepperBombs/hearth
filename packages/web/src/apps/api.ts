@@ -1,19 +1,21 @@
 /**
  * The calls the shell makes for a mini-app: one of its queries or mutations,
- * its settings, adding it to a space, removing it or moving it to another,
- * and the person's own switch and pin. A mini-app's own code never builds an
- * address; it names a route, and `<AppScope>` (./scope.tsx) knows the space
- * and the app.
+ * its settings, a job's status and a run asked for now, adding it to a
+ * space, removing it or moving it to another, and the person's own switch
+ * and pin. A mini-app's own code never builds an address; it names a route
+ * or a job, and `<AppScope>` (./scope.tsx) knows the space and the app.
  *
  * Shapes are in @hearth/shared; answers are checked against them.
  */
 import {
   appCallResponseSchema,
   appSettingsSchema,
+  jobStatusSchema,
   type AddAppRequest,
   type AppPrefsPatch,
   type AppSettings,
   type AppSettingsPatch,
+  type JobStatus,
   type MoveAppRequest,
 } from "@hearth/shared";
 import { ApiRequestError, request } from "../session/api";
@@ -86,6 +88,28 @@ export async function saveAppSettings(install: Install, patch: AppSettingsPatch)
     throw new ApiRequestError("invalid_response", response.status, "The app's settings did not match the expected shape.");
   }
   return parsed.data;
+}
+
+async function readJobStatus(response: Response): Promise<JobStatus> {
+  const parsed = jobStatusSchema.safeParse(await readJson(response));
+  if (!parsed.success) {
+    throw new ApiRequestError("invalid_response", response.status, "The job's status did not match the expected shape.");
+  }
+  return parsed.data;
+}
+
+/** GET .../jobs/:job: how the job's runs went in this space. */
+export async function fetchJobStatus(install: Install, job: string, signal?: AbortSignal): Promise<JobStatus> {
+  return readJobStatus(await request(address(install, `jobs/${encodeURIComponent(job)}`), { signal }));
+}
+
+/**
+ * POST .../jobs/:job/run: asks for a run now, which needs edit access.
+ * Resolves with the job's status once the server has the request: the run
+ * itself is still to come.
+ */
+export async function requestJobRun(install: Install, job: string): Promise<JobStatus> {
+  return readJobStatus(await request(address(install, `jobs/${encodeURIComponent(job)}/run`), { method: "POST" }));
 }
 
 /** PUT /api/spaces/:spaceId/apps/:appId: adds an app to a space, or brings a removed one back. No body comes back. */

@@ -285,13 +285,24 @@ first, and a job that has not run in an install at once, so an app's first
 run follows its being added. With nothing due it sleeps until the next job
 is, at most 30 seconds, so that what another process sharing the database
 changed is seen within that, and adding an app or bringing one back wakes
-it. All it knows is in `app_jobs`, so a restart goes on where the last
-process stopped. `main.ts` starts it once the server listens and stops it
-before the database closes, ending the run going on at once; `createApp`
-starts none, so tests run no job unless one asks. `HEARTH_JOBS=off` keeps
-it from starting: the deploy's trial start runs that way, and so does every
-copy of the server the end-to-end tests start, so that nothing they do
-reaches a real host.
+it, as does a run someone asked for. All it knows is in `app_jobs`, so a
+restart goes on where the last process stopped. `main.ts` starts it once
+the server listens and stops it before the database closes, ending the
+run going on at once; `createApp` starts none, so tests run no job unless
+one asks. `HEARTH_JOBS=off` keeps it from starting: the deploy's trial
+start runs that way, and so does every copy of the server the end-to-end
+tests start, so that nothing they do reaches a real host.
+
+A job's two routes are what people see of it. `GET
+/api/spaces/:spaceId/apps/:appId/jobs/:job`, for anyone who can see the
+app, says how its runs went in that space: when the last one started,
+went well and went wrong, the last error, when the next is due, and
+whether one is going on (`running`) or was asked for (`requested`). `POST
+.../jobs/:job/run`, with edit access, asks for a run now ("Refresh now"):
+it starts at once, or 5 minutes after the last run started, never sooner,
+so asking again and again cannot hammer a host. Both answer `404` when the
+app is not there for the person or has no job of that name, a query's
+name included, so that nothing can be learnt from them.
 
 ## An app's settings
 
@@ -340,7 +351,7 @@ app's code stays in that app's card. An app the session lists but this
 browser's copy of Hearth does not hold gets "Reload to update": the server
 was updated after the page was opened.
 
-A widget or page is written with three hooks from `appHooks<typeof
+A widget or page is written with the hooks from `appHooks<typeof
 server>()` in `@hearth/sdk/web`, typed from the app's own server file:
 
 - `useApp()`: `t` for the app's own strings, the reader's language, the
@@ -350,13 +361,20 @@ server>()` in `@hearth/sdk/web`, typed from the app's own server file:
   has no loading code.
 - `useMutation(name)`: `run(input?)`, `pending` and `error`. After a
   mutation succeeds, every query of that app in that space is read again.
+- `useJob(name)`: how one of the app's jobs is doing here, for "Updated
+  12 min ago", a banner when the last run failed and "Refresh now":
+  `succeededAt`, `failedAt`, `running`, `canRun`, `run()` and `pending`.
+  It suspends for the first status, as a query does.
 
 What the hooks read is put around the widget by `<AppScope>`
 (`packages/web/src/apps/scope.tsx`), which knows the space and the app and
-makes the calls; the app never builds an address. Queries and settings are
-read again when the window gets the focus back and every 15 seconds while
-it is visible, which is how family members see each other's changes.
-Nothing is pushed. A `not_found` from any of an app's routes means it is no
+makes the calls; the app never builds an address. Queries, settings and
+jobs' statuses are read again when the window gets the focus back and every
+15 seconds while it is visible, which is how family members see each
+other's changes. Nothing is pushed. A job's status is read every 3 seconds
+while a run is going on or was asked for, and once a run went well every
+query of the app is read again before the new status shows, so the data
+on the screen is never older than its "Updated ..." says. A `not_found` from any of an app's routes means it is no
 longer there for this person (removed or moved, or access taken away), so
 the session is loaded again and the card goes.
 
