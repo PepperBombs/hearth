@@ -52,6 +52,9 @@ The database file and secrets live in none of them.
 - Deployment is pull-based: a timer on the server checks `main` in `hearth`
   and `hearth-stones`, builds, and switches over only if the build succeeds. No
   self-hosted GitHub Actions runner, because the repositories are public.
+  Each run is carried out by the deploy script of the newest framework
+  commit: the copy installed on the server only starts it, and is installed
+  once.
 - On phones the tab bar is Home, Apps, Search, Me.
 
 ## Build order
@@ -168,7 +171,7 @@ and E.
 | `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository (it declares SDK `^0.1.1`). Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file, a widget, a page and tests of its own (`checklist.test.ts`, written with `testApp`), and is the template `hearth-apps new` copies; `feed` a manifest and a widget, no server file; `headlines` a manifest that names one host (`feeds.example.com`), a server file with a query and a job (`refresh`, every hour), a widget that reads `useJob`, and tests of its own that run the job with stand-ins. |
 | `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card, the avatar and `LinkedText` in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes, settings and jobs' statuses, a run asked for, and adding, removing, moving, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, moving, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page, with the dialogs that add, move and remove an app; the one that adds names the hosts an app's manifest lists in `network`. `src/groups` is the groups' cards in Settings: `groups.tsx` (the cards, creating, renaming, leaving), `people.tsx` (the people, adding, the dialog for one person, invitations), `access-table.tsx` (the member-by-app table), `api.ts` and `queries.ts`. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). `servers.ts` holds the addresses, the people, the command that starts a copy of the built server (`realServerCommand`), and the file of stand-in answers the owner's and Lin's copies share (`STAND_INS`, and `MINI_APPS_STAND_INS` for those of `pnpm e2e:mini-apps`), which tests write with `writeStandIns`. `e2e/mini-apps` holds the tests of mini-apps from another repository, one file per app named after its ID (`grocery.spec.ts`, `trending.spec.ts`), which `playwright.mini-apps.config.ts` runs against Hearth built with them. |
-| `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Each release is built with the mini-apps of `APPS_REPO` at the same moment, copied in beside the framework and linked to its SDK. Run on one real server with the releases up to the grocery list, before jobs existed; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. It only fetches into the checkouts it builds from, whose files stay as cloned, so `docs/self-hosting.md` has a newer script installed from the running release (`current/hearth/deploy`). |
+| `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Each release is built with the mini-apps of `APPS_REPO` at the same moment, copied in beside the framework and linked to its SDK. The copy of the script installed on a server is a starter: it hands each run over to the deploy script of the newest framework commit (`SELF_UPDATE`, on unless `deploy.conf` says off), so it is installed once. The systemd units and the polkit rule are still installed by hand, from the running release (`current/hearth/deploy`): the deploy only fetches into the checkouts it builds from, whose files stay as cloned. Run on one real server with the releases up to the grocery list, before jobs existed and before runs were handed over; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl, and once against the real git. |
 | `.github/workflows` | `ci.yml`: the framework by itself (`check`), end to end with the sample apps (`e2e`), and with `main` of `hearth-stones` checked out beside it, checked, built and end to end (`mini-apps`). |
 | `docs` | `architecture.md`, `self-hosting.md` and `mini-app-contract.md` (the agreed design for mini-apps and its build plan). |
 
@@ -211,6 +214,55 @@ Things that bite:
 - The deploy script stops the service for a moment at each switch to copy the
   database, and puts that copy back if the new release does not come up. A
   migration must therefore work on a copy of the real data in the trial start.
+- `deploy/hearth-deploy.sh` on `main` is live code: a server runs it at its
+  next run, about a minute after the merge, to deploy the very commit that
+  brought it. The copy installed there (`/usr/local/bin/hearth-deploy`,
+  root's) is only a starter, which no push ever updates: it fetches the
+  framework, and when the newest commit's script differs from itself, byte
+  for byte, and `bash -n` takes it, it writes it to `state/deploy-script`,
+  gives up the lock and starts it in its own place (`SELF_UPDATE=off` in
+  `deploy.conf` switches this off). What a starter counts on must therefore
+  never change, in any later version of the script: the script is the
+  regular file `deploy/hearth-deploy.sh` of the framework repository; it
+  does a run when started as `bash <file> <the starter's arguments>` (the
+  config file, if one was given), holding no lock, with
+  `HEARTH_DEPLOY_HANDED_OVER=<the commit whose script it is>` in its
+  environment and, when the starter has just fetched the framework's
+  branch, `HEARTH_DEPLOY_FETCHED=<that commit>`; the lock is a flock on
+  `$HEARTH_BASE/deploy.lock`; the five settings a starter reads
+  (`HEARTH_BASE`, `FRAMEWORK_REPO`, `REMOTE`, `BRANCH`, `SELF_UPDATE`) keep
+  their names, meanings and defaults, in a config file of `NAME=value`
+  lines found as today; and `state/deploy-script` and
+  `state/deploy-script.new` are the starter's to write. Everything else may
+  change. The same list is at the top of the script: keep the two alike.
+- In the deploy script, everything above "From here on this copy does the
+  work" also runs in a copy that only hands the run over, which may be much
+  older than the config file and than the script it starts. So nothing
+  there may stop on what only the work needs: a line of the config file
+  that the copy cannot read, or a setting it does not know, is remembered
+  (`config_problem`) for the copy that does the work to stop on; only
+  `check_starter_settings` runs there; and the tools, folders and database
+  that the work needs are looked at below that line. A new setting goes
+  into `check_settings`, never among the starter's five. Nor may anything
+  there read or change the server's state (the releases, `state/failed`, a
+  pending restart): the root refusal, the lock, the fetch of the framework
+  and `state/deploy-script` are all there is.
+- The installed copy knows itself by its own file. A copy that was handed
+  a run knows itself by commit: it is the script of the commit in
+  `HEARTH_DEPLOY_HANDED_OVER`, on the starter's word. With its branch at
+  that commit it compares nothing and does the work, which is what keeps
+  two copies from handing a run to and fro; if the branch has moved on
+  meanwhile, it compares the two commits' scripts, both read from the
+  clone, never its own file, which a run that got in between may have
+  replaced (by rename: a running copy goes on reading the old one). A
+  commit whose deploy script is missing, not a regular file or not parsed
+  is not deployed while `SELF_UPDATE` is on: the copy that found out goes
+  on and stops where the build would start, so that `state/failed` holds
+  it like any failed build. A framework fetch that fails before the
+  hand-over is remembered (`framework_fetch`) and reported in step 1,
+  after the leftovers and a pending restart, and the run goes by the
+  commit fetched last. `SELF_UPDATE=off` is also the way out when a
+  commit's script parses but fails as it runs.
 - Which mini-apps a server holds is decided when it is built, by
   `HEARTH_APPS_DIR` at that moment: one folder, or several separated like
   `PATH`, a relative one read from the root of this repository. The running
@@ -407,6 +459,27 @@ Things that bite:
   the stand-in makes the links a `link:` dependency asks for, as pnpm does.
   The made-up server writes each start into `started-with` beside it, the
   trial's or the service's, with the `HEARTH_JOBS` it was given.
+- Every made-up framework commit of the deploy tests also carries the
+  deploy script under test (`commit_files`), so no run is handed over
+  unless a test gives a commit another script. `newer_script` writes that
+  other one: the script under test with one line added, which notes in
+  `started.log` how it was started (its arguments, the two variables,
+  whether the lock was free). It stands for the newer script of a later
+  commit, and the script under test for the copy installed before it;
+  `started_as` is the line a correct hand-over leaves. The pnpm stand-in
+  notes which copy asked and whether the lock was held (`pnpm-by.log`,
+  `pnpm_askers`). The git stand-in keeps the remote's branch (`main`)
+  apart from what the last fetch brought (`fetched`), answers `ls-tree` and
+  `show`, and through files in the test folder makes a fetch fail, leave a
+  process behind or run something in its middle, and `show` stop short or
+  give another text each time. The last test runs the script with the real
+  git on a repository it makes up, so the git commands the script uses
+  must work there as well as in the stand-in. The refusal to run as root is
+  tried in a user namespace (`unshare --map-root-user`), and skipped with a
+  line that says so where a user may not make one; the tests never run
+  anything as the real root. `run` is a run that builds nothing, and
+  `deploy` waits a second first, because releases are named after the
+  second.
 - A test that runs `hearth-apps` or `sync()` passes `--out` (or `out`) with
   a temporary folder, as `packages/sdk/tools/cli.test.ts` does, also through
   `pnpm check --out`. Without it the test rewrites this checkout's generated

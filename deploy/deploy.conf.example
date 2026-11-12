@@ -14,6 +14,16 @@ APPS_REPO=/opt/hearth/repos/hearth-stones
 REMOTE=origin
 BRANCH=main
 
+# Which copy of the deploy script does the work. With "on", the default, the
+# installed copy only starts each run: it hands the run over to the deploy
+# script of the newest framework commit, so every release is deployed by its
+# own script and the installed copy never needs installing again. With "off"
+# the installed copy does all the work itself, and says after a switch when
+# the release's script differs from it. See docs/self-hosting.md, step 5.
+# A deploy script from before this setting existed stops on a config file
+# that names it, so the line is best left out unless you want "off".
+# SELF_UPDATE=on
+
 # How many old releases to keep for going back.
 KEEP_RELEASES=5
 

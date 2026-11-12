@@ -5,8 +5,10 @@ carries traffic to it and Cloudflare Access decides who gets in.
 
 **Tested on one real server so far.** The steps below have been run end to
 end once, with the releases up to the grocery list. Scheduled jobs and what
-they fetch from outside (GitHub Trending) came later and have not yet run
-on a real server. Expect details to differ on yours, and correct them here.
+they fetch from outside (GitHub Trending) came later, and so did the deploy
+script's handing each run over to the newest copy of itself (step 5):
+neither has run on a real server yet. Expect details to differ on yours,
+and correct them here.
 
 Everything personal (your domain, email address, secrets) stays on the server
 and never goes into a repository.
@@ -93,24 +95,53 @@ nothing else, so deployments need no root access. The deploy script restarts
 the service to switch releases, and stops it for the moment it copies the
 database or puts it back.
 
-The deploy script does not update itself. When a release brings a newer
-one, the journal says so after the switch ("deploy/hearth-deploy.sh in this
-release differs from the installed copy"). Install it from the release that
-is running, not from the checkout of step 3: the deploy only fetches into
+The deploy script keeps itself up to date. The copy you installed only
+starts each run: it fetches `main` of the framework, and when that commit's
+`deploy/hearth-deploy.sh` differs from itself, it hands the whole run over
+to it. So every release is built, tried and switched to by its own deploy
+script, also the release that brings a newer one, and
+`/usr/local/bin/hearth-deploy` never needs installing again. The newer
+script is kept in `/opt/hearth/state/deploy-script` and runs as the `hearth`
+user, as the code of that commit does in every build, so this gives it no
+right it did not have.
+
+A copy that was installed before the script could do this has to be
+replaced by hand, one last time. You have such a copy if
+`grep -c SELF_UPDATE /usr/local/bin/hearth-deploy` prints 0; its runs say
+after each switch that "deploy/hearth-deploy.sh in this release differs
+from the installed copy". Install the new one from the release that is
+running, not from the checkout of step 3: the deploy only fetches into
 `/opt/hearth/repos/hearth`, so the files there stay as they were when you
-cloned it, and the `install` line above would put the old copy back. The
-same goes for the systemd units and the polkit rule, should a release
-change them.
+cloned it, and the `install` line above would put the old copy back.
 
 ```sh
 sudo install -m 755 /opt/hearth/current/hearth/deploy/hearth-deploy.sh /usr/local/bin/hearth-deploy
 ```
 
-A copy from before mini-apps were built in keeps building
-every release without them, and a copy from before jobs existed starts the
-trial of a new release with its jobs on, so that for the seconds the trial
-lasts they run against the copy of the database and may fetch from
-outside; install the new copy before mini-apps with jobs arrive.
+Until then, a copy from before mini-apps were built in keeps building every
+release without them, and a copy from before jobs existed starts the trial
+of a new release with its jobs on, so that for the seconds the trial lasts
+they run against the copy of the database and may fetch from outside.
+
+`SELF_UPDATE=off` in `/etc/hearth/deploy.conf` switches the hand-over off.
+The installed copy then does all the work itself, as it used to, and the
+journal says after a switch when the release's script differs from it. Use
+it if you would rather read a new deploy script before it runs on your
+server, and install it yourself with the line above; or for a while, to
+deploy with the installed copy when a commit's own deploy script is broken
+(see "When a deployment fails").
+
+The systemd units and the polkit rule are not kept up to date this way:
+they need root, and the polkit rule is what limits the `hearth` user.
+Should a release change them, install them by hand, again from the release
+that is running:
+
+```sh
+cd /opt/hearth/current/hearth/deploy
+sudo cp systemd/hearth.service systemd/hearth-deploy.service systemd/hearth-deploy.timer /etc/systemd/system/
+sudo cp polkit/50-hearth-deploy.rules /etc/polkit-1/rules.d/
+sudo systemctl daemon-reload
+```
 
 ## 6. Cloudflare Access, then the tunnel
 
@@ -169,6 +200,18 @@ build output is in `/opt/hearth/logs`.
   already have: it must hold nothing but the link to the SDK. Fix it there.
   The running release is untouched, and the same commits are tried again
   after `RETRY_AFTER_MINUTES`.
+- **A commit's deploy script is missing or broken.** Each commit is
+  deployed by its own `deploy/hearth-deploy.sh` (step 5). If the newest
+  framework commit has none, or bash cannot parse it, the journal says that
+  the newest commits "are not deployed: the deploy script of that framework
+  commit cannot carry out the run", and why. The running release is
+  untouched. Push a commit that puts the script right: the run is handed to
+  it and it is deployed at once. Or set `SELF_UPDATE=off` in
+  `/etc/hearth/deploy.conf` to deploy with the installed copy: the same
+  commits are tried again after `RETRY_AFTER_MINUTES`, or at once when you
+  delete `/opt/hearth/state/failed`. A deploy script that bash can parse but
+  that fails when it runs shows its own error in the journal at every run;
+  the two ways out are the same.
 - **The new release fails as the live service.** The script stops the
   service, puts the database back as it was just before the switch, points
   `current` at the previous release and starts it. The database has to go

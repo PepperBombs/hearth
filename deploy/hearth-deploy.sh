@@ -2,10 +2,17 @@
 #
 # hearth-deploy: pull-based deployment for one server.
 #
-# A systemd timer runs this every minute (see deploy/systemd). Each run:
+# A systemd timer runs the installed copy of this script every minute (see
+# deploy/systemd). Every run is carried out by the deploy script of the
+# newest framework commit the server knows: the installed copy only starts
+# it, as "Which copy does the work" below describes. So a commit is built,
+# tried and switched to by its own deploy script, also the commit that
+# changes the script, and the installed copy never needs installing again.
 #
-#   1. fetches the main branch of the framework repository and of the
-#      mini-apps repository;
+# The copy that does the work:
+#
+#   1. fetches the main branch of the mini-apps repository, and of the
+#      framework repository unless that was fetched to find this copy;
 #   2. stops there, silently, if neither has a new commit;
 #   3. otherwise builds a fresh release in a new folder named after the time:
 #      the framework, with the mini-apps of the same moment built in. The
@@ -37,6 +44,84 @@
 # themselves, because every try interrupts the site: they wait for a new
 # commit, or for state/failed to be deleted.
 #
+# Which copy does the work
+#
+# The installed copy (/usr/local/bin/hearth-deploy) belongs to root, and this
+# script runs as the deploy user, who cannot replace it. So the installed
+# copy is a starter. Before it reads or changes anything else on the server,
+# it
+#
+#   a. reads the config file and checks the five settings it needs itself:
+#      HEARTH_BASE, FRAMEWORK_REPO, REMOTE, BRANCH and SELF_UPDATE;
+#   b. refuses to run as root;
+#   c. takes the lock;
+#   d. fetches the framework's branch, and reads the deploy script of the
+#      commit it is at (deploy/hearth-deploy.sh) from the clone;
+#   e. if that script differs from itself, byte for byte, and bash can parse
+#      it: writes it to state/deploy-script, gives up the lock, and starts it
+#      in its own place with its own arguments. This is the hand-over.
+#
+# The copy started that way begins like any other, at (a). It was told which
+# commit's script it is, and that the branch was fetched a moment ago: so it
+# fetches nothing, finds the branch at its own commit, and does the work. A
+# copy that is the newest commit's script already does the work itself, and
+# the fetch of (d) is that run's fetch of the framework. Either way the
+# framework is fetched once in a run.
+#
+# A copy that was started for the commit its branch is at never hands the run
+# over again, whatever it finds there, so no two copies can pass a run to and
+# fro. Only if the branch has moved on since the starter looked (another run
+# got in between, or the starter's fetch had failed and its own did not) does
+# it look again, and it hands over once more if the deploy script of the
+# newer commit differs from that of the commit it was started for.
+#
+# A hand-over happens on every run once the installed copy is older than the
+# branch, so it says nothing unless HEARTH_DEPLOY_VERBOSE is set.
+#
+# If the fetch of (d) fails, the run goes on, by the commit that was fetched
+# last: a restart that is still pending needs no network. The failure is
+# reported in step 1, by the copy that gets there.
+#
+# A commit whose deploy script is missing, or cannot be parsed, is not
+# deployed: nothing could carry out its run. The copy that found this does
+# everything else and stops with an error where it would start to build.
+# Like any failed build, that is tried again after RETRY_AFTER_MINUTES, or at
+# once after a new commit.
+#
+# The newest commit's code runs as the deploy user in every build anyway
+# (pnpm build), so running that commit's deploy script as the same user
+# gives it no right it did not have. The systemd units and the polkit rule
+# are not kept up to date this way: they need root, and the polkit rule is
+# what limits the deploy user. See docs/self-hosting.md.
+#
+# SELF_UPDATE=off in the config file switches all of this off. The installed
+# copy then does the work itself, and says so after a deploy when the
+# release's deploy script differs from it.
+#
+# What an installed copy counts on, for as long as it stays installed. A
+# later version of this script must keep to all of it; everything else may
+# change:
+#
+#   - the framework repository holds the script as the regular file
+#     deploy/hearth-deploy.sh;
+#   - the script is started as "bash <file> <the starter's arguments>",
+#     holding no lock, with HEARTH_DEPLOY_HANDED_OVER=<the commit whose
+#     script it is> in its environment, and with HEARTH_DEPLOY_FETCHED=<that
+#     commit> as well when the starter has just fetched the framework's
+#     branch;
+#   - the lock is a flock on $HEARTH_BASE/deploy.lock;
+#   - the five settings of (a): their names, what they mean, their defaults,
+#     and where the config file is found and how it is written (see "Usage"
+#     and deploy/deploy.conf.example);
+#   - state/deploy-script and state/deploy-script.new are the starter's to
+#     write.
+#
+# So, before the hand-over, a copy must not stop on what only the copy that
+# does the work needs. A line of the config file that it cannot read, or a
+# setting it does not know, is only remembered until then; nothing but the
+# five settings is checked; and the tools, the folders and the database that
+# only the work needs are looked at afterwards.
+#
 # Layout under HEARTH_BASE (default /opt/hearth):
 #
 #   repos/hearth, repos/hearth-stones   clones; this script only fetches them
@@ -52,6 +137,10 @@
 #       failed                        the commits that failed, and at which stage
 #                                     (build, sdk or live)
 #       restart-pending               "current" was switched; restart not confirmed
+#       deploy-script                 the deploy script of the newest framework
+#                                     commit, as the installed copy started it
+#                                     last (deploy-script.new while it is
+#                                     being written)
 #   pnpm-store/                       pnpm's package store
 #   deploy.lock                       held while a run is in progress
 #
@@ -72,6 +161,8 @@
 # Usage: hearth-deploy [CONFIG_FILE]
 #   The config file defaults to $HEARTH_DEPLOY_CONFIG, then
 #   /etc/hearth/deploy.conf. See deploy/deploy.conf.example.
+#   With HEARTH_DEPLOY_VERBOSE set to anything, a run also says when it hands
+#   over to another copy and when it finds nothing new.
 
 set -Eeuo pipefail
 export LC_ALL=C
@@ -86,6 +177,7 @@ FRAMEWORK_REPO=
 APPS_REPO=
 REMOTE=origin
 BRANCH=main
+SELF_UPDATE=on
 KEEP_RELEASES=5
 SERVICE=hearth.service
 LIVE_URL=http://127.0.0.1:4310
@@ -172,6 +264,12 @@ trap 'die "An unexpected error occurred on line $LINENO."' ERR
 # ---------------------------------------------------------------------------
 # Config file: lines of NAME=value. No shell code is run from it.
 # ---------------------------------------------------------------------------
+
+# The first thing wrong with the config file: a line this copy cannot read,
+# or a setting it does not know. Reading does not stop on it, because a newer
+# deploy script may know better, and this copy may only be the one that
+# hands the run over to it. The copy that does the work stops on it.
+config_problem=""
 load_config() {
   local file=$1 line number=0 name value
   [[ -r $file ]] || die "Cannot read the config file $file."
@@ -179,8 +277,10 @@ load_config() {
     number=$((number + 1))
     line=${line%$'\r'}
     [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
-    [[ $line =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=[[:space:]]*(.*)$ ]] ||
-      die "$file, line $number: expected NAME=value."
+    if ! [[ $line =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+      [[ -n $config_problem ]] || config_problem="$file, line $number: expected NAME=value."
+      continue
+    fi
     name=${BASH_REMATCH[1]}
     value=${BASH_REMATCH[2]}
     value=${value%"${value##*[![:space:]]}"}
@@ -188,11 +288,15 @@ load_config() {
       value=${BASH_REMATCH[1]}
     fi
     case $name in
-      HEARTH_BASE | FRAMEWORK_REPO | APPS_REPO | REMOTE | BRANCH | KEEP_RELEASES | \
-        SERVICE | LIVE_URL | DATABASE | HEALTH_PORT | HEALTH_TIMEOUT | RETRY_AFTER_MINUTES)
+      HEARTH_BASE | FRAMEWORK_REPO | APPS_REPO | REMOTE | BRANCH | SELF_UPDATE | \
+        KEEP_RELEASES | SERVICE | LIVE_URL | DATABASE | HEALTH_PORT | HEALTH_TIMEOUT | \
+        RETRY_AFTER_MINUTES)
         printf -v "$name" '%s' "$value"
         ;;
-      *) die "$file, line $number: $name is not a setting this script knows." ;;
+      *)
+        [[ -n $config_problem ]] ||
+          config_problem="$file, line $number: $name is not a setting this script knows."
+        ;;
     esac
   done <"$file"
 }
@@ -200,17 +304,25 @@ load_config() {
 # number_between VALUE MIN MAX
 number_between() { [[ $1 =~ ^[0-9]{1,9}$ ]] && ((10#$1 >= $2 && 10#$1 <= $3)); }
 
-check_settings() {
+# The five settings a copy needs before it hands a run over. Nothing else is
+# checked before that: what a newer deploy script makes of the other settings
+# is its own business.
+check_starter_settings() {
   [[ $HEARTH_BASE == /* && $HEARTH_BASE != / ]] || die "HEARTH_BASE must be an absolute path."
   [[ -n $FRAMEWORK_REPO ]] || die "FRAMEWORK_REPO is not set: the clone of the framework repository."
   [[ $FRAMEWORK_REPO == /* ]] || die "FRAMEWORK_REPO must be an absolute path."
+  [[ $REMOTE =~ ^[A-Za-z0-9._-]+$ ]] || die "REMOTE must be the name of a Git remote, such as origin."
+  [[ $BRANCH =~ ^[A-Za-z0-9._/-]+$ ]] || die "BRANCH must be the name of a branch, such as main."
+  [[ $SELF_UPDATE == on || $SELF_UPDATE == off ]] || die "SELF_UPDATE must be on or off."
+}
+
+# The settings only the copy that does the work needs.
+check_settings() {
   [[ -z $APPS_REPO || $APPS_REPO == /* ]] || die "APPS_REPO must be an absolute path, or empty."
   # The build finds the mini-apps through HEARTH_APPS_DIR, a list of folders
   # separated by colons: a colon here would silently build a release without them.
   [[ -z $APPS_REPO || $HEARTH_BASE != *:* ]] ||
     die "HEARTH_BASE must not contain a colon while APPS_REPO is set: the build is told where the mini-apps are in HEARTH_APPS_DIR, which separates folders with colons."
-  [[ $REMOTE =~ ^[A-Za-z0-9._-]+$ ]] || die "REMOTE must be the name of a Git remote, such as origin."
-  [[ $BRANCH =~ ^[A-Za-z0-9._/-]+$ ]] || die "BRANCH must be the name of a branch, such as main."
   number_between "$KEEP_RELEASES" 1 1000 || die "KEEP_RELEASES must be a number, at least 1."
   number_between "$HEALTH_PORT" 1 65535 || die "HEALTH_PORT must be a port number."
   number_between "$HEALTH_TIMEOUT" 1 3600 || die "HEALTH_TIMEOUT must be a number of seconds, at least 1."
@@ -239,20 +351,65 @@ current_release_name() {
 
 is_release_name() { [[ $1 =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; }
 
-# fetch_main REPO LABEL: fetches the branch and leaves the commit it is at in
-# $fetched_commit.
+# try_fetch REPO LABEL: fetches the branch and leaves the commit it is at in
+# $fetched_commit. If it cannot, it returns 1 and leaves what to say about it
+# in $fetch_failure, and what git said in $fetch_output.
 fetched_commit=""
-fetch_main() {
-  local repo=$1 label=$2 output
-  git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 ||
-    die "$repo is not a Git repository (the $label)."
-  if ! output=$(GIT_TERMINAL_PROMPT=0 timeout 120 git -C "$repo" fetch --quiet --no-tags \
-    "$REMOTE" "+refs/heads/$BRANCH:refs/remotes/$REMOTE/$BRANCH" 2>&1); then
-    [[ -z $output ]] || printf '%s\n' "$output" | redact | sed 's/^/    /' >&2
-    die "Could not fetch $BRANCH of the $label."
+fetch_failure=""
+fetch_output=""
+try_fetch() {
+  local repo=$1 label=$2
+  fetched_commit="" fetch_failure="" fetch_output=""
+  if ! git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+    fetch_failure="$repo is not a Git repository (the $label)."
+    return 1
   fi
-  fetched_commit=$(git -C "$repo" rev-parse --verify --quiet "refs/remotes/$REMOTE/$BRANCH^{commit}") ||
-    die "The $label has no branch $BRANCH on $REMOTE."
+  if ! fetch_output=$(GIT_TERMINAL_PROMPT=0 timeout 120 git -C "$repo" fetch --quiet --no-tags \
+    "$REMOTE" "+refs/heads/$BRANCH:refs/remotes/$REMOTE/$BRANCH" 2>&1); then
+    fetch_failure="Could not fetch $BRANCH of the $label."
+    return 1
+  fi
+  fetch_output=""
+  if ! fetched_commit=$(git -C "$repo" rev-parse --verify --quiet "refs/remotes/$REMOTE/$BRANCH^{commit}"); then
+    fetch_failure="The $label has no branch $BRANCH on $REMOTE."
+    return 1
+  fi
+}
+
+# Says why the last try_fetch failed, and stops.
+fetch_failed() {
+  [[ -z $fetch_output ]] || printf '%s\n' "$fetch_output" | redact | sed 's/^/    /' >&2
+  die "$fetch_failure"
+}
+
+# The commit the framework's branch was at when it was last fetched, or
+# nothing.
+framework_branch_commit() {
+  git -C "$FRAMEWORK_REPO" rev-parse --verify --quiet "refs/remotes/$REMOTE/$BRANCH^{commit}" 2>/dev/null || true
+}
+
+# read_deploy_script COMMIT FILE: copies the deploy script of a framework
+# commit out of the clone into FILE. If it cannot, it returns 1 and leaves the
+# reason in $script_problem, and what to do about it in $script_remedy.
+script_problem=""
+script_remedy="Push a commit that puts deploy/hearth-deploy.sh right"
+read_deploy_script() {
+  local commit=$1 file=$2 entry
+  # git show alone would not do: for a link it prints where the link leads,
+  # and for a folder a list of its files.
+  if ! entry=$(git -C "$FRAMEWORK_REPO" ls-tree "$commit" -- deploy/hearth-deploy.sh 2>/dev/null); then
+    script_problem="git could not read it from $FRAMEWORK_REPO"
+    script_remedy="Look at that clone"
+  elif [[ -z $entry ]]; then
+    script_problem="that commit has no deploy/hearth-deploy.sh"
+  elif [[ $entry != 100???" blob "* ]]; then
+    script_problem="deploy/hearth-deploy.sh is not a regular file in that commit"
+  elif ! mkdir -p -- "$state_dir" ||
+    ! git -C "$FRAMEWORK_REPO" show "$commit:deploy/hearth-deploy.sh" >"$file" 2>/dev/null; then
+    script_problem="it could not be copied from $FRAMEWORK_REPO to $file"
+    script_remedy="Look at that clone, and at the space left on the disk"
+  fi
+  [[ -z $script_problem ]]
 }
 
 # export_commit REPO COMMIT FOLDER: the files of one commit, without Git data.
@@ -450,22 +607,135 @@ prune_releases() {
 }
 
 # ---------------------------------------------------------------------------
-# Start
+# Start: what every copy does, also one that only hands the run over
 # ---------------------------------------------------------------------------
+arguments=("$@")
+self=${BASH_SOURCE[0]}
 config_file=${1:-${HEARTH_DEPLOY_CONFIG:-/etc/hearth/deploy.conf}}
 state_dir="" # set once the base folder is known; die() needs it only later
 load_config "$config_file"
-check_settings
+check_starter_settings
 state_dir=$HEARTH_BASE/state
 
 if [[ $EUID -eq 0 ]]; then
   die "Do not run this as root: files it creates would belong to root. Run it as the deploy user, for example: systemctl start hearth-deploy.service"
 fi
-for tool in git node pnpm tar flock timeout; do
+for tool in git flock timeout; do
+  command -v "$tool" >/dev/null 2>&1 || die "The command '$tool' is not installed or not on PATH."
+done
+
+# One run at a time. A second run leaves at once; the next timer tick retries.
+# Without the base folder there is nothing to lock, and nothing to deploy
+# into: the checks further down say so.
+locked=no
+if [[ -d $HEARTH_BASE && -w $HEARTH_BASE ]]; then
+  exec 9>"$HEARTH_BASE/deploy.lock"
+  if ! flock -n 9; then
+    log "Another deploy is still running; leaving it to finish."
+    exit 0
+  fi
+  locked=yes
+fi
+
+# ---------------------------------------------------------------------------
+# Which copy does the work (see the top of this file)
+# ---------------------------------------------------------------------------
+# What the copy that started this one said, if one did. Nothing this copy
+# starts needs to hear it.
+handed_over=${HEARTH_DEPLOY_HANDED_OVER:-}
+[[ $handed_over =~ ^[0-9a-f]{40,64}$ ]] || handed_over=""
+starter_fetched=${HEARTH_DEPLOY_FETCHED:-}
+unset HEARTH_DEPLOY_HANDED_OVER HEARTH_DEPLOY_FETCHED
+
+handover_file=$state_dir/deploy-script
+framework_commit=""     # the commit the framework's branch is at, once known
+framework_fetch=""      # "done" once this run has fetched that branch; "failed"
+#                         if it could not, which step 1 reports
+script_problem_lines="" # what bash said about a script it cannot parse
+
+# is_this_copy FILE: whether FILE holds the script this copy is, byte for
+# byte. The installed copy is its own file. A copy that was handed over to is
+# the script of the commit it was started for, and is compared as that,
+# straight from the clone: its own file under state/ may have been replaced
+# since it started, by a run that got in between.
+is_this_copy() {
+  if [[ -n $handed_over ]]; then
+    git -C "$FRAMEWORK_REPO" show "$handed_over:deploy/hearth-deploy.sh" 2>/dev/null | cmp -s -- - "$1"
+  else
+    cmp -s -- "$self" "$1"
+  fi
+}
+
+# hand_over FILE: starts the deploy script in FILE, which is the one of
+# $framework_commit, in the place of this copy. It does not return.
+hand_over() {
+  # Renamed into place, never written over: bash reads a running script from
+  # its file as it goes, and a copy that an earlier run started may still be
+  # reading this one.
+  mv -T -- "$1" "$handover_file" ||
+    die "Could not put the deploy script of framework commit ${framework_commit:0:12} at $handover_file."
+  [[ -z ${HEARTH_DEPLOY_VERBOSE:-} ]] ||
+    log "Handing this run over to the deploy script of framework commit ${framework_commit:0:12} ($handover_file)."
+  # Unlocked, not only closed: the lock belongs to the open file, not to this
+  # process. Anything this copy started that is still running, such as a tool
+  # that tidies the clone up in the background after a fetch, has that file
+  # open too, and would keep the lock from the copy started now.
+  flock -u 9
+  exec 9>&-
+  export HEARTH_DEPLOY_HANDED_OVER=$framework_commit
+  [[ $framework_fetch != done ]] || export HEARTH_DEPLOY_FETCHED=$framework_commit
+  exec "$BASH" "$handover_file" "${arguments[@]}"
+}
+
+if [[ $SELF_UPDATE == on && $locked == yes ]]; then
+  command -v cmp >/dev/null 2>&1 || die "The command 'cmp' is not installed or not on PATH."
+  framework_commit=$(framework_branch_commit)
+  if [[ -n $framework_commit && $starter_fetched == "$framework_commit" ]]; then
+    # The copy that handed this run over fetched the branch a moment ago.
+    framework_fetch=done
+  elif try_fetch "$FRAMEWORK_REPO" "framework repository"; then
+    framework_fetch=done
+    framework_commit=$fetched_commit
+  else
+    # Not the end of the run: a restart that is still pending needs no
+    # network. This run goes by the commit that was fetched last, if there is
+    # one, and step 1 says what try_fetch left.
+    framework_fetch=failed
+  fi
+
+  # A copy that was handed over to for this very commit is its script, on the
+  # word of the copy that started it. It does not look again, whatever a
+  # comparison would say, so that no two copies can hand a run to and fro.
+  if [[ -n $framework_commit && $framework_commit != "$handed_over" ]]; then
+    candidate=$handover_file.new
+    if read_deploy_script "$framework_commit" "$candidate" && ! is_this_copy "$candidate"; then
+      if script_problem_lines=$("$BASH" -n "$candidate" 2>&1); then
+        hand_over "$candidate"
+      else
+        script_problem="bash cannot parse it"
+        script_problem_lines=${script_problem_lines//"$candidate"/deploy/hearth-deploy.sh}
+      fi
+    fi
+    rm -f -- "$candidate"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# From here on this copy does the work
+# ---------------------------------------------------------------------------
+if [[ -n $config_problem ]]; then
+  # Said first, because the config file may well be right: written for a
+  # deploy script newer than this copy, which this run could not be handed to.
+  [[ -z $script_problem ]] ||
+    log "NOTE: the deploy script of framework commit ${framework_commit:0:12} cannot carry out this run, because $script_problem. So this copy does, which may not know a setting that a newer deploy script knows:" >&2
+  die "$config_problem"
+fi
+check_settings
+for tool in node pnpm tar; do
   command -v "$tool" >/dev/null 2>&1 || die "The command '$tool' is not installed or not on PATH."
 done
 [[ -z $SERVICE ]] || command -v systemctl >/dev/null 2>&1 || die "systemctl is not on PATH."
-[[ -d $HEARTH_BASE && -w $HEARTH_BASE ]] || die "$HEARTH_BASE does not exist or this user cannot write to it."
+[[ $locked == yes ]] || die "$HEARTH_BASE does not exist or this user cannot write to it."
 
 mkdir -p -- "$HEARTH_BASE/releases" "$HEARTH_BASE/logs" "$state_dir"
 
@@ -475,13 +745,6 @@ if [[ -n $DATABASE && -f $DATABASE ]]; then
   database_dir=$(dirname -- "$DATABASE")
   [[ -r $DATABASE && -w $database_dir ]] ||
     die "This user cannot read $DATABASE or cannot write to $database_dir, so the database cannot be copied before a switch. Fix the permissions, or set DATABASE to nothing to deploy without that safety net."
-fi
-
-# One run at a time. A second run leaves at once; the next timer tick retries.
-exec 9>"$HEARTH_BASE/deploy.lock"
-if ! flock -n 9; then
-  log "Another deploy is still running; leaving it to finish."
-  exit 0
 fi
 
 # Leftovers of a run that was cut short (power loss): folders with no RELEASE.
@@ -533,11 +796,17 @@ die_pending() {
 # ---------------------------------------------------------------------------
 # 1. Fetch, and decide whether there is anything to do
 # ---------------------------------------------------------------------------
-fetch_main "$FRAMEWORK_REPO" "framework repository"
-framework_commit=$fetched_commit
+if [[ $framework_fetch == failed ]]; then
+  # The fetch before the hand-over. Said only now, because what came before
+  # needed no network.
+  fetch_failed
+elif [[ $framework_fetch != done ]]; then
+  try_fetch "$FRAMEWORK_REPO" "framework repository" || fetch_failed
+  framework_commit=$fetched_commit
+fi
 apps_commit=none
 if [[ -n $APPS_REPO ]]; then
-  fetch_main "$APPS_REPO" "mini-apps repository"
+  try_fetch "$APPS_REPO" "mini-apps repository" || fetch_failed
   apps_commit=$fetched_commit
 fi
 
@@ -591,6 +860,12 @@ else
 fi
 
 attempt_key=$wanted
+if [[ -n $script_problem ]]; then
+  # Found before the hand-over, and said here so that it counts as a build
+  # that failed: tried again after a while, not on every run.
+  [[ -z $script_problem_lines ]] || printf '%s\n' "$script_problem_lines" | sed 's/^/    /' >&2
+  die "The newest commits (framework ${framework_commit:0:12}, mini-apps ${apps_commit:0:12}) are not deployed: the deploy script of that framework commit cannot carry out the run, because $script_problem. $script_remedy; or set SELF_UPDATE=off in $config_file to deploy with the installed copy of the script."
+fi
 new_release=$HEARTH_BASE/releases/$stamp
 build_log=$HEARTH_BASE/logs/$stamp.log
 [[ ! -e $new_release ]] || die "The folder $new_release already exists."
@@ -598,6 +873,8 @@ mkdir -- "$new_release"
 : >"$build_log"
 
 log "New commits: framework ${framework_commit:0:12}, mini-apps ${apps_commit:0:12}. Building release $stamp (version $version)."
+[[ -z $handed_over ]] ||
+  log "This run is carried out by the deploy script of framework commit ${handed_over:0:12}."
 
 export_commit "$FRAMEWORK_REPO" "$framework_commit" "$new_release/hearth" >>"$build_log" 2>&1 ||
   die "Could not copy the framework's files into the release."
@@ -772,8 +1049,12 @@ log "Release $stamp is live (version $version)."
 # ---------------------------------------------------------------------------
 prune_releases || log "WARNING: could not remove old releases; the deploy itself succeeded." >&2
 
-installed_script=$(command -v -- "$0" 2>/dev/null || printf '%s' "$0")
-if ! cmp -s -- "$installed_script" "$new_release/hearth/deploy/hearth-deploy.sh"; then
-  log "NOTE: deploy/hearth-deploy.sh in this release differs from the installed copy ($installed_script). Install the new one when convenient; see docs/self-hosting.md."
+# With SELF_UPDATE on, the release was deployed by its own deploy script,
+# whatever the installed copy holds.
+if [[ $SELF_UPDATE == off ]]; then
+  installed_script=$(command -v -- "$0" 2>/dev/null || printf '%s' "$0")
+  if ! cmp -s -- "$installed_script" "$new_release/hearth/deploy/hearth-deploy.sh"; then
+    log "NOTE: deploy/hearth-deploy.sh in this release differs from the installed copy ($installed_script). Install the new one when convenient; see docs/self-hosting.md."
+  fi
 fi
 exit 0
