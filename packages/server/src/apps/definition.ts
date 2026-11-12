@@ -40,6 +40,38 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isSchema = (value: unknown): value is z.ZodType =>
   isRecord(value) && typeof value.safeParse === "function";
 
+/** What `app.query`, `app.mutation` and `app.job` make, by their `kind`. */
+const KINDS = ["query", "mutation", "job"] as const;
+const isKind = (value: unknown): value is (typeof KINDS)[number] => (KINDS as readonly unknown[]).includes(value);
+
+/** A value as a problem names it, whatever it is. */
+function shown(value: unknown): string {
+  if (value === undefined) return "missing";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") return String(value);
+  return value === null ? "null" : `a value of type ${typeof value}`;
+}
+
+/** What is wrong with a job besides its name and description: how often it runs, and an input it cannot be given. */
+function jobProblems(where: string, job: Record<string, unknown>): string[] {
+  const problems: string[] = [];
+  const { everyMinutes } = job;
+  if (
+    typeof everyMinutes !== "number" ||
+    !Number.isInteger(everyMinutes) ||
+    everyMinutes < JOB_INTERVAL.min ||
+    everyMinutes > JOB_INTERVAL.max
+  ) {
+    problems.push(
+      `${where}: everyMinutes, how often it runs, must be a whole number of minutes from ${JOB_INTERVAL.min} to ${JOB_INTERVAL.max} (a week); it is ${shown(everyMinutes)}.`,
+    );
+  }
+  if (job.input !== undefined) {
+    problems.push(`${where}: A job takes no input: it runs by itself, for no one. Leave input out.`);
+  }
+  return problems;
+}
+
 /**
  * Checks what an app's `server.ts` exported. Returns everything that is
  * wrong with it, in words that name the place; an empty list means the
@@ -91,29 +123,5 @@ export function checkServer(server: unknown, manifest: Manifest): string[] {
     }
   }
 
-  return problems;
-}
-
-const KINDS = ["query", "mutation", "job"] as const;
-const isKind = (value: unknown): value is (typeof KINDS)[number] => (KINDS as readonly unknown[]).includes(value);
-
-/** What is wrong with a job besides its description: how often it runs, and an input it cannot be given. */
-function jobProblems(where: string, job: Record<string, unknown>): string[] {
-  const problems: string[] = [];
-  const { everyMinutes } = job;
-  if (
-    typeof everyMinutes !== "number" ||
-    !Number.isInteger(everyMinutes) ||
-    everyMinutes < JOB_INTERVAL.min ||
-    everyMinutes > JOB_INTERVAL.max
-  ) {
-    const given = everyMinutes === undefined ? "missing" : typeof everyMinutes === "number" ? String(everyMinutes) : JSON.stringify(everyMinutes);
-    problems.push(
-      `${where}: everyMinutes, how often it runs, must be a whole number of minutes from ${JOB_INTERVAL.min} to ${JOB_INTERVAL.max} (a week); it is ${given}.`,
-    );
-  }
-  if (job.input !== undefined) {
-    problems.push(`${where}: A job takes no input: it runs by itself, for no one. Leave input out.`);
-  }
   return problems;
 }

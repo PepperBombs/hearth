@@ -7,7 +7,8 @@
  * it is in this registry. An app that is in a space but not here is hidden
  * and its data left alone, so a mistaken deploy or a rollback loses nothing.
  *
- * Design: docs/mini-app-contract.md, sections A6 and A7.
+ * Design: docs/mini-app-contract.md, sections A6 and A7, and for the hosts
+ * a manifest names and the jobs that fetch from them section C.
  */
 import type { Manifest } from "@hearth/sdk";
 import { manifestSchema } from "@hearth/sdk/manifest-schema";
@@ -35,7 +36,7 @@ export type RegisteredApp = {
   id: string;
   manifest: Manifest;
   hasPage: boolean;
-  /** The app's collections, queries and mutations. Absent for an app that keeps no data. */
+  /** The app's collections, queries, mutations and jobs. Absent for an app without a server file. */
   server?: ServerDefinition;
 };
 
@@ -62,6 +63,9 @@ export class AppRegistryError extends Error {
     this.problems = problems;
   }
 }
+
+const hasJob = (server: ServerDefinition | undefined): boolean =>
+  server !== undefined && Object.values(server.routes).some((route) => route.kind === "job");
 
 /**
  * Checks every bundled app, its manifest and what its server file exports,
@@ -106,6 +110,14 @@ export function createRegistry(apps: readonly BundledApp[]): Registry {
         return;
       }
       registered.server = app.server as ServerDefinition;
+    }
+    // Only a job fetches. Hosts without one would have the dialog that adds
+    // the app announce connections that never happen.
+    if (manifest.network !== undefined && !hasJob(registered.server)) {
+      problems.push(
+        `App ${label}: manifest network: Names hosts to fetch from, but the app has no job, and only a job fetches. Define one in server.ts with app.job(...), or leave network out.`,
+      );
+      return;
     }
     byId.set(manifest.id, registered);
   });
