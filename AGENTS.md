@@ -131,21 +131,25 @@ on or asked for, the app's queries read again when a run went well, and
 `run()`; C7, jobs in an app's own tests: `runJob` on the world of
 `testApp`, which runs a job through the scheduler's own code while a
 function of the test answers what it fetches, and a person's `job` and
-`requestRun`, the status as `useJob` shows it and a run asked for; and
-C8, a sample app with a job, end to end: `packages/fixture-apps/headlines`,
+`requestRun`, the status as `useJob` shows it and a run asked for; C8,
+a sample app with a job, end to end: `packages/fixture-apps/headlines`,
 whose job fetches a sample news feed every hour and whose widget shows
 the headlines, "Updated N min ago", "Refresh now" and the failed state,
 with tests of its own, and in `pnpm e2e` the owner's and Lin's copies of
-the server running their jobs over one file of stand-in answers; and C9,
+the server running their jobs over one file of stand-in answers; C9,
 in `hearth-stones` (`trending/` there), GitHub Trending's data, job and
 card: a job that searches GitHub every hour for the new repositories with
 the most stars by day, week and month, for every language and each one
 the space follows, a deny-list against spam and the space's Hide list,
 and a widget with the first five of each person's own range, with tests
-of its own; `hearth-stones` declares SDK `^0.1.1` from then on. C10, the
-trending app's page, and C11, its end-to-end test here, remain. The
-document's last two sections, the questions behind decisions 1 to 5 and
-the risks, are D and E.
+of its own (`hearth-stones` declares SDK `^0.1.1` from then on); and C10,
+in `hearth-stones` too, the trending app's page: "Updated N min ago" and
+"Refresh now", the banner when a refresh failed with "Try again", the
+range control and the chips of the languages the space follows, the list
+with rank, link, description, language, stars, forks and age, and "Hide",
+"Undo" and "Hidden (n)" for edit access. C11, its end-to-end test here,
+remains. The document's last two sections, the questions behind
+decisions 1 to 5 and the risks, are D and E.
 
 ## Layout and commands
 
@@ -318,7 +322,11 @@ Things that bite:
   them all); after a mutation's `not_found` the app is read again only if
   the reloaded session still lists it. Everything cached for one
   install starts with `installQueryKey`, so invalidating that key refreshes
-  the whole app.
+  the whole app. It suspends again for an input it has not answered yet,
+  and `<AppView>`'s skeleton then takes the place of the whole widget or
+  page, unless the update is a transition: an app whose query follows a
+  control passes the input through React's `useDeferredValue`, as GitHub
+  Trending's page does (the SDK's README says so to app authors).
 - A job's status (`useJob`) is read with the queries, and every 3 seconds
   (`RUNNING_REFRESH_MS`) while a run is going on or was asked for, which
   includes one waiting out its 5 minutes. When a status that has just

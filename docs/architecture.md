@@ -152,10 +152,12 @@ Trending (`trending/`): the new repositories on GitHub with the most stars,
 by day, week and month, which its job searches for every hour through
 `ctx.fetch` and GitHub's search API (`api.github.com`, the one host its
 manifest names), for every language and each language the space follows.
-It leaves out spam, and what the space has put on its Hide list, and its
-card shows the first five of each person's own range; its own page is not
-built yet. It is the first app of `hearth-stones` with a job, so that
-repository declares SDK `^0.1.1`.
+It leaves out spam, and what the space has put on its Hide list. Its
+card shows the first five of each person's own range, and its own page
+every list, by range and by the languages the space follows, with when it
+was fetched, "Refresh now" and a banner when a refresh failed, and a Hide
+list that people with edit access change. It is the first app of
+`hearth-stones` with a job, so that repository declares SDK `^0.1.1`.
 
 ## Apps in spaces
 

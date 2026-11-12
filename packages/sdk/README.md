@@ -352,7 +352,12 @@ export default function Widget() {
   this app makes here, whether the server saved it or turned it down, when
   the window is looked at again, and every 15 seconds while it is visible:
   that is how people in a space see each other's changes. Leave `input` out
-  for a route that takes none, or whose schema accepts `undefined`.
+  for a route that takes none, or whose schema accepts `undefined`. It
+  waits again whenever `input` is one it has not answered yet, and the
+  shell then draws the skeleton in place of the whole widget or page; an
+  input that follows a control (a range, a filter) is best passed through
+  React's `useDeferredValue`, which keeps the last answer on screen until
+  the new one is there, as GitHub Trending's page in `hearth-stones` does.
 - **`useMutation(name)`** gives `run(input)`, `pending` and `error`
   (`{ code }` or null). `run` resolves once the change is saved and the
   app's queries have been read again, so the screen already shows it. It
