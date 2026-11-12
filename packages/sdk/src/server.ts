@@ -211,7 +211,12 @@ export type Job = {
 
 /** What a job may send with a request besides the address. */
 export type FetchInit = {
-  /** Extra headers: accept, accept-language, if-modified-since, if-none-match, and names starting with "x-" but for x-forwarded-* and x-real-ip. */
+  /**
+   * Extra headers: accept, accept-language, if-modified-since, if-none-match,
+   * and names starting with "x-" but for x-forwarded-* and x-real-ip, each
+   * once, with values of visible ASCII, spaces and tabs. Every request also
+   * says `User-Agent: Hearth`. Any other header is refused.
+   */
   readonly headers?: Readonly<Record<string, string>>;
 };
 
@@ -274,7 +279,13 @@ export type JobCtx<M, C extends Collections> = {
   readonly settings: SpaceSettingsOf<M>;
   /** When the run started. */
   readonly now: Date;
-  /** GET from a host the manifest lists in `network`. Rejects with a `FetchError` when there is no answer. */
+  /**
+   * GET from a host the manifest lists in `network`, over https on the
+   * default port. Redirects are followed up to 3 times on the same host; an
+   * answer takes at most 20 seconds and 2 MiB; requests to one host start
+   * 6.5 seconds apart across the server. Rejects with a `FetchError` when
+   * there is no answer.
+   */
   fetch(url: string, init?: FetchInit): Promise<FetchResponse>;
   /** Reads the app's rows in this space in one transaction. `work` must not be async. */
   read<T>(work: (db: { readonly [K in keyof C]: ReadCollection<z.output<C[K]>> }) => NotAPromise<T>): T;

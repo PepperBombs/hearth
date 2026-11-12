@@ -36,6 +36,8 @@ describe("loadConfig", () => {
       // Owner's decision 4: groups and new people are the server's owner's alone until opened up.
       groupPolicy: "owner",
       version: "dev",
+      // Jobs fetch from the hosts themselves.
+      fetchStandIns: null,
     });
     expect(config.webDist).toBe(resolve(import.meta.dirname, "../../web/dist"));
   });
@@ -134,6 +136,22 @@ describe("loadConfig", () => {
     it("still needs the owner", () => {
       expect(problemsOf({ HEARTH_AUTH: "dev" })).toContain("HEARTH_OWNER_EMAIL is required");
     });
+
+    it("may answer every fetch of a job from a file of stand-ins, for end-to-end tests", () => {
+      expect(load(dev).fetchStandIns).toBeNull();
+      expect(load({ ...dev, HEARTH_FETCH_STANDINS: "e2e/standins.json" }).fetchStandIns).toBe(
+        "/srv/hearth/e2e/standins.json",
+      );
+      expect(load({ ...dev, HEARTH_FETCH_STANDINS: "/tmp/standins.json" }).fetchStandIns).toBe("/tmp/standins.json");
+    });
+  });
+
+  it("refuses stand-in answers for jobs on a server that checks who signs in", () => {
+    const message = problemsOf({ ...cloudflare, HEARTH_FETCH_STANDINS: "/tmp/standins.json" });
+    expect(message).toContain("HEARTH_FETCH_STANDINS answers every fetch of a job from a file");
+    expect(message).toContain("so it needs HEARTH_AUTH=dev");
+    // Unset, or empty, is what a real server has.
+    expect(load({ ...cloudflare, HEARTH_FETCH_STANDINS: " " }).fetchStandIns).toBeNull();
   });
 
   it("allows a public address behind Cloudflare Access when asked for", () => {
@@ -169,6 +187,15 @@ describe("loadConfig", () => {
       expect(config.port).toBe(5000);
       expect(config.version).toBe("from-env");
       expect(config.ownerEmail).toBe("owner@example.com");
+    });
+
+    it("may name stand-ins for jobs only as dev mode may", () => {
+      const standIns = { HEARTH_FETCH_STANDINS: "/tmp/standins.json" };
+      expect(problemsOf({ HEARTH_CONFIG: fileWith(JSON.stringify({ ...cloudflare, ...standIns })) })).toContain(
+        "so it needs HEARTH_AUTH=dev",
+      );
+      const dev = { HEARTH_AUTH: "dev", HEARTH_OWNER_EMAIL: "owner@example.com", ...standIns };
+      expect(load({ HEARTH_CONFIG: fileWith(JSON.stringify(dev)) }).fetchStandIns).toBe("/tmp/standins.json");
     });
 
     it("may still name the mini-apps' folder, as a file written for an earlier release does", () => {

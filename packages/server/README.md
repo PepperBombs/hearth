@@ -88,6 +88,7 @@ config file that still has it is accepted, and the value ignored.
 | `HEARTH_DEV_USER` | the owner | The email address every request is treated as when `HEARTH_AUTH=dev`. |
 | `HEARTH_GROUP_POLICY` | `owner` | Who may create groups and invite people who are not on the server yet: `owner`, the server's owner alone, or `everyone` on the server. Adding someone who is already on the server to a group is for that group's owners either way. |
 | `HEARTH_VERSION` | `dev` | Shown as the running version; the deploy sets it to the short commit hash. |
+| `HEARTH_FETCH_STANDINS` | none | For end-to-end tests: the path of a JSON file of stand-in answers for every `ctx.fetch` of a job, so that nothing reaches the network (see "Mini-apps"). Refused unless `HEARTH_AUTH=dev`; the server says at start-up that it is on. |
 
 Relative paths are resolved against the working directory, except the default
 for `HEARTH_WEB_DIST`. Started through pnpm (`pnpm start`, `pnpm --filter
@@ -374,6 +375,58 @@ person in that space.
   when the person leaves the space.
 - There is no way to put a setting back to "not saved". A value equal to
   the default is stored like any other, and stays when the default changes.
+
+**`ctx.fetch`** (`src/apps/fetch.ts`) is how a job reaches the network.
+Every request meets the same rules, then waits for its host's turn, then
+goes out through one transport:
+
+- GET only, to `https` on the default port, without a user name or
+  password, to a host the app's manifest lists in `network`, exactly.
+  Anything else is refused before it is sent.
+- It sends `User-Agent: Hearth` and, of the job's own headers, only
+  `accept`, `accept-language`, `if-modified-since`, `if-none-match` and
+  names starting with `x-` other than `x-forwarded-*` and `x-real-ip`, with
+  plain ASCII values. A job has no person's request behind it: no cookie,
+  no `authorization`, nothing of anyone's goes out, and no cookie is kept.
+- Redirects are followed up to 3 times while they stay on https and the
+  same host; any other is refused.
+- An answer must be whole within 20 seconds, its body included, and its
+  body may hold 2 MiB, counted after decompression; past that the
+  download stops.
+- Requests to one host start at least 6.5 seconds apart across the whole
+  server, every app, space and job together, the next request of a
+  redirect too: at most 10 a minute, GitHub's limit for searches without
+  a token.
+- The answer comes whole: its address, status, headers (without
+  `set-cookie`), text and `json()`. A status that is not 2xx is an answer.
+  When there is none, `ctx.fetch` rejects with the SDK's `FetchError`:
+  `refused`, `timeout`, `too_large`, `network` or `stopped` (the run is
+  over).
+
+On a server the transport is Node's own `fetch`, which follows no redirect
+itself. With `HEARTH_FETCH_STANDINS` nothing leaves the server: the file
+it names is a JSON list of answers, read again at every request, so that a
+test changes them by writing the file (whole: rename a new file into
+place).
+
+```json
+[
+  { "url": "https://api.github.com/search/repositories", "query": { "q": "language:rust" },
+    "status": 403, "body": { "message": "API rate limit exceeded" } },
+  { "url": "https://api.github.com/search/repositories", "body": { "items": [] } },
+  { "url": "https://feeds.example.com/headlines.json", "error": "network" }
+]
+```
+
+The first entry whose `url` is the request's address without its query,
+and each of whose `query` texts is part of that parameter of the request,
+answers with its `status` (200 when left out), `headers` and `body` (sent
+as is when it is text, as JSON otherwise), or fails at once with its
+`error`, `network` or `timeout`. A request no entry answers fails as
+`network`, and so does every request while the file is missing or is not
+such a list, with a message that says which. Stand-ins answer at once and
+are not paced; the rules still come first, so a stand-in opens no host the
+manifest does not list. Until jobs run, nothing calls `ctx.fetch`.
 
 ## Groups and members
 

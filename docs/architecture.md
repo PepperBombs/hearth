@@ -251,9 +251,22 @@ whose work may not wait, so that no transaction is held open across the
 network. Only a job fetches, with `ctx.fetch`, and only from the hosts the
 manifest lists in `network`; an app that names hosts without a job does not
 start. The start-up check holds every job to its description, its interval
-and taking no input. Running jobs (`ctx.fetch` itself, the run and its
-transactions, the scheduler) is designed in section C of
-`docs/mini-app-contract.md` and not built yet: nothing runs a job today.
+and taking no input.
+
+`ctx.fetch` (`packages/server/src/apps/fetch.ts`) holds every request to
+the same rules before it goes out: GET over https, on the default port, to
+a host the manifest lists exactly; `User-Agent: Hearth` and a few headers
+that carry nothing of anyone's, so no cookie and no `authorization`;
+redirects only while they stay on https and the same host; 20 seconds and
+2 MiB for an answer. Requests to one host start at least 6.5 seconds apart
+across the whole server, which keeps every space's jobs together within
+GitHub's 10 searches a minute for an address without a token. A server
+sends them with Node's own `fetch`; for end-to-end tests,
+`HEARTH_FETCH_STANDINS` names a file of stand-in answers instead, which
+only a server in dev mode accepts, so that no test reaches the network.
+Running jobs (the run and its transactions, the scheduler) is designed in
+section C of `docs/mini-app-contract.md` and not built yet: nothing runs a
+job today, so nothing calls `ctx.fetch`.
 
 ## An app's settings
 

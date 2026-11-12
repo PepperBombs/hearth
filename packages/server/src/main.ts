@@ -60,6 +60,11 @@ const server = serve({ fetch: app.fetch, hostname: config.host, port: config.por
       `Listening on ${config.host}, which other machines can reach. Make sure only Cloudflare can connect to this port.`,
     );
   }
+  if (config.fetchStandIns !== null) {
+    console.warn(
+      `Jobs reach no network (HEARTH_FETCH_STANDINS): every ctx.fetch is answered from the stand-ins in ${config.fetchStandIns}. This is for end-to-end tests only.`,
+    );
+  }
 });
 
 server.on("error", (error) => {

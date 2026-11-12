@@ -229,20 +229,40 @@ The manifest of this app lists `network: ["feeds.example.com"]`.
   is not `async` and hands back no promise (a type error says so), so that
   no transaction waits on the network: fetch first, then write.
 - **`ctx.fetch(url, { headers })`** GETs from a host the manifest lists in
-  `network`, and gives the answer whole: `url`, `status`, `ok`, `headers`,
-  `text` and `json()`. A status that is not 2xx is an answer, not an
-  error. When there is no answer it rejects with a `FetchError`, whose
-  `code` says why: `refused`, `timeout`, `too_large`, `network` or
-  `stopped`.
+  `network`, and gives the answer whole: `url`, `status`, `ok`, `headers`
+  (names in lower case, without `set-cookie`), `text` and `json()`. A
+  status that is not 2xx is an answer, not an error. When there is no
+  answer it rejects with a `FetchError`, whose `code` says why: `refused`,
+  `timeout`, `too_large`, `network` or `stopped`.
+- **What `ctx.fetch` allows** is checked at every request:
+  - an `https` address on the default port, without a user name or
+    password, on a host the manifest lists exactly (`api.github.com` does
+    not let in `github.com` or `x.api.github.com`); anything else is
+    `refused` before it is sent;
+  - `User-Agent: Hearth`, sent with every request, and of the job's own
+    headers only `accept`, `accept-language`, `if-modified-since`,
+    `if-none-match` and names starting with `x-` other than
+    `x-forwarded-*` and `x-real-ip`, with values of plain ASCII; any other,
+    such as `authorization` or `cookie`, is `refused`. No cookie is kept;
+  - redirects, up to 3, while they stay on https and the same host; any
+    other is `refused`;
+  - 20 seconds for an answer, its body included (`timeout`), and 2 MiB of
+    body, counted after decompression (`too_large`, and the download
+    stops);
+  - requests to one host start at least 6.5 seconds apart, across every
+    app and space of the server: at most 10 a minute, GitHub's limit for
+    searches without a token. A job that asks for 30 pages waits over
+    three minutes for them, which counts against its run.
 - A run went well when the function returned or its promise resolved;
   whatever it throws or rejects with makes it fail.
 - **A job is not a route.** `useQuery`, `useMutation` and a test's `query`
   and `mutation` cannot name it (`JobName<typeof server>` names an app's
   jobs), and the server answers 404 when one is asked for as a query or a
   mutation.
-- **Nothing runs a job yet.** The SDK has its types and the server checks
-  every job when it starts; `ctx.fetch`, the run and the scheduler come in
-  the next steps of docs/mini-app-contract.md, section C.
+- **Nothing runs a job yet.** The SDK has its types, the server checks
+  every job when it starts, and `ctx.fetch` is built; the run and the
+  scheduler come in the next steps of docs/mini-app-contract.md, section
+  C.
 
 ## A widget and a page
 

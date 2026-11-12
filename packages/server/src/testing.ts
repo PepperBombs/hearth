@@ -36,6 +36,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     ownerEmail: OWNER_EMAIL,
     groupPolicy: "owner",
     version: "test",
+    fetchStandIns: null,
     ...overrides,
   };
 }
