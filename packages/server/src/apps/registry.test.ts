@@ -37,11 +37,14 @@ describe("createRegistry", () => {
 
   it("accepts the framework's own sample apps", () => {
     const registry = createRegistry(FIXTURE_APPS);
-    expect(registry.list().map((app) => app.id)).toEqual(["checklist", "feed"]);
+    expect(registry.list().map((app) => app.id)).toEqual(["checklist", "feed", "headlines"]);
     expect(registry.get("checklist")?.manifest.name).toEqual({ en: "Checklist", zh: "清单" });
-    // One keeps rows and one does not.
+    // Two keep rows and one does not.
     expect(registry.get("checklist")?.server).toBeDefined();
     expect(registry.get("feed")?.server).toBeUndefined();
+    // One fetches, in a job, from the host its manifest names.
+    expect(registry.get("headlines")?.manifest.network).toEqual(["feeds.example.com"]);
+    expect(registry.get("headlines")?.server?.routes.refresh).toMatchObject({ kind: "job", everyMinutes: 60 });
   });
 
   it("finds an app by its ID and no other", () => {
@@ -76,8 +79,9 @@ describe("createRegistry", () => {
   });
 
   describe("hosts in network", () => {
-    const headlines = defineApp({ ...notes, id: "headlines", network: ["feeds.example.com"] });
-    const app = defineServer(headlines, { headlines: z.object({ title: z.string() }) });
+    // Not the sample headlines, which FIXTURE_APPS holds: an app of the same kind, made up here.
+    const ticker = defineApp({ ...notes, id: "ticker", network: ["feeds.example.com"] });
+    const app = defineServer(ticker, { headlines: z.object({ title: z.string() }) });
     const latest = app.query({ description: "Lists the headlines kept, newest first." }, (ctx) =>
       ctx.db.headlines.list({ desc: true }),
     );
@@ -85,19 +89,19 @@ describe("createRegistry", () => {
       const answer = await ctx.fetch("https://feeds.example.com/headlines.json");
       ctx.write((db) => db.headlines.insert({ title: answer.text }));
     });
-    const NO_JOB = 'App "headlines": manifest network: Names hosts to fetch from, but the app has no job, and only a job fetches. Define one in server.ts with app.job(...), or leave network out.';
+    const NO_JOB = 'App "ticker": manifest network: Names hosts to fetch from, but the app has no job, and only a job fetches. Define one in server.ts with app.job(...), or leave network out.';
 
     it("are taken from an app with a job, which fetches from them", () => {
-      const registry = createRegistry([...FIXTURE_APPS, { ...bundled(headlines), server: app.routes({ latest, keep }) }]);
-      expect(registry.get("headlines")?.manifest.network).toEqual(["feeds.example.com"]);
+      const registry = createRegistry([...FIXTURE_APPS, { ...bundled(ticker), server: app.routes({ latest, keep }) }]);
+      expect(registry.get("ticker")?.manifest.network).toEqual(["feeds.example.com"]);
     });
 
     it("are refused from an app without a server file, whose add dialog would announce what never happens", () => {
-      expect(problemsOf([...FIXTURE_APPS, bundled(headlines)])).toEqual([NO_JOB]);
+      expect(problemsOf([...FIXTURE_APPS, bundled(ticker)])).toEqual([NO_JOB]);
     });
 
     it("are refused from an app whose server file has queries and mutations but no job", () => {
-      expect(problemsOf([{ ...bundled(headlines), server: app.routes({ latest }) }])).toEqual([NO_JOB]);
+      expect(problemsOf([{ ...bundled(ticker), server: app.routes({ latest }) }])).toEqual([NO_JOB]);
     });
 
     it("are not held against an app that leaves them out, with a job or without", () => {

@@ -187,32 +187,41 @@ of names, and every description is in one place.
 
 ```ts
 const app = defineServer(manifest, {
-  headlines: z.object({ title: z.string().max(200) }),
+  headlines: z.object({ title: z.string().min(1).max(200) }),
 });
 
 const feed = z.object({ items: z.array(z.object({ title: z.string() })) });
 
 export default app.routes({
-  latest: app.query({ description: "Lists the headlines kept, in the feed's order." }, (ctx) => ctx.db.headlines.list()),
+  latest: app.query(
+    { description: "Lists the headlines the last refresh kept, in the feed's order." },
+    (ctx) => ctx.db.headlines.list(),
+  ),
   refresh: app.job(
     {
-      description: "Fetches the latest headlines from the feed and keeps the first ten in place of the old ones.",
+      description: "Fetches the sample news feed and keeps its first five headlines in place of those kept before.",
       everyMinutes: 60,
     },
     async (ctx) => {
-      const answer = await ctx.fetch("https://feeds.example.com/headlines.json");
+      const answer = await ctx.fetch("https://feeds.example.com/headlines.json", { headers: { accept: "application/json" } });
       if (!answer.ok) throw new Error(`The feed answered ${answer.status}.`);
-      const { items } = feed.parse(answer.json());
+      const read = feed.safeParse(answer.json());
+      if (!read.success) throw new Error("The feed's answer is not a list of headlines.");
+      const titles = read.data.items.map((item) => item.title.trim().slice(0, 200)).filter((title) => title !== "");
+      // Fetched first, then written in one go: no transaction waits on the network.
       ctx.write((db) => {
         db.headlines.removeWhere({});
-        for (const item of items.slice(0, 10)) db.headlines.insert({ title: item.title.slice(0, 200) });
+        for (const title of titles.slice(0, 5)) db.headlines.insert({ title });
       });
     },
   ),
 });
 ```
 
-The manifest of this app lists `network: ["feeds.example.com"]`.
+The manifest of this app lists `network: ["feeds.example.com"]`. It is a
+shorter version of the framework's sample headlines
+(`packages/fixture-apps/headlines` in the `hearth` checkout), whose widget,
+tests and README are worth reading beside this section.
 
 - **Every job has a `description`**, one English sentence, as a route
   has, and **`everyMinutes`**, how often it runs: a whole number from 15
@@ -386,6 +395,14 @@ export default function Widget() {
     );
   }
   ```
+
+  The sample headlines' `widget.tsx` shows the whole of it: "Updated N
+  min ago" and, after an hour and a half, the time of day, written with
+  `Intl.DateTimeFormat` in the reader's language; the failed state with
+  the time it failed and the time of what is shown ("Couldn't reach the
+  feed at 14:05. Showing headlines from 13:05."); and a clock read again
+  every 15 seconds, so that the minutes move on without anything being
+  fetched.
 - When any call answers that the app is not there (it was removed or moved
   to another space, or the person's access was taken away), the shell loads
   the session again and the card or page goes with the app.
@@ -469,6 +486,10 @@ it("keeps the feed's headlines, and keeps them when the feed fails", async () =>
   expect(() => lin.requestRun("refresh")).toThrow("forbidden");
 });
 ```
+
+The sample headlines' own tests (`headlines.test.ts` there) are more of
+the same: what a run asks for and keeps, a feed that fails or answers
+something else, and a run asked for with view and with edit.
 
 - **`app.runJob(name, { fetch, now })`** runs one of the app's jobs now, in
   the app's space, as the server's scheduler runs it: the same code claims,

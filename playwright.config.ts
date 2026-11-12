@@ -12,6 +12,7 @@ import {
   OWNER_URL,
   SHARED_DB,
   SHARED_DB_DIR,
+  STAND_INS,
   WEB_PORT,
   WEB_URL,
   WITH_REAL_SERVER,
@@ -35,6 +36,9 @@ import {
  *   stranger. The owner's and the member's share a database file in the
  *   system's temporary folder, made afresh when the owner's copy starts, so
  *   that they are two people on one server; the stranger's is in memory.
+ *   The owner's and the member's run their apps' jobs, and share one file of
+ *   stand-in answers beside the database (STAND_INS), which the tests write,
+ *   so that no job reaches the network; the stranger's runs none.
  *   Set HEARTH_E2E_SERVER=0 to leave this project out.
  *
  * Both builds hold the framework's sample apps (packages/fixture-apps):
@@ -100,7 +104,7 @@ export default defineConfig({
             // whether the web build above has finished when this starts.
             // The list of apps is written again here: it is the same list, and this
             // entry must not depend on the one above having got that far.
-            command: `pnpm apps:sync && pnpm --filter @hearth/server build && rm -rf ${JSON.stringify(SHARED_DB_DIR)} && ${realServer(OWNER_PORT, OWNER_EMAIL, SHARED_DB)}`,
+            command: `pnpm apps:sync && pnpm --filter @hearth/server build && rm -rf ${JSON.stringify(SHARED_DB_DIR)} && ${realServer(OWNER_PORT, OWNER_EMAIL, SHARED_DB, STAND_INS)}`,
             env: buildEnv,
             url: `${OWNER_URL}/api/health`,
             reuseExistingServer,
@@ -111,7 +115,8 @@ export default defineConfig({
           {
             name: "server as a family member",
             // Started after the owner's copy, which created and migrated the database they share.
-            command: realServer(MEMBER_PORT, MEMBER_EMAIL, SHARED_DB),
+            // Its jobs run too, over the same stand-ins: the claim in the database keeps each run single.
+            command: realServer(MEMBER_PORT, MEMBER_EMAIL, SHARED_DB, STAND_INS),
             url: `${MEMBER_URL}/api/health`,
             reuseExistingServer,
             timeout: 120_000,

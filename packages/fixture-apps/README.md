@@ -13,10 +13,16 @@ They are sample apps with sample data. Nobody's real app lives here.
 |---|---|
 | `checklist` | A list of things to do. `manifest.ts`, `server.ts` (one collection, `items`, with a query that lists them and mutations that add one, tick one and clear the ticked ones), `widget.tsx` (the open items, each with a box to tick), `page.tsx` (every item by section, a form to add one, "Clear ticked") and `checklist.test.ts` (its own tests, written with `testApp` from `@hearth/sdk/testing`: two people sharing the list, view against edit, the settings). |
 | `feed` | A card each person filters for themselves. `manifest.ts` with two settings of each person's own, and `widget.tsx`. It has no server file, so it keeps no rows, and its widget is typed from the manifest. |
+| `headlines` | The latest headlines of a sample news feed, which a job fetches every hour. `manifest.ts` (naming the one host it fetches from, `feeds.example.com`, in `network`), `server.ts` (one collection, `headlines`, the query `latest` and the job `refresh`), `widget.tsx` (the headlines, "Updated N min ago", "Refresh now" and the failed state, from `useJob`) and `headlines.test.ts` (runs of the job with stand-ins for the feed, written with `testApp`). |
 
-Both get their strings, settings and data from the hooks of `appHooks` in
-`@hearth/sdk/web`; the shell draws the card around a widget, the top bar
-of a page, the loading and failed states.
+All three get their strings, settings and data from the hooks of
+`appHooks` in `@hearth/sdk/web`, and the headlines how their job is doing;
+the shell draws the card around a widget, the top bar of a page, the
+loading and failed states.
+
+The folder declares SDK `^0.1.1` (`"hearth": { "sdk": "^0.1.1" }` in its
+`package.json`), the version that brought `network` to the manifest, which
+the headlines name.
 
 ## How they are used
 
@@ -30,16 +36,22 @@ of a page, the loading and failed states.
   a new app: the same files with the new ID, a test file named after it,
   and a README of its own. Its tests check that the copy passes
   `hearth-apps check` untouched, so the checklist must stay a complete app.
-- `pnpm test` at the repository's root runs the checklist's own tests, as
-  `hearth-apps test` runs any mini-app's.
+- `pnpm test` at the repository's root runs the checklist's and the
+  headlines' own tests, as `hearth-apps test` runs any mini-app's.
 - The end-to-end tests build the framework with them
   (`HEARTH_APPS_DIR=packages/fixture-apps`, set in `playwright.config.ts`).
+  The owner's and Lin's copies of the server run jobs there, and one file
+  of stand-in answers (`STAND_INS` in `e2e/servers.ts`) answers for the
+  headlines' feed, so that nothing reaches the network.
 - A plain `pnpm build` or `pnpm dev` does not hold them. To run Hearth with
   them:
 
   ```sh
   HEARTH_APPS_DIR=packages/fixture-apps HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@example.com pnpm dev
   ```
+
+  The headlines' job then reaches for `feeds.example.com`, which serves no
+  feed; `headlines/README.md` says how to answer for it with stand-ins.
 
 ## Checks
 

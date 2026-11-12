@@ -1,6 +1,7 @@
 /**
  * The framework's own sample apps (packages/fixture-apps) as the server's
- * tests are handed them, and the one that has no server file.
+ * tests are handed them: the one that has no server file, and the one with
+ * a job.
  *
  * A real build gets its list of apps from `hearth-apps sync`; tests get
  * `FIXTURE_APPS`, written by hand in ../testing.ts. The first test keeps the
@@ -8,9 +9,12 @@
  */
 import { existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { apiErrorSchema, appSettingsSchema, sessionSchema } from "@hearth/shared";
+import { apiErrorSchema, appCallResponseSchema, appSettingsSchema, jobStatusSchema, sessionSchema } from "@hearth/shared";
 import { beforeEach, describe, expect, it } from "vitest";
 import { as, FIXTURE_APPS, testApp } from "../testing";
+import { processClock, standInResponse, type Outbound } from "./fetch";
+import { runOnce } from "./jobs";
+import { createRegistry } from "./registry";
 import { family, install, LIN, SAM } from "./test-world";
 
 const BASE = "http://hearth.example.com";
@@ -81,6 +85,80 @@ describe("the sample feed, an app with a widget and no server file", () => {
 
     const unknownTopic = await call(LIN, "PATCH", address, { user: { topics: ["gossip"] } });
     expect(unknownTopic.status).toBe(400);
+    expect(errors).toEqual([]);
+  });
+});
+
+describe("the sample headlines, an app with a job", () => {
+  let world: ReturnType<typeof family>;
+  let app: ReturnType<typeof testApp>["app"];
+  let errors: unknown[];
+
+  const call = (who: string, method: string, path: string, body?: unknown) =>
+    app.request(`${BASE}${path}`, {
+      method,
+      headers: as(who, body === undefined ? {} : { "content-type": "application/json", origin: BASE }),
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  const address = () => `/api/spaces/${world.family}/apps/headlines`;
+  const latest = async (who: string) => {
+    const response = await call(who, "POST", `${address()}/q/latest`, {});
+    expect(response.status).toBe(200);
+    return appCallResponseSchema.parse(await response.json()).output as { title: string; createdBy: string }[];
+  };
+  const status = async (who: string) => {
+    const response = await call(who, "GET", `${address()}/jobs/refresh`);
+    expect(response.status).toBe(200);
+    return jobStatusSchema.parse(await response.json());
+  };
+
+  beforeEach(() => {
+    world = family();
+    ({ app, errors } = testApp({ db: world.db, apps: FIXTURE_APPS }));
+    // Sam added the headlines to the family, for every member to view.
+    install(world.db, world.family, "headlines", world.sam.id, { memberAccess: "view" });
+  });
+
+  it("has no headlines before its job first ran, and says the job has not run", async () => {
+    expect(await latest(LIN)).toEqual([]);
+    expect(await status(LIN)).toMatchObject({ lastStartedAt: null, lastSucceededAt: null, lastFailedAt: null, state: "idle" });
+    expect(errors).toEqual([]);
+  });
+
+  it("keeps the feed's headlines once its job ran as the scheduler runs it, in the name of whoever added it", async () => {
+    const asked: string[] = [];
+    const outbound: Outbound = {
+      transport: async ({ url }) => {
+        asked.push(url);
+        return standInResponse({ body: { items: [{ title: "Rain expected" }, { title: "Market opens" }] } });
+      },
+      pace: null,
+      clock: processClock,
+    };
+    const outcome = await runOnce(
+      world.db,
+      createRegistry(FIXTURE_APPS),
+      { spaceId: world.family, appId: "headlines", job: "refresh" },
+      { outbound, clock: processClock, now: () => new Date(), random: () => 0 },
+    );
+
+    expect(outcome).toEqual({ kind: "succeeded" });
+    expect(asked).toEqual(["https://feeds.example.com/headlines.json"]);
+    expect(await latest(LIN)).toEqual([
+      expect.objectContaining({ title: "Rain expected", createdBy: world.sam.id }),
+      expect.objectContaining({ title: "Market opens", createdBy: world.sam.id }),
+    ]);
+    expect(await status(LIN)).toMatchObject({ lastSucceededAt: expect.any(String), lastFailedAt: null, state: "idle" });
+
+    // Lin may only view: she reads how it went, and cannot ask for a run. Sam can.
+    const refused = await call(LIN, "POST", `${address()}/jobs/refresh/run`);
+    expect(refused.status).toBe(403);
+    expect(apiErrorSchema.parse(await refused.json()).error.code).toBe("forbidden");
+    const asks = await call(SAM, "POST", `${address()}/jobs/refresh/run`);
+    expect(asks.status).toBe(202);
+    expect(jobStatusSchema.parse(await asks.json()).state).toBe("requested");
+    // The job is no route.
+    expect((await call(SAM, "POST", `${address()}/q/refresh`, {})).status).toBe(404);
     expect(errors).toEqual([]);
   });
 });

@@ -29,6 +29,7 @@ describe("scanApp: what is allowed", () => {
   it("passes the framework's own sample apps", () => {
     expect(scanApp(path.join(FIXTURES, "checklist"))).toEqual([]);
     expect(scanApp(path.join(FIXTURES, "feed"))).toEqual([]);
+    expect(scanApp(path.join(FIXTURES, "headlines"))).toEqual([]);
   });
 
   it("passes an app whose sides keep to their own part of the SDK", () => {

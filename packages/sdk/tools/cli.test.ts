@@ -53,7 +53,7 @@ describe("hearth-apps sync", () => {
 
   it("builds the framework's sample apps in, named relative to the repository's root", () => {
     const run = hearthApps(["sync"], { appsDir: "packages/fixture-apps", cwd: path.join(ROOT, "packages/web") });
-    expect(run).toMatchObject({ status: 0, output: expect.stringContaining("this build holds 2 mini-apps (checklist, feed)") });
+    expect(run).toMatchObject({ status: 0, output: expect.stringContaining("this build holds 3 mini-apps (checklist, feed, headlines)") });
     expect(generated(run, "server")).toContain('{ id: "checklist", manifest: manifest0, hasPage: true, server: server0 },');
     expect(generated(run, "web")).toContain('id: "feed"');
   });
@@ -119,16 +119,18 @@ describe("hearth-apps sync", () => {
 describe("hearth-apps check", () => {
   it("passes the framework's sample apps", { timeout: SLOW }, () => {
     const run = hearthApps(["check"], { appsDir: "packages/fixture-apps" });
-    expect(run.output).toContain("2 mini-apps passed (checklist, feed)");
+    // The checklist's tests and the headlines', which run its job with stand-ins for the feed.
+    expect(run.output).toContain("running the tests of 2 mini-apps (checklist, headlines)");
+    expect(run.output).toContain("3 mini-apps passed (checklist, feed, headlines)");
     expect(run.status).toBe(0);
   });
 
   it("passes the same apps in a repository of their own, checked from inside it", { timeout: SLOW }, () => {
     // As hearth-stones will be: beside this checkout, linked to its SDK,
     // with a one-line tsconfig.json and eslint.config.js.
-    const repo = makeRepo({ fixtures: ["checklist", "feed"] });
+    const repo = makeRepo({ fixtures: ["checklist", "feed", "headlines"] });
     const run = hearthApps(["check"], { cwd: repo });
-    expect(run.output).toContain("2 mini-apps passed (checklist, feed)");
+    expect(run.output).toContain("3 mini-apps passed (checklist, feed, headlines)");
     expect(run.status).toBe(0);
     expect(generated(run, "web")).toContain(`${path.basename(repo)}/checklist/widget.tsx`);
   });

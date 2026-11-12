@@ -120,19 +120,26 @@ the server listens: due jobs one at a time across the server, the one
 that fell due first first, a sleep of at most 30 seconds that adding an
 app or bringing one back cuts short, and a stop that ends the run going
 on before the database closes; and `HEARTH_JOBS`, which switches jobs
-off, as the deploy's trial start and every end-to-end server do; C6,
+off, as the deploy's trial start and every end-to-end server without
+stand-ins do; C6,
 a job's two routes (`GET .../jobs/:job`, its status for anyone who can
 see the app, and `POST .../jobs/:job/run`, a run asked for with edit, at
 most one every 5 minutes, or 5 seconds with stand-ins), `jobStatusSchema`
 and `jobStateOf` in `@hearth/shared`, and `useJob` in `appHooks`, which
 `<AppScope>` fills: the status, read every 3 seconds while a run is going
 on or asked for, the app's queries read again when a run went well, and
-`run()`; and C7, jobs in an app's own tests: `runJob` on the world of
+`run()`; C7, jobs in an app's own tests: `runJob` on the world of
 `testApp`, which runs a job through the scheduler's own code while a
 function of the test answers what it fetches, and a person's `job` and
-`requestRun`, the status as `useJob` shows it and a run asked for. The
-document's last two sections, the questions behind decisions 1 to 5 and
-the risks, are D and E.
+`requestRun`, the status as `useJob` shows it and a run asked for; and
+C8, a sample app with a job, end to end: `packages/fixture-apps/headlines`,
+whose job fetches a sample news feed every hour and whose widget shows
+the headlines, "Updated N min ago", "Refresh now" and the failed state,
+with tests of its own, and in `pnpm e2e` the owner's and Lin's copies of
+the server running their jobs over one file of stand-in answers. The
+framework's part of section C is built; C9 to C11 are the GitHub Trending
+app. The document's last two sections, the questions behind decisions 1
+to 5 and the risks, are D and E.
 
 ## Layout and commands
 
@@ -141,9 +148,9 @@ the risks, are D and E.
 | `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. Every route of the mini-app contract's section A8 is built, and a job's two routes of section C. Besides schemas it holds one function, `jobStateOf`: what a job's status means to the people who see the app. |
 | `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too, and `appHooks` (`src/web/hooks.ts`), the hooks a widget or page is written with (`useApp`, `useQuery`, `useMutation`, `useJob`). `@hearth/sdk/web/scope` is the React context those hooks read, which the shell fills; for the framework only. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer` (queries, mutations and jobs), `AppError`, `FetchError`, `z`, the types of a handler's `ctx` and those of a job's (`JobCtx`, `FetchInit`, `FetchResponse`); it holds no logic. `@hearth/sdk/testing` (`src/testing.ts`) is what an app's tests are written with: `testApp`, whose people call the app's routes and read and ask for its jobs (`job`, `requestRun`) and whose world runs a job with stand-ins for what it fetches (`runJob`), `AppCallError` and their types; it holds no logic, only the hand-over to what the framework installs through `@hearth/sdk/testing/host` (`src/testing-host.ts`, for the framework only). `src/routes.ts` holds the types that name an app's routes and jobs (`QueryName`, `MutationName`, `JobName`) and `JobState`, what `useJob` gives, shared by the hooks and the tests and exported from `@hearth/sdk/web`. `@hearth/sdk/manifest-schema` is the run-time check of a manifest and of a setting's value (`settingValueProblems`), for the framework only. `bin/hearth-apps.mjs` and `tools` are the `hearth-apps` command, plain JavaScript: `sync.mjs` (finds the apps, the version handshake, writes the generated lists), `import-scan.mjs` (what a file of an app may import), `default-export.mjs` (whether `widget.tsx`, `page.tsx` and `server.ts` have the default export the generated lists import), `check.mjs`, `test.mjs` (runs the apps' tests), `dev.mjs` (the dev servers with the apps in), `new.mjs` (a new app, copied from the sample checklist), `eslint-boundary.mjs`. `@hearth/sdk/eslint` (`eslint.js`) and `tsconfig.app.json` are the ESLint and TypeScript configuration of a mini-apps repository. Imports no other Hearth package. |
 | `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file, its jobs included), `installs.ts` (who may use which app where; add, remove, bring back, move to another space, delete data, each person's switch and pin), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db` and the `db` a job's work gets, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds, a handler's and a job's), `fetch.ts` (`ctx.fetch`: the rules, the pace, Node's transport and the stand-in file; `outboundFor` picks the last two from the settings), `jobs.ts` (running a job: `claimRun`, the run (`runClaimed`), `recordRun`, and `runOnce`, which does the three; `nextJob`, which job falls due first; `requestRun` and `jobStatus`; the only SQL for `app_jobs`), `scheduler.ts` (the scheduler: due jobs one at a time, through `runOnce`; `start`, `wake` and `stop`; only `main.ts` makes one), `routes.ts` (every route about apps in a space, a job's status and a run asked for among them), `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports), `check-bundle.ts` (run by `hearth-apps check`, not by the server), `test-world.ts` and `test-clock.ts` (a world of people, spaces and apps, and a clock that moves only when told, for the server's tests), and `app-testing.ts` with `app-testing.setup.ts` (the implementation of `testApp` for an app's own tests, its jobs' runs and statuses included, which `vitest.apps.config.ts` at the package's root installs; not part of the server). `installs.ts` also holds the owners' list of a space's apps (`listSpaceApps`) and the access route's work (`setAppAccess`). `src/groups` is groups and their people: `policy.ts` (`groupRights`: who may create groups and invite), `members.ts` (create, rename, add or invite, change, remove or leave, take an invitation back) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
-| `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file, a widget, a page and tests of its own (`checklist.test.ts`, written with `testApp`), and is the template `hearth-apps new` copies; `feed` a manifest and a widget, no server file. |
+| `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository (it declares SDK `^0.1.1`). Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file, a widget, a page and tests of its own (`checklist.test.ts`, written with `testApp`), and is the template `hearth-apps new` copies; `feed` a manifest and a widget, no server file; `headlines` a manifest that names one host (`feeds.example.com`), a server file with a query and a job (`refresh`, every hour), a widget that reads `useJob`, and tests of its own that run the job with stand-ins. |
 | `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card, the avatar and `LinkedText` in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes, settings and jobs' statuses, a run asked for, and adding, removing, moving, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, moving, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page, with the dialogs that add, move and remove an app; the one that adds names the hosts an app's manifest lists in `network`. `src/groups` is the groups' cards in Settings: `groups.tsx` (the cards, creating, renaming, leaving), `people.tsx` (the people, adding, the dialog for one person, invitations), `access-table.tsx` (the member-by-app table), `api.ts` and `queries.ts`. |
-| `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). `servers.ts` holds the addresses, the people and the command that starts a copy of the built server. `e2e/mini-apps` holds the tests of mini-apps from another repository, one file per app named after its ID (`grocery.spec.ts`), which `playwright.mini-apps.config.ts` runs against Hearth built with them. |
+| `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). `servers.ts` holds the addresses, the people, the command that starts a copy of the built server (`realServerCommand`), and the file of stand-in answers the owner's and Lin's copies share (`STAND_INS`), which tests write with `writeStandIns`. `e2e/mini-apps` holds the tests of mini-apps from another repository, one file per app named after its ID (`grocery.spec.ts`), which `playwright.mini-apps.config.ts` runs against Hearth built with them. |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Each release is built with the mini-apps of `APPS_REPO` at the same moment, copied in beside the framework and linked to its SDK. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
 | `.github/workflows` | `ci.yml`: the framework by itself (`check`), end to end with the sample apps (`e2e`), and with `main` of `hearth-stones` checked out beside it, checked, built and end to end (`mini-apps`). |
 | `docs` | `architecture.md`, `self-hosting.md` and `mini-app-contract.md` (the agreed design for mini-apps and its build plan). |
@@ -153,7 +160,7 @@ Commands, from the repository root (Node 22, pnpm 10):
 | Command | Does |
 |---|---|
 | `pnpm install` | Install dependencies. |
-| `HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@example.com pnpm dev` | Run server (port 4310) and web dev server (port 5173) with sign-in switched off. Add `HEARTH_APPS_DIR=packages/fixture-apps` to hold the sample apps, or the path of a mini-apps checkout. The apps' jobs run, against the real hosts their manifests name; add `HEARTH_JOBS=off` to run none. |
+| `HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@example.com pnpm dev` | Run server (port 4310) and web dev server (port 5173) with sign-in switched off. Add `HEARTH_APPS_DIR=packages/fixture-apps` to hold the sample apps, or the path of a mini-apps checkout. The apps' jobs run, against the real hosts their manifests name; add `HEARTH_JOBS=off` to run none, or `HEARTH_FETCH_STANDINS=<absolute path>` to answer them from a file (the sample headlines' feed, `feeds.example.com`, serves nothing). |
 | `pnpm check` | Type checking (the packages, the fixture apps and `e2e`), lint, unit tests (the fixture apps' own tests too) and the deploy script's tests. Run before every push. |
 | `pnpm build` | Write the lists of mini-apps (`pnpm apps:sync`), then build shared, web and server. Without `HEARTH_APPS_DIR` the build holds no mini-apps. |
 | `pnpm apps:sync` | `hearth-apps sync`: find the mini-apps in the folders named in `HEARTH_APPS_DIR`, check them, and write the three generated files. `pnpm build` and `pnpm dev` run it first. |
@@ -206,7 +213,11 @@ Things that bite:
 - The server's tests do not read the generated list. They pass
   `FIXTURE_APPS` (`packages/server/src/testing.ts`), written by hand; a test
   (`src/apps/fixtures.test.ts`) fails when it differs from the folders in
-  `packages/fixture-apps`. Add a fixture app in both places.
+  `packages/fixture-apps`. Add a fixture app in both places. A made-up app
+  given beside `FIXTURE_APPS` must not take a sample app's ID (`checklist`,
+  `feed`, `headlines`): `createRegistry` refuses an ID twice. The tests of
+  `hearth-apps` name the sample apps too (`sync.test.ts`, `cli.test.ts`,
+  `import-scan.test.ts`).
 - The dashboard draws a card for each app the session lists, and the card's
   inside from the build's list: an app the session lists and this build
   lacks gets "Reload to update". The shell draws the frame (icon, name,
@@ -247,12 +258,16 @@ Things that bite:
   test there deletes what earlier tests left in the owner's personal space
   (`DELETE .../data`) before it moves the checklist in. The stand-in in
   `e2e/fixtures.ts` answers add, remove, move, switch and pin and the
-  settings `PATCH` for the two sample apps and records them in
+  settings `PATCH` for the three sample apps and records them in
   `appChanges`; it also keeps groups (the owners'
   list of each in `groups`, the people it knows in `people`, `ownAFamily`
   for a ready family) and records their changes in `groupChanges`. The
   owners' list of a space it was given none for, a personal one included,
-  is drawn from the session.
+  is drawn from the session. For the headlines it answers their query
+  from `headlines` and their job's two routes from `jobs` (by
+  "app/job"): a run asked for turns an idle job into `requested` (403 with
+  view, 202 otherwise), and a test plays the run by setting the status it
+  ended with (`jobThatRan`) and moving the page's clock 3 seconds.
 - A phone test checks that nothing reaches past the screen's edge with
   `expectNothingPastTheEdge` (`e2e/fixtures.ts`), never with the document's
   width: the shell clips and the content area scrolls by itself, so the
@@ -265,8 +280,15 @@ Things that bite:
   temporary folder (`SHARED_DB`), deleted whenever the owner's copy starts,
   so that a test can be two people on one server. Nothing deletes a space,
   so a group a test creates stays for the tests after it: give it a name of
-  its own and do not count groups. Every copy runs with its jobs switched
-  off (`HEARTH_JOBS=off` in `realServerCommand`).
+  its own and do not count groups. The owner's and Lin's copies run their
+  jobs, over one file of stand-in answers beside the database (`STAND_INS`,
+  so it goes when the owner's copy starts): a test writes it whole with
+  `writeStandIns` before it adds an app with a job, since the first run
+  follows the adding at once, and until then every request a job makes
+  fails. A run asked for there starts 5 seconds after the last one
+  started, so a test that refreshes waits that long; the copy that ran a
+  failed run logs a line, which shows in Playwright's output. The
+  stranger's copy runs no job (`HEARTH_JOBS=off` in `realServerCommand`).
 - `e2e/mini-apps` tests apps of another repository, today the grocery list
   of `hearth-stones`, which has no Playwright of its own (it installs
   nothing but the SDK's link). `pnpm e2e` leaves the folder out; `pnpm
@@ -558,13 +580,16 @@ Things that bite:
 - Nothing automated starts a real server with jobs that may reach a real
   host. `HEARTH_JOBS=off` switches them off (`jobs` in the config, `on` or
   `off` only): `realServerCommand` (`e2e/servers.ts`) gives it to every
-  copy of the server both Playwright configurations start, and the
+  copy of the server it starts without a stand-in file, and the
   deploy's trial start gets it from `deploy/hearth-deploy.sh`, which the
   deploy tests check (the made-up server writes `trial off` and `live
   unset` into `started-with` beside it). A test that needs jobs on a real
-  server gives stand-ins instead (`HEARTH_FETCH_STANDINS`). `pnpm dev`
-  runs jobs against the real hosts their manifests name (owner's decision
-  15).
+  server gives stand-ins instead: given a file, `realServerCommand` starts
+  the copy with `HEARTH_JOBS=on` and `HEARTH_FETCH_STANDINS`, as
+  `playwright.config.ts` does for the owner's and Lin's copies
+  (`STAND_INS`). `playwright.mini-apps.config.ts` gives none yet (C11
+  does), so its copies run no job. `pnpm dev` runs jobs against the real
+  hosts their manifests name (owner's decision 15).
 - `requestRun` and `jobStatus` (`jobs.ts`) hold the checks of a job's two
   routes (`GET .../jobs/:job`, `POST .../jobs/:job/run`, in
   `apps/routes.ts`): 404 when `resolveInstall` gives null, the app has no
@@ -675,10 +700,12 @@ Things that bite:
   minor version, and an addition the patch version: 0.1.1 added `network`
   to the manifest. A mini-apps repository whose apps use an addition
   declares that version (`^0.1.1`), which an older SDK refuses with status
-  3; one that declares `^0.1.0` still fits 0.1.1. `hearth-stones` and
-  `packages/fixture-apps` declare `^0.1.0` until an app of theirs names
-  hosts (section C: C8 and C9). Section C adds to the SDK in C2, C6 and C7
-  without raising it again, since nothing declares 0.1.1 before C9.
+  3; one that declares `^0.1.0` still fits 0.1.1. `packages/fixture-apps`
+  declares `^0.1.1` since C8, whose headlines name a host; `hearth-stones`
+  declares `^0.1.0` until its trending app does (C9). Section C adds to the
+  SDK in C2, C6 and C7 without raising it again, since no repository of
+  mini-apps declares 0.1.1 before C9: the sample apps lie beside the SDK
+  they are built with.
 - The SDK's type tests (`expectTypeOf`, `@ts-expect-error` in
   `packages/sdk/src/index.test.ts` and `server.test.ts`) fail in
   `pnpm typecheck`, not in the test runner.

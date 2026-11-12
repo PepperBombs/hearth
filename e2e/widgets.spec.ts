@@ -1,11 +1,24 @@
 /**
  * Widgets and pages of mini-apps in the shell. The tested build holds the
- * framework's two sample apps (packages/fixture-apps); the stand-in server
+ * framework's three sample apps (packages/fixture-apps); the stand-in server
  * of ./fixtures.ts answers their routes, so each test decides what the
- * server says and when.
+ * server says and when. The headlines have a job: there the stand-in also
+ * says how its runs went, and a test plays a run by changing that.
  */
 import type { Page } from "@playwright/test";
-import { FAMILY_SPACE, PERSONAL_SPACE, PHONE, expect, sessionWithApps, sessionWithSampleApps, test } from "./fixtures.ts";
+import {
+  FAMILY_SPACE,
+  PERSONAL_SPACE,
+  PHONE,
+  expect,
+  expectNothingPastTheEdge,
+  jobThatRan,
+  sampleApp,
+  sessionWithApps,
+  sessionWithSampleApps,
+  test,
+  type FakeApi,
+} from "./fixtures.ts";
 
 const card = (page: Page, name: string) =>
   page.getByTestId("widget-grid").locator("section", { has: page.getByRole("heading", { level: 2, name, exact: true }) });
@@ -323,5 +336,148 @@ test.describe("widgets on a phone", () => {
     const bar = page.locator("header");
     await expect(bar.getByRole("heading", { level: 1, name: "Checklist" })).toBeVisible();
     await expect(bar.getByText("Family", { exact: true })).toBeVisible();
+  });
+});
+
+/** The family's headlines, as someone who may edit them, or only view them, has them. */
+function withHeadlines(api: FakeApi, access: "edit" | "view" = "edit", user: Parameters<typeof sessionWithApps>[0] = {}): void {
+  api.setSession({ ...sessionWithApps(user), apps: [sampleApp("headlines", FAMILY_SPACE, { access })] });
+}
+
+/** A job that ran well at 13:05 and failed at 14:05, so that its card shows the headlines of 13:05. */
+const FAILED_AT_14_05 = {
+  ...jobThatRan("2026-11-10T13:05:00.000Z"),
+  lastStartedAt: "2026-11-10T14:05:00.000Z",
+  lastFailedAt: "2026-11-10T14:05:20.000Z",
+  lastError: "Could not reach feeds.example.com (a stand-in's error).",
+};
+
+test.describe("a widget whose app has a job", () => {
+  test("shows what the job kept and how long ago it was fetched, moving on by itself", async ({ page, api }) => {
+    withHeadlines(api);
+    // The last run went well at 09:00, two seconds after it started.
+    api.jobs["headlines/refresh"] = jobThatRan("2026-11-10T09:00:00.000Z");
+    await page.clock.install({ time: new Date("2026-11-10T09:12:30Z") });
+    await page.goto("/");
+    const headlines = card(page, "Headlines");
+
+    await expect(headlines.getByRole("listitem")).toHaveText(api.headlines);
+    await expect(headlines.getByText("Updated 12 min ago")).toBeVisible();
+    // Nobody reloads: the minutes go on by themselves.
+    await page.clock.runFor(60_000);
+    await expect(headlines.getByText("Updated 13 min ago")).toBeVisible();
+    // After an hour and a half, the time of day it was fetched.
+    await page.clock.fastForward("01:30:00");
+    await expect(headlines.getByText("Updated at 09:00")).toBeVisible();
+    // An app without a page has no link to one.
+    await expect(headlines.getByRole("link")).toHaveCount(0);
+  });
+
+  test("asks for a run with Refresh now, says Refreshing… until the run ends, then shows what it brought", async ({ page, api }) => {
+    withHeadlines(api);
+    api.jobs["headlines/refresh"] = jobThatRan("2026-11-10T09:00:00.000Z");
+    await page.clock.install({ time: new Date("2026-11-10T09:29:30Z") });
+    await page.goto("/");
+    const headlines = card(page, "Headlines");
+    const refresh = headlines.getByRole("button", { name: "Refresh now" });
+    await expect(headlines.getByText("Updated 29 min ago")).toBeVisible();
+
+    await refresh.click();
+    await expect(headlines.getByText("Refreshing…")).toBeVisible();
+    await expect(refresh).toBeDisabled();
+    expect(api.appRequests).toContain(`POST /api/spaces/${FAMILY_SPACE}/apps/headlines/jobs/refresh/run`);
+    expect(api.jobs["headlines/refresh"]?.state).toBe("requested");
+
+    // The run starts, and goes well with a new headline first. The widget reads how it is doing every 3 seconds.
+    api.jobs["headlines/refresh"] = { ...api.jobs["headlines/refresh"]!, state: "running" };
+    await page.clock.runFor(3_000);
+    await expect(headlines.getByText("Refreshing…")).toBeVisible();
+    api.headlines = ["Snow in the hills", ...api.headlines.slice(0, 2)];
+    api.jobs["headlines/refresh"] = jobThatRan("2026-11-10T09:30:01.000Z");
+    await page.clock.runFor(3_000);
+    await expect(headlines.getByRole("listitem")).toHaveText(["Snow in the hills", "Rain expected in the hills tonight", "The library opens a new reading room"]);
+    await expect(headlines.getByText("Updated just now")).toBeVisible();
+    await expect(refresh).toBeEnabled();
+  });
+
+  test("keeps the headlines when the last refresh failed, and says when, and from when the headlines are", async ({ page, api }) => {
+    withHeadlines(api);
+    api.jobs["headlines/refresh"] = FAILED_AT_14_05;
+    await page.goto("/");
+    const headlines = card(page, "Headlines");
+
+    await expect(headlines.getByRole("listitem")).toHaveText(api.headlines);
+    await expect(headlines.getByText("Couldn't reach the feed at 14:05. Showing headlines from 13:05.")).toBeVisible();
+    // Why it failed is for the server's logs, not for the card.
+    await expect(headlines.getByText(/stand-in|feeds\.example\.com/)).toHaveCount(0);
+    // Someone who may edit can try again.
+    await expect(headlines.getByRole("button", { name: "Refresh now" })).toBeEnabled();
+  });
+
+  test("gives someone who may only view the same headlines and the failure, and no button", async ({ page, api }) => {
+    withHeadlines(api, "view");
+    api.jobs["headlines/refresh"] = FAILED_AT_14_05;
+    await page.goto("/");
+    const headlines = card(page, "Headlines");
+
+    await expect(headlines.getByRole("listitem")).toHaveText(api.headlines);
+    await expect(headlines.getByText("Couldn't reach the feed at 14:05. Showing headlines from 13:05.")).toBeVisible();
+    await expect(headlines.getByRole("button")).toHaveCount(0);
+    expect(api.appRequests.filter((request) => request.endsWith("/run"))).toEqual([]);
+  });
+
+  test("says the first refresh is on its way before there is any, and when the first one failed", async ({ page, api }) => {
+    withHeadlines(api);
+    api.headlines = [];
+    api.jobs["headlines/refresh"] = {
+      lastStartedAt: null,
+      lastSucceededAt: null,
+      lastFailedAt: null,
+      lastError: null,
+      nextRunAt: "2026-11-10T14:05:00.000Z",
+      state: "idle",
+    };
+    await page.goto("/");
+    const headlines = card(page, "Headlines");
+    await expect(headlines.getByRole("heading", { level: 3, name: "No headlines yet. The first refresh is on its way." })).toBeVisible();
+    await expect(headlines.getByRole("listitem")).toHaveCount(0);
+
+    api.jobs["headlines/refresh"] = { ...api.jobs["headlines/refresh"]!, lastStartedAt: "2026-11-10T14:05:00.000Z", lastFailedAt: "2026-11-10T14:05:20.000Z" };
+    await page.reload();
+    await expect(headlines.getByRole("heading", { level: 3, name: "No headlines yet." })).toBeVisible();
+    await expect(headlines.getByText("Couldn't reach the feed at 14:05.", { exact: true })).toBeVisible();
+  });
+
+  test("speaks Chinese to someone who reads Chinese", async ({ page, api }) => {
+    withHeadlines(api, "edit", { locale: "zh" });
+    api.jobs["headlines/refresh"] = jobThatRan("2026-11-10T09:00:00.000Z");
+    await page.clock.install({ time: new Date("2026-11-10T09:12:30Z") });
+    await page.goto("/");
+    const headlines = card(page, "头条");
+    await expect(headlines.getByText("12 分钟前更新")).toBeVisible();
+    await expect(headlines.getByRole("button", { name: "立即刷新" })).toBeEnabled();
+
+    api.jobs["headlines/refresh"] = FAILED_AT_14_05;
+    await page.reload();
+    await expect(headlines.getByText("14:05 时无法连接订阅源。现在显示的是 13:05 的头条。")).toBeVisible();
+  });
+});
+
+test.describe("a widget whose app has a job, on a phone", () => {
+  test.use(PHONE);
+
+  test("fits the screen, with its button large enough to tap", async ({ page, api }) => {
+    withHeadlines(api, "edit", { locale: "zh" });
+    api.jobs["headlines/refresh"] = FAILED_AT_14_05;
+    await page.goto("/");
+    const headlines = card(page, "头条");
+    await expect(headlines.getByText("14:05 时无法连接订阅源。现在显示的是 13:05 的头条。")).toBeVisible();
+    const refresh = headlines.getByRole("button", { name: "立即刷新" });
+    expect((await refresh.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    await expectNothingPastTheEdge(page);
+
+    await refresh.tap();
+    await expect(headlines.getByText("正在刷新…")).toBeVisible();
+    await expect(refresh).toBeDisabled();
   });
 });

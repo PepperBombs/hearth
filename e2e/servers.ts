@@ -3,8 +3,9 @@
  * and playwright.mini-apps.config.ts, which start the servers, and by the
  * tests that need a second address.
  */
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const base = Number(process.env.HEARTH_E2E_PORT ?? 4173);
 
@@ -37,6 +38,15 @@ export const SHARED_DB_DIR = join(tmpdir(), `hearth-e2e-${base}`);
 export const SHARED_DB = join(SHARED_DB_DIR, "hearth.db");
 
 /**
+ * The stand-in answers for every `ctx.fetch` of the owner's and the
+ * member's copies, which run their apps' jobs (HEARTH_FETCH_STANDINS): one
+ * file for both, beside their database, so that it goes when the owner's
+ * copy starts. Until a test writes it with `writeStandIns`, every request a
+ * job makes fails as the network would.
+ */
+export const STAND_INS = join(SHARED_DB_DIR, "stand-ins.json");
+
+/**
  * The mini-apps both builds hold: the framework's own sample apps. A plain
  * `pnpm build` holds none; the end-to-end tests build with these so that the
  * whole path is tried, from an app's folder to a server that answers for it
@@ -55,11 +65,12 @@ export const WITH_REAL_SERVER = process.env.HEARTH_E2E_SERVER !== "0";
  * web app, with sign-in switched off: every request it answers is from
  * `devUser`. The server's owner is always OWNER_EMAIL.
  *
- * Its jobs are switched off (HEARTH_JOBS=off), so that no app it holds
- * fetches anything from outside: a command that starts a real server for a
- * test runs jobs only with stand-in answers (HEARTH_FETCH_STANDINS).
+ * No app it holds fetches anything from outside. Given `standIns`, the path
+ * of a file of stand-in answers, it runs its apps' jobs and the file answers
+ * every request they make (HEARTH_FETCH_STANDINS, which only a server in dev
+ * mode accepts); without one its jobs are switched off (HEARTH_JOBS=off).
  */
-export function realServerCommand(port: number, devUser: string, database = ":memory:"): string {
+export function realServerCommand(port: number, devUser: string, database = ":memory:", standIns: string | null = null): string {
   return [
     "HOST=127.0.0.1",
     `PORT=${port}`,
@@ -69,9 +80,23 @@ export function realServerCommand(port: number, devUser: string, database = ":me
     `HEARTH_DB=${JSON.stringify(database)}`,
     `HEARTH_VERSION=${SERVER_VERSION}`,
     "HEARTH_WEB_DIST=packages/web/dist",
-    "HEARTH_JOBS=off",
+    ...(standIns === null ? ["HEARTH_JOBS=off"] : ["HEARTH_JOBS=on", `HEARTH_FETCH_STANDINS=${JSON.stringify(standIns)}`]),
     "node packages/server/dist/main.js",
   ].join(" ");
+}
+
+/**
+ * Writes a file of stand-in answers whole: into a file of its own first,
+ * then renamed into place, so that a server, which reads it again at every
+ * request, never reads half of it. Each entry answers the requests to its
+ * `url` (and `query`), with a `status`, `headers` and `body`, or fails them
+ * with `error` ("network" or "timeout"); see packages/server/README.md.
+ */
+export function writeStandIns(path: string, standIns: readonly unknown[]): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const next = `${path}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(next, `${JSON.stringify(standIns, null, 2)}\n`);
+  renameSync(next, path);
 }
 
 /**

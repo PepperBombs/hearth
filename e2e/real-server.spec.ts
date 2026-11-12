@@ -7,10 +7,12 @@
  * screen for someone who was not invited, and a family of two people: the
  * owner and Lin, each with a copy of the server of their own over one
  * database, who share a group and an app the owner then moves out of it and
- * back.
+ * back, and an app whose job fetches its headlines, from a file of stand-in
+ * answers both copies read.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { GUEST_URL, MEMBER_EMAIL, MEMBER_URL, OWNER_EMAIL, SERVER_VERSION } from "./servers.ts";
+import { PHONE, expectNothingPastTheEdge } from "./fixtures.ts";
+import { GUEST_URL, MEMBER_EMAIL, MEMBER_URL, OWNER_EMAIL, SERVER_VERSION, STAND_INS, writeStandIns } from "./servers.ts";
 
 // The tests share one person's saved preferences, so they run in order.
 test.describe.configure({ mode: "serial" });
@@ -226,7 +228,7 @@ test("on the Apps page an app is added without a rebuild, pinned, given settings
     expect((await request.put(checklist, { data: {} })).status()).toBe(204);
     expect((await request.delete(checklist)).status()).toBe(204);
     await page.goto("/apps");
-    // Nothing is in the personal space now, and the build holds two apps to choose from.
+    // Nothing is in the personal space now, and the build holds three apps to choose from.
     const mine = spaceCard("Personal");
     await mine.getByRole("button", { name: "Add an app" }).click();
     const add = page.getByRole("dialog", { name: "Add an app to your personal space" });
@@ -298,7 +300,7 @@ test("the web app carries each sample app's widget and page, and fetches them on
   const entry = await page.locator('script[type="module"][src]').first().getAttribute("src");
   expect(entry).toBeTruthy();
   const script = await (await request.get(entry ?? "")).text();
-  expect(new Set(script.match(/\/widget-[\w-]+\.js/g)).size).toBe(2);
+  expect(new Set(script.match(/\/widget-[\w-]+\.js/g)).size).toBe(3);
   expect(new Set(script.match(/\/page-[\w-]+\.js/g)).size).toBe(1);
 
   // A dashboard without widgets has fetched none of them.
@@ -539,6 +541,113 @@ test("the owner moves a group's checklist into their own space and back: its dat
   expect((await ownerSession()).apps).toEqual([]);
 });
 
+test("an app with a job: the dialog names its host, its first run follows at once, a failed refresh keeps the headlines, and Lin may only read them", async ({
+  page,
+  request,
+  browser,
+  playwright,
+}) => {
+  type Status = { lastStartedAt: string | null; lastSucceededAt: string | null; lastFailedAt: string | null; state: string };
+  type Session = { user: { id: string }; spaces: { id: string; role: string }[]; apps: unknown[] };
+  const FEED = "https://feeds.example.com/headlines.json";
+  const HEADLINES = ["Rain expected in the hills tonight", "The library opens a new reading room", "Market prices hold steady"];
+  // A name of its own, so that a group an earlier run left on a reused server is not taken for this one.
+  const groupName = `Newsroom ${Date.now().toString(36)}`;
+  const ownerSession = async () => (await (await request.get("/api/session")).json()) as Session;
+  /** A moment as the widget writes it, on the browser's clock, which is UTC here: "14:05". */
+  const timeOf = (at: string | null) => new Date(at ?? NaN).toISOString().slice(11, 16);
+  const problems = watchForProblems(page);
+  const linContext = await browser.newContext({
+    ...PHONE,
+    baseURL: MEMBER_URL,
+    locale: "zh-CN",
+    timezoneId: "UTC",
+    colorScheme: "light",
+    serviceWorkers: "block",
+  });
+  const linPage = await linContext.newPage();
+  const linProblems = watchForProblems(linPage);
+  const linApi = await playwright.request.newContext({ baseURL: MEMBER_URL });
+  let groupId = "";
+
+  try {
+    // The feed answers with three headlines, from the file of stand-ins both copies of the server read.
+    writeStandIns(STAND_INS, [{ url: FEED, body: { items: HEADLINES.map((title) => ({ title })) } }]);
+
+    // A group of the owner and Lin, who arrives and reads Chinese.
+    const created = await request.post("/api/spaces", { data: { name: groupName } });
+    expect(created.status()).toBe(201);
+    groupId = ((await created.json()) as { id: string }).id;
+    expect((await request.post(`/api/spaces/${groupId}/members`, { data: { email: MEMBER_EMAIL } })).status()).toBe(200);
+    const linSession = (await (await linApi.get("/api/session")).json()) as Session;
+    expect(linSession.spaces).toContainEqual(expect.objectContaining({ id: groupId, role: "member" }));
+    expect((await linApi.patch("/api/me", { data: { locale: "zh" } })).status()).toBe(200);
+    const headlines = `/api/spaces/${groupId}/apps/headlines`;
+    const statusNow = async () => (await (await request.get(`${headlines}/jobs/refresh`)).json()) as Status;
+
+    // The owner adds the headlines to the group for everyone to view. The dialog names the host they come from.
+    await page.goto("/apps");
+    await page.getByRole("main").getByRole("region", { name: groupName }).getByRole("button", { name: "Add an app" }).click();
+    const add = page.getByRole("dialog", { name: `Add an app to ${groupName}` });
+    await add.getByRole("radio", { name: /Headlines/ }).check();
+    await expect(add.getByText("Fetches data from feeds.example.com on its own.")).toBeVisible();
+    await add.getByRole("radio", { name: "Everyone can view" }).check();
+    await add.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(add).toBeHidden();
+
+    // The job's first run follows at once: adding the app woke the scheduler, and nobody asked for a run.
+    await expect.poll(async () => (await statusNow()).lastSucceededAt).not.toBeNull();
+    const first = await statusNow();
+    expect(first).toMatchObject({ lastFailedAt: null, state: "idle" });
+
+    // The owner's dashboard has the headlines, just fetched.
+    await page.goto("/");
+    const ownerCard = page.getByRole("region", { name: `Headlines in ${groupName}` });
+    await expect(ownerCard.getByRole("listitem")).toHaveText(HEADLINES);
+    await expect(ownerCard.getByText("Updated just now")).toBeVisible();
+
+    // The feed cannot be reached now. "Refresh now" asks for a run, which starts 5 seconds after the
+    // last one did (with stand-ins; 5 minutes on a real server) and fails.
+    writeStandIns(STAND_INS, [{ url: FEED, error: "network" }]);
+    await ownerCard.getByRole("button", { name: "Refresh now" }).click();
+    await expect(ownerCard.getByText("Refreshing…")).toBeVisible();
+    await expect.poll(async () => (await statusNow()).lastFailedAt, { timeout: 15_000 }).not.toBeNull();
+    const failed = await statusNow();
+    expect(failed.lastSucceededAt).toBe(first.lastSucceededAt);
+
+    // The card keeps the headlines it had, and says when the refresh failed and when they are from.
+    const failure = `Couldn't reach the feed at ${timeOf(failed.lastFailedAt)}. Showing headlines from ${timeOf(first.lastSucceededAt)}.`;
+    await expect(ownerCard.getByText(failure)).toBeVisible({ timeout: 10_000 });
+    await expect(ownerCard.getByRole("listitem")).toHaveText(HEADLINES);
+    await expect(ownerCard.getByRole("button", { name: "Refresh now" })).toBeEnabled();
+
+    // Lin, who may only view, on her phone and in Chinese: the same headlines and the same failure, no button.
+    await linPage.goto("/");
+    const linCard = linPage.getByRole("region", { name: `${groupName}的头条` });
+    await expect(linCard.getByRole("listitem")).toHaveText(HEADLINES);
+    await expect(
+      linCard.getByText(`${timeOf(failed.lastFailedAt)} 时无法连接订阅源。现在显示的是 ${timeOf(first.lastSucceededAt)} 的头条。`),
+    ).toBeVisible();
+    await expect(linCard.getByRole("button")).toHaveCount(0);
+    await expectNothingPastTheEdge(linPage);
+    // Nor does the server let her ask for a run.
+    expect((await linApi.post(`${headlines}/jobs/refresh/run`)).status()).toBe(403);
+    expect(problems).toEqual([]);
+    expect(linProblems).toEqual([]);
+  } finally {
+    // The group stays (nothing deletes a space); the app and Lin leave it, and the owner's
+    // dashboard is empty again for whatever runs next against the same server.
+    if (groupId) {
+      await request.delete(`/api/spaces/${groupId}/apps/headlines`);
+      const lin = ((await (await linApi.get("/api/session")).json()) as { user?: { id: string } }).user;
+      if (lin) await request.delete(`/api/spaces/${groupId}/members/${lin.id}`);
+    }
+    await linApi.dispose();
+    await linContext.close();
+  }
+  expect((await ownerSession()).apps).toEqual([]);
+});
+
 test.describe("installed", () => {
   test.use({ serviceWorkers: "allow" });
 
@@ -558,7 +667,7 @@ test.describe("installed", () => {
     expect(cached).toContain("/");
     expect(cached.filter((url) => url.startsWith("/api"))).toEqual([]);
     // The widgets of the apps this build holds are part of the shell, so they work offline too.
-    expect(cached.filter((url) => url.startsWith("/assets/widget-"))).toHaveLength(2);
+    expect(cached.filter((url) => url.startsWith("/assets/widget-"))).toHaveLength(3);
     expect(cached.filter((url) => url.startsWith("/assets/page-"))).toHaveLength(1);
 
     const session = page.waitForResponse((response) => response.url().endsWith("/api/session"));

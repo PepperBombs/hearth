@@ -10,7 +10,7 @@ that exist today (the app shell) and the rules later steps build on.
 | `packages/shared` | Types and schemas shared by server and web. This is the contract between them: change it first, then both sides. |
 | `packages/sdk` | `@hearth/sdk`, the only thing a mini-app imports. So far: `defineApp`, the manifest types, the run-time check of a manifest, the UI kit and the hooks of a widget or page (`@hearth/sdk/web`), `defineServer` for an app's queries and mutations (`@hearth/sdk/server`), and `testApp` for an app's own tests (`@hearth/sdk/testing`). It also holds the `hearth-apps` command, which builds mini-apps into the framework, checks them, runs their tests and runs Hearth with them for development, and the ESLint and TypeScript configuration of a mini-apps repository. It imports no other Hearth package. |
 | `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. `src/apps` holds the mini-apps this build was given, decides who may use which app in which space, runs an app's queries and mutations against its own rows, reads and saves its settings, and runs its jobs on a schedule. `src/groups` creates groups and manages the people in them. |
-| `packages/fixture-apps` | The framework's own sample mini-apps, which its tests run against: `checklist`, which keeps rows and has a page, and `feed`, which has a widget and no server file. |
+| `packages/fixture-apps` | The framework's own sample mini-apps, which its tests run against: `checklist`, which keeps rows and has a page, `feed`, which has a widget and no server file, and `headlines`, whose job fetches a sample news feed every hour. |
 | `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings (with a card for each group), quick switcher, themes, English and Chinese. It is built from the SDK's UI kit, as mini-apps are, and draws each app's widget on the dashboard and its page at `/apps/:spaceId/:appId`. |
 | `e2e` | Playwright end-to-end tests: the framework with its sample apps, and in `e2e/mini-apps` the mini-apps of `hearth-stones`. |
 | `deploy` | The pull-based deploy script and service files. |
@@ -32,7 +32,9 @@ people and access"). The deploy builds every release with the mini-apps of
 own tests call its routes against the server's real store (see "Working on
 mini-apps"). The first mini-app, the grocery list, is in `hearth-stones`.
 A scheduler in the server runs the apps' jobs, what an app does by itself
-every so often (see "What an app's code can do").
+every so often, and a widget shows how they went and asks for a run (see
+"What an app's code can do"); the framework's sample headlines are an app
+with a job, from its manifest to its card.
 The design, and how far the build has come, is in
 [mini-app-contract.md](mini-app-contract.md).
 
@@ -294,8 +296,10 @@ restart goes on where the last process stopped. `main.ts` starts it once
 the server listens and stops it before the database closes, ending the
 run going on at once; `createApp` starts none, so tests run no job unless
 one asks. `HEARTH_JOBS=off` keeps it from starting: the deploy's trial
-start runs that way, and so does every copy of the server the end-to-end
-tests start, so that nothing they do reaches a real host.
+start runs that way. Nothing the end-to-end tests do reaches a real host:
+the copies of the server they start run no job, except the owner's and the
+member's in `pnpm e2e`, whose jobs get every answer from a file of
+stand-ins (see "Checks").
 
 A job's two routes are what people see of it. `GET
 /api/spaces/:spaceId/apps/:appId/jobs/:job`, for anyone who can see the
@@ -307,6 +311,17 @@ it starts at once, or 5 minutes after the last run started, never sooner,
 so asking again and again cannot hammer a host. Both answer `404` when the
 app is not there for the person or has no job of that name, a query's
 name included, so that nothing can be learnt from them.
+
+The framework's sample headlines (`packages/fixture-apps/headlines`) are a
+whole app with a job, to read beside this section. The manifest names one
+host, `feeds.example.com`; the job `refresh` runs every hour, fetches the
+feed, and puts its first five titles in place of those kept before, in one
+`ctx.write`, or fails and keeps them. Its widget reads `useJob("refresh")`:
+the headlines, "Updated 12 min ago" (a time of day after an hour and a
+half), "Refreshing…" while a run is going on or asked for, "Couldn't reach
+the feed at 14:05. Showing headlines from 13:05." when the last run failed,
+and "Refresh now" for someone who may edit. Its own tests run the job with
+`runJob` and stand-ins for the feed.
 
 ## An app's settings
 
@@ -569,8 +584,9 @@ see styles: the kit's classes are turned into a stylesheet by the web app's
 build, and an end-to-end test (`e2e/shell.spec.ts`) checks that they arrive.
 Lint also holds the fixture apps to the rules for every mini-app: import the
 SDK and your own files, nothing else, and leave the globals that reach
-outside alone. The sample checklist has tests of its own, written with
-`testApp` as any mini-app's are; `pnpm test` runs them with
+outside alone. The sample checklist and headlines have tests of their own,
+written with `testApp` as any mini-app's are, the headlines' running their
+job with stand-ins for the feed; `pnpm test` runs them with
 `hearth-apps test`.
 The `hearth-apps` command is tested as it is run (`packages/sdk/tools`):
 against the fixture apps, and against mini-apps repositories made up in a
@@ -589,7 +605,18 @@ and checks that the Content-Security-Policy refused nothing. Two copies of
 the real server share one database file, one signed in as the owner and one
 as a member of the owner's family, so that one test can be two people: the
 owner invites the member, chooses what she may do with an app, and lets her
-add one.
+add one. Those two copies also run their jobs, and one file of stand-in
+answers that the tests write (`HEARTH_FETCH_STANDINS`) answers every
+request they make, so a job runs on the real server without reaching the
+network: the owner adds the sample headlines to the family, the dialog
+names the host they fetch from, the first run follows at once and the card
+says "Updated just now"; with the stand-in failing, "Refresh now" keeps the
+headlines and says when the refresh failed; and the member, who may only
+view, reads the same card on her phone, in Chinese, with no button. The
+copy of a stranger runs no job. The tests that answer `/api` themselves
+answer a job's routes too, so that the card's other states (the minutes
+going on, the time of day, a run asked for and ending, the empty card) are
+tried with a clock the test moves.
 The mini-apps of `hearth-stones` have their end-to-end tests here as well,
 in `e2e/mini-apps`, because that repository installs nothing but the link
 to the SDK and so has no Playwright. `pnpm e2e:mini-apps` builds Hearth

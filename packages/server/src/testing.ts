@@ -2,6 +2,8 @@
 import checklist from "../../fixture-apps/checklist/manifest";
 import checklistServer from "../../fixture-apps/checklist/server";
 import feed from "../../fixture-apps/feed/manifest";
+import headlines from "../../fixture-apps/headlines/manifest";
+import headlinesServer from "../../fixture-apps/headlines/server";
 import { createApp, type AppOptions } from "./app";
 import type { BundledApp } from "./apps/registry";
 import type { Identify } from "./auth";
@@ -14,11 +16,13 @@ export const OWNER_EMAIL = "owner@example.com";
  * The framework's own sample apps (packages/fixture-apps), as a build hands
  * them over: what `hearth-apps sync` writes for that folder. `checklist`
  * keeps rows and has a page of its own; `feed` has no server file and no
- * page.
+ * page; `headlines` has a job, which fetches from the host its manifest
+ * names, and no page.
  */
 export const FIXTURE_APPS: readonly BundledApp[] = [
   { id: "checklist", manifest: checklist, hasPage: true, server: checklistServer },
   { id: "feed", manifest: feed, hasPage: false },
+  { id: "headlines", manifest: headlines, hasPage: false, server: headlinesServer },
 ];
 
 export function testConfig(overrides: Partial<Config> = {}): Config {

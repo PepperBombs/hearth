@@ -82,6 +82,7 @@ describe("the generated files with the framework's sample apps", () => {
     expect(apps.map((app) => [app.id, app.hasServer, app.hasPage])).toEqual([
       ["checklist", true, true],
       ["feed", false, false],
+      ["headlines", true, false],
     ]);
 
     const from = (file: string, target: string) => JSON.stringify(path.relative(path.dirname(file), path.join(FIXTURES, target)));
@@ -89,14 +90,18 @@ describe("the generated files with the framework's sample apps", () => {
       `import manifest0 from ${from(files.server, "checklist/manifest.ts")};`,
       `import server0 from ${from(files.server, "checklist/server.ts")};`,
       `import manifest1 from ${from(files.server, "feed/manifest.ts")};`,
+      `import manifest2 from ${from(files.server, "headlines/manifest.ts")};`,
+      `import server2 from ${from(files.server, "headlines/server.ts")};`,
       "export const apps = [",
       '  { id: "checklist", manifest: manifest0, hasPage: true, server: server0 },',
       '  { id: "feed", manifest: manifest1, hasPage: false },',
+      '  { id: "headlines", manifest: manifest2, hasPage: false, server: server2 },',
       "];",
     ]);
     expect(code(web)).toEqual([
       `import manifest0 from ${from(files.web, "checklist/manifest.ts")};`,
       `import manifest1 from ${from(files.web, "feed/manifest.ts")};`,
+      `import manifest2 from ${from(files.web, "headlines/manifest.ts")};`,
       "export const apps = [",
       "  {",
       '    id: "checklist",',
@@ -111,9 +116,19 @@ describe("the generated files with the framework's sample apps", () => {
       "    hasPage: false,",
       `    widget: () => import(${from(files.web, "feed/widget.tsx")}),`,
       "  },",
+      "  {",
+      '    id: "headlines",',
+      "    manifest: manifest2,",
+      "    hasPage: false,",
+      `    widget: () => import(${from(files.web, "headlines/widget.tsx")}),`,
+      "  },",
       "];",
     ]);
-    expect(code(css)).toEqual([`@source ${from(files.css, "checklist")};`, `@source ${from(files.css, "feed")};`]);
+    expect(code(css)).toEqual([
+      `@source ${from(files.css, "checklist")};`,
+      `@source ${from(files.css, "feed")};`,
+      `@source ${from(files.css, "headlines")};`,
+    ]);
     // The server's code never appears in what the web app is given.
     expect(web).not.toContain("server.ts");
     expect(files).toEqual({
@@ -154,8 +169,8 @@ describe("several folders", () => {
   it("takes the apps of every folder, in the order the folders are named", () => {
     const stones = makeRepo({ files: appFiles("notes") });
     const { apps, css } = synced([stones, FIXTURES]);
-    expect(apps.map((app) => app.id)).toEqual(["notes", "checklist", "feed"]);
-    expect(code(css)).toHaveLength(3);
+    expect(apps.map((app) => app.id)).toEqual(["notes", "checklist", "feed", "headlines"]);
+    expect(code(css)).toHaveLength(4);
   });
 
   it("refuses an app that is in two folders, naming both", () => {

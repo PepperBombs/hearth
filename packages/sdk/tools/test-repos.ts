@@ -72,7 +72,7 @@ export type RepoOptions = {
   /** Where node_modules/@hearth/sdk leads. Default: this checkout's SDK. `null` leaves it out. */
   link?: string | null;
   /** Names of the framework's sample apps to copy in. */
-  fixtures?: readonly ("checklist" | "feed")[];
+  fixtures?: readonly ("checklist" | "feed" | "headlines")[];
   /** More files, by path inside the repository. */
   files?: Record<string, string>;
 };
