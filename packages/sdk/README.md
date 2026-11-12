@@ -564,7 +564,7 @@ one folder per app, named after the app's ID. `hearth-stones` is one; the
 framework's own sample apps in `packages/fixture-apps` have the same shape.
 
 ```
-package.json       "hearth": { "sdk": "^0.1.0" }, @hearth/sdk as a link to ../hearth/packages/sdk,
+package.json       "hearth": { "sdk": "^0.1.1" }, @hearth/sdk as a link to ../hearth/packages/sdk,
                    and the scripts check, test, dev and new (hearth-apps check, test and new,
                    and exec hearth-apps dev)
 pnpm-lock.yaml     the link, and nothing else

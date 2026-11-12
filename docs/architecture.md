@@ -30,7 +30,8 @@ group add and invite people and decide who can use each app (see "Groups,
 people and access"). The deploy builds every release with the mini-apps of
 `hearth-stones` as they are at that moment (see "Deployment"), and an app's
 own tests call its routes against the server's real store (see "Working on
-mini-apps"). The first mini-app, the grocery list, is in `hearth-stones`.
+mini-apps"). The first mini-app, the grocery list, is in `hearth-stones`,
+and so is GitHub Trending, whose job searches GitHub every hour.
 A scheduler in the server runs the apps' jobs, what an app does by itself
 every so often, and a widget shows how they went and asks for a run (see
 "What an app's code can do"); the framework's sample headlines are an app
@@ -144,9 +145,17 @@ app: `hearth-stones` has no Playwright. `pnpm e2e:mini-apps` runs it here
 against Hearth built with `../hearth-stones` (see "Checks"). So a change to
 an app's texts or layout there changes its file here as well.
 
-`hearth-stones` holds one app so far, the grocery list (`grocery/`): a
+`hearth-stones` holds two apps so far. The grocery list (`grocery/`): a
 shopping list the people of a space share, grouped by the aisles the space
-sets, which each person may show with or without what is ticked.
+sets, which each person may show with or without what is ticked. GitHub
+Trending (`trending/`): the new repositories on GitHub with the most stars,
+by day, week and month, which its job searches for every hour through
+`ctx.fetch` and GitHub's search API (`api.github.com`, the one host its
+manifest names), for every language and each language the space follows.
+It leaves out spam, and what the space has put on its Hide list, and its
+card shows the first five of each person's own range; its own page is not
+built yet. It is the first app of `hearth-stones` with a job, so that
+repository declares SDK `^0.1.1`.
 
 ## Apps in spaces
 

@@ -62,9 +62,9 @@ Edit `/etc/hearth/hearth.env`: your email address as owner, and the two
 Cloudflare values from step 6. Leave `HEARTH_AUTH=cloudflare-access` as it
 is: `dev` signs nobody in and is for a developer's own machine only.
 
-The mini-apps' jobs run in the server (GitHub Trending's hourly search, once
-that app is in `hearth-stones`), and they are what connects to outside
-hosts; see "What the server connects to" below. `HEARTH_JOBS=off` in
+The mini-apps' jobs run in the server (GitHub Trending's hourly searches of
+`api.github.com`), and they are what connects to outside hosts; see "What
+the server connects to" below. `HEARTH_JOBS=off` in
 `hearth.env` stops every job, and with it every such connection: the apps
 show what their last runs left.
 Never set `HEARTH_FETCH_STANDINS` on a server: it answers every job from a
@@ -207,8 +207,9 @@ request to it. It makes these connections itself:
 - **The hosts the mini-apps name**, from their jobs alone. Each app lists in
   its manifest the hosts its jobs fetch from, and the Apps page names them
   when someone adds the app ("Fetches data from api.github.com on its
-  own."); GitHub Trending, once it is in `hearth-stones`, will use
-  `api.github.com`. Every request is
+  own."). GitHub Trending, in `hearth-stones`, uses `api.github.com`: once
+  an hour in each space it is in, three searches, and three more for each
+  language the space follows. Every request is
   a GET over https that says it is from Hearth (`User-Agent: Hearth`) and
   carries nothing of anyone's: no cookie, no sign-in. Requests to one host
   start at least 6.5 seconds apart across the whole server, which keeps

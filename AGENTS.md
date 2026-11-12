@@ -136,10 +136,16 @@ C8, a sample app with a job, end to end: `packages/fixture-apps/headlines`,
 whose job fetches a sample news feed every hour and whose widget shows
 the headlines, "Updated N min ago", "Refresh now" and the failed state,
 with tests of its own, and in `pnpm e2e` the owner's and Lin's copies of
-the server running their jobs over one file of stand-in answers. The
-framework's part of section C is built; C9 to C11 are the GitHub Trending
-app. The document's last two sections, the questions behind decisions 1
-to 5 and the risks, are D and E.
+the server running their jobs over one file of stand-in answers; and C9,
+in `hearth-stones` (`trending/` there), GitHub Trending's data, job and
+card: a job that searches GitHub every hour for the new repositories with
+the most stars by day, week and month, for every language and each one
+the space follows, a deny-list against spam and the space's Hide list,
+and a widget with the first five of each person's own range, with tests
+of its own; `hearth-stones` declares SDK `^0.1.1` from then on. C10, the
+trending app's page, and C11, its end-to-end test here, remain. The
+document's last two sections, the questions behind decisions 1 to 5 and
+the risks, are D and E.
 
 ## Layout and commands
 
@@ -160,7 +166,7 @@ Commands, from the repository root (Node 22, pnpm 10):
 | Command | Does |
 |---|---|
 | `pnpm install` | Install dependencies. |
-| `HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@example.com pnpm dev` | Run server (port 4310) and web dev server (port 5173) with sign-in switched off. Add `HEARTH_APPS_DIR=packages/fixture-apps` to hold the sample apps, or the path of a mini-apps checkout. The apps' jobs run, against the real hosts their manifests name; add `HEARTH_JOBS=off` to run none, or `HEARTH_FETCH_STANDINS=<absolute path>` to answer them from a file (the sample headlines' feed, `feeds.example.com`, serves nothing). |
+| `HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@example.com pnpm dev` | Run server (port 4310) and web dev server (port 5173) with sign-in switched off. Add `HEARTH_APPS_DIR=packages/fixture-apps` to hold the sample apps, or the path of a mini-apps checkout. The apps' jobs run, against the real hosts their manifests name (with `hearth-stones`, GitHub Trending searches the real `api.github.com`); add `HEARTH_JOBS=off` to run none, or `HEARTH_FETCH_STANDINS=<absolute path>` to answer them from a file (the sample headlines' feed, `feeds.example.com`, serves nothing; `hearth-stones/trending/README.md` has a file for GitHub's search). |
 | `pnpm check` | Type checking (the packages, the fixture apps and `e2e`), lint, unit tests (the fixture apps' own tests too) and the deploy script's tests. Run before every push. |
 | `pnpm build` | Write the lists of mini-apps (`pnpm apps:sync`), then build shared, web and server. Without `HEARTH_APPS_DIR` the build holds no mini-apps. |
 | `pnpm apps:sync` | `hearth-apps sync`: find the mini-apps in the folders named in `HEARTH_APPS_DIR`, check them, and write the three generated files. `pnpm build` and `pnpm dev` run it first. |
@@ -290,7 +296,8 @@ Things that bite:
   failed run logs a line, which shows in Playwright's output. The
   stranger's copy runs no job (`HEARTH_JOBS=off` in `realServerCommand`).
 - `e2e/mini-apps` tests apps of another repository, today the grocery list
-  of `hearth-stones`, which has no Playwright of its own (it installs
+  of `hearth-stones`; GitHub Trending's file comes with C11. That
+  repository has no Playwright of its own (it installs
   nothing but the SDK's link). `pnpm e2e` leaves the folder out; `pnpm
   e2e:mini-apps` (`playwright.mini-apps.config.ts`) builds Hearth with
   those apps and starts the owner's and Lin's copies of the server on ports
@@ -588,8 +595,11 @@ Things that bite:
   the copy with `HEARTH_JOBS=on` and `HEARTH_FETCH_STANDINS`, as
   `playwright.config.ts` does for the owner's and Lin's copies
   (`STAND_INS`). `playwright.mini-apps.config.ts` gives none yet (C11
-  does), so its copies run no job. `pnpm dev` runs jobs against the real
-  hosts their manifests name (owner's decision 15).
+  does), so its copies run no job, GitHub Trending's included. `pnpm dev`
+  runs jobs against the real hosts their manifests name (owner's decision
+  15): with `hearth-stones` in it, GitHub Trending searches the real
+  `api.github.com` once it is added to a space, so give it stand-ins when
+  that is not wanted, and never from anything automated.
 - `requestRun` and `jobStatus` (`jobs.ts`) hold the checks of a job's two
   routes (`GET .../jobs/:job`, `POST .../jobs/:job/run`, in
   `apps/routes.ts`): 404 when `resolveInstall` gives null, the app has no
@@ -701,11 +711,13 @@ Things that bite:
   to the manifest. A mini-apps repository whose apps use an addition
   declares that version (`^0.1.1`), which an older SDK refuses with status
   3; one that declares `^0.1.0` still fits 0.1.1. `packages/fixture-apps`
-  declares `^0.1.1` since C8, whose headlines name a host; `hearth-stones`
-  declares `^0.1.0` until its trending app does (C9). Section C adds to the
-  SDK in C2, C6 and C7 without raising it again, since no repository of
-  mini-apps declares 0.1.1 before C9: the sample apps lie beside the SDK
-  they are built with.
+  declares `^0.1.1` since C8, whose headlines name a host, and
+  `hearth-stones` since C9, whose GitHub Trending names `api.github.com`:
+  its CI, which checks out `main` here, fails with status 3 until this
+  repository's section C is merged, so merge here first. Section C adds to
+  the SDK in C2, C6 and C7 without raising it again, since no repository
+  of mini-apps declares 0.1.1 before C9: the sample apps lie beside the
+  SDK they are built with.
 - The SDK's type tests (`expectTypeOf`, `@ts-expect-error` in
   `packages/sdk/src/index.test.ts` and `server.test.ts`) fail in
   `pnpm typecheck`, not in the test runner.
