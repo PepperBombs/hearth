@@ -275,9 +275,13 @@ The manifest of this app lists `network: ["feeds.example.com"]`.
   and `mutation` cannot name it (`JobName<typeof server>` names an app's
   jobs), and the server answers 404 when one is asked for as a query or a
   mutation.
-- **Nothing starts a run yet.** The server can run a job as described
-  here, but the scheduler that starts each one every `everyMinutes` comes
-  in the next step of docs/mini-app-contract.md, section C.
+- **When it runs.** The server's scheduler runs a job in each space the
+  app is in: the first time as soon as the app is added there, then about
+  every `everyMinutes`, as above. It runs one job at a time on the whole
+  server, every app and space together, so a job that takes long, or asks
+  for many pages, puts the others off. A server with `HEARTH_JOBS=off`
+  runs none. `pnpm dev` runs them, and `ctx.fetch` there reaches the real
+  hosts the manifest names.
 
 ## A widget and a page
 

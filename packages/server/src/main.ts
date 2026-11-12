@@ -1,7 +1,9 @@
 import { serve } from "@hono/node-server";
 import { createApp } from "./app";
-import { AppRegistryError, createRegistry } from "./apps/registry";
+import { outboundFor, processClock } from "./apps/fetch";
+import { AppRegistryError, createRegistry, type Registry } from "./apps/registry";
 import { apps } from "./apps/registry.generated.js";
+import { createScheduler } from "./apps/scheduler";
 import { ConfigError, isLoopbackHost, loadConfig, type Config } from "./config";
 import { migrate, openDatabase } from "./db/database";
 
@@ -27,9 +29,9 @@ function readConfig(): Config {
  * trial of a new release fails and the old release keeps running. It runs
  * before the database is opened: a build with a bad app changes nothing.
  */
-function checkApps(): void {
+function checkApps(): Registry {
   try {
-    createRegistry(apps);
+    return createRegistry(apps);
   } catch (error) {
     if (error instanceof AppRegistryError) {
       console.error(error.message);
@@ -40,13 +42,29 @@ function checkApps(): void {
 }
 
 const config = readConfig();
-checkApps();
+const registry = checkApps();
 const db = openDatabase(config.dbPath);
 for (const migration of migrate(db)) {
   console.log(`Applied database migration ${migration.id} (${migration.name}).`);
 }
 
-const app = createApp({ config, db, apps });
+// The mini-apps' jobs run in this process, one at a time, unless
+// HEARTH_JOBS=off: the deploy's trial start and the end-to-end tests switch
+// them off (docs/mini-app-contract.md, section C, "The scheduler").
+const scheduler =
+  config.jobs === "on"
+    ? createScheduler({
+        db,
+        registry,
+        outbound: outboundFor(config),
+        clock: processClock,
+        now: () => new Date(),
+        random: Math.random,
+        log: (line) => console.error(line),
+      })
+    : null;
+
+const app = createApp({ config, db, apps, wakeJobs: scheduler?.wake });
 
 const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info) => {
   const host = info.family === "IPv6" ? `[${info.address}]` : info.address;
@@ -65,6 +83,11 @@ const server = serve({ fetch: app.fetch, hostname: config.host, port: config.por
       `Jobs reach no network (HEARTH_FETCH_STANDINS): every ctx.fetch is answered from the stand-ins in ${config.fetchStandIns}. This is for end-to-end tests only.`,
     );
   }
+  if (scheduler === null) {
+    console.log("Jobs are switched off (HEARTH_JOBS=off): no mini-app's job runs, and none fetches anything.");
+  } else {
+    scheduler.start();
+  }
 });
 
 server.on("error", (error) => {
@@ -77,12 +100,18 @@ let stopping = false;
 function stop(): void {
   if (stopping) return;
   stopping = true;
-  server.close(() => {
-    db.close();
+  const end = () => {
+    if (db.open) db.close();
     process.exit(0);
-  });
-  // Do not let an idle keep-alive connection hold the process open.
-  setTimeout(() => process.exit(0), 5000).unref();
+  };
+  // Whatever holds things up, such as an idle keep-alive connection, the
+  // database is closed and the process ends within 5 seconds.
+  setTimeout(end, 5000).unref();
+  // The scheduler first: no new run starts, and the run going on ends at
+  // once, its job due again at the next start. A job that goes on all the
+  // same is not waited for. Then the database, once nothing is listening.
+  const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+  void Promise.all([scheduler?.stop(), closed]).then(end);
 }
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);

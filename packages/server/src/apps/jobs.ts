@@ -20,8 +20,9 @@
  * 3. `recordRun`, one immediate transaction: how the run went, when the
  *    job runs next, and the claim let go.
  *
- * `runOnce` does the three in order: the scheduler and an app's own tests
- * run jobs through it. `requestRun` and `jobStatus` are what a person may
+ * `runOnce` does the three in order: the scheduler (scheduler.ts) and an
+ * app's own tests run jobs through it. `nextJob` is what the scheduler asks
+ * which job to run next. `requestRun` and `jobStatus` are what a person may
  * do and see: ask for a run now (edit), and read how the runs went (view).
  *
  * The table is `app_jobs` (migration 3), whose SQL is in this file only.
@@ -188,7 +189,7 @@ function rowOf(db: Db, key: JobKey): JobRow | undefined {
 }
 
 /** Whether a run holds the job: it has a claim, and the claim's time has not run out. */
-const held = (row: JobRow, now: Date): boolean =>
+const held = (row: Pick<JobRow, "runId" | "runUntil">, now: Date): boolean =>
   row.runId !== null && row.runUntil !== null && Date.parse(row.runUntil) > now.getTime();
 
 function statusOf(row: JobRow | undefined, now: Date): JobStatus {
@@ -612,6 +613,100 @@ export async function runOnce(
   const outcome = await runClaimed(db, registry, claim, world);
   recordRun(db, claim, outcome, { now: world.now(), random: world.random });
   return outcome;
+}
+
+/* -------------------------------------------------------------------------
+ * Which job runs next
+ * ---------------------------------------------------------------------- */
+
+/** A job of an install, and the first moment a run of it may be claimed. */
+export type NextJob = {
+  readonly key: JobKey;
+  /** When it is due: now or earlier means at once. */
+  readonly at: Date;
+};
+
+/**
+ * The job the scheduler runs next: of every job of every install that is
+ * there (the app's entry in its space and not removed, the app and the job
+ * in this build), the one that falls due first, ties going by space ID, app
+ * ID and job name. Null when no install has a job.
+ *
+ * - A job that has not run in an install has no row there yet: it is due
+ *   now, and its row is made when it is claimed.
+ * - A job that a run holds, in this process or in another one that shares
+ *   the database, is due once that claim has run out (`run_until`), not
+ *   before: the run records when the job is due after it.
+ * - Otherwise it is due at its `next_run_at`, which a run asked for brought
+ *   forward.
+ *
+ * It asks whether an install is there, never who may use it, and reads
+ * `space_apps` and `app_jobs` in one query and nothing else: an app's rows
+ * and settings are read by a run, one install at a time. A job that is due
+ * here is one `claimRun` takes at the same moment, unless another process
+ * claims or runs it in between.
+ */
+export function nextJob(db: Db, registry: Registry, now: Date): NextJob | null {
+  const rows = db
+    .prepare(
+      `SELECT a.space_id AS spaceId, a.app_id AS appId,
+              j.job, j.next_run_at AS nextRunAt, j.run_id AS runId, j.run_until AS runUntil
+         FROM space_apps a
+         LEFT JOIN app_jobs j ON j.space_id = a.space_id AND j.app_id = a.app_id
+        WHERE a.removed_at IS NULL`,
+    )
+    .all() as {
+    spaceId: string;
+    appId: string;
+    job: string | null;
+    nextRunAt: string | null;
+    runId: string | null;
+    runUntil: string | null;
+  }[];
+
+  /** Each install there is, with the rows of its jobs by name. */
+  const installs = new Map<string, { spaceId: string; appId: string; jobs: Map<string, (typeof rows)[number]> }>();
+  for (const row of rows) {
+    const id = JSON.stringify([row.spaceId, row.appId]);
+    let install = installs.get(id);
+    if (install === undefined) {
+      install = { spaceId: row.spaceId, appId: row.appId, jobs: new Map() };
+      installs.set(id, install);
+    }
+    if (row.job !== null) install.jobs.set(row.job, row);
+  }
+
+  const time = now.getTime();
+  /** A stored time, or now should it not be one: claimRun takes such a job as due. */
+  const timeOf = (text: string | null) => {
+    const parsed = text === null ? Number.NaN : Date.parse(text);
+    return Number.isNaN(parsed) ? time : parsed;
+  };
+  let next: { key: JobKey; at: number } | null = null;
+  for (const { spaceId, appId, jobs } of installs.values()) {
+    const server = registry.get(appId)?.server;
+    if (server === undefined) continue;
+    for (const [job, route] of Object.entries(server.routes)) {
+      if (route.kind !== "job") continue;
+      const row = jobs.get(job);
+      const at =
+        row === undefined
+          ? time
+          : held(row, now)
+            ? Math.max(timeOf(row.nextRunAt), timeOf(row.runUntil))
+            : timeOf(row.nextRunAt);
+      const key = { spaceId, appId, job };
+      if (next === null || at < next.at || (at === next.at && comesBefore(key, next.key))) next = { key, at };
+    }
+  }
+  return next === null ? null : { key: next.key, at: new Date(next.at) };
+}
+
+/** Whether one job goes before another due at the same moment: by space ID, app ID and job name. */
+function comesBefore(a: JobKey, b: JobKey): boolean {
+  if (a.spaceId !== b.spaceId) return a.spaceId < b.spaceId;
+  if (a.appId !== b.appId) return a.appId < b.appId;
+  return a.job < b.job;
 }
 
 /* -------------------------------------------------------------------------

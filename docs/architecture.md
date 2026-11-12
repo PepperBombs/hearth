@@ -9,7 +9,7 @@ that exist today (the app shell) and the rules later steps build on.
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web. This is the contract between them: change it first, then both sides. |
 | `packages/sdk` | `@hearth/sdk`, the only thing a mini-app imports. So far: `defineApp`, the manifest types, the run-time check of a manifest, the UI kit and the hooks of a widget or page (`@hearth/sdk/web`), `defineServer` for an app's queries and mutations (`@hearth/sdk/server`), and `testApp` for an app's own tests (`@hearth/sdk/testing`). It also holds the `hearth-apps` command, which builds mini-apps into the framework, checks them, runs their tests and runs Hearth with them for development, and the ESLint and TypeScript configuration of a mini-apps repository. It imports no other Hearth package. |
-| `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. `src/apps` holds the mini-apps this build was given, decides who may use which app in which space, runs an app's queries and mutations against its own rows, and reads and saves its settings. `src/groups` creates groups and manages the people in them. |
+| `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. `src/apps` holds the mini-apps this build was given, decides who may use which app in which space, runs an app's queries and mutations against its own rows, reads and saves its settings, and runs its jobs on a schedule. `src/groups` creates groups and manages the people in them. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, which its tests run against: `checklist`, which keeps rows and has a page, and `feed`, which has a widget and no server file. |
 | `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings (with a card for each group), quick switcher, themes, English and Chinese. It is built from the SDK's UI kit, as mini-apps are, and draws each app's widget on the dashboard and its page at `/apps/:spaceId/:appId`. |
 | `e2e` | Playwright end-to-end tests: the framework with its sample apps, and in `e2e/mini-apps` the mini-apps of `hearth-stones`. |
@@ -31,7 +31,8 @@ people and access"). The deploy builds every release with the mini-apps of
 `hearth-stones` as they are at that moment (see "Deployment"), and an app's
 own tests call its routes against the server's real store (see "Working on
 mini-apps"). The first mini-app, the grocery list, is in `hearth-stones`.
-The scheduler does not exist.
+A scheduler in the server runs the apps' jobs, what an app does by itself
+every so often (see "What an app's code can do").
 The design, and how far the build has come, is in
 [mini-app-contract.md](mini-app-contract.md).
 
@@ -276,10 +277,21 @@ before they read or write, in the name of whoever added the app; so no
 transaction waits on the network, and nothing is written after a removal,
 a move or a deletion. A run that went wrong is tried again after 5, 10, 20
 ... minutes, never more than the job's interval; one that went well is
-followed by the next an interval to a tenth more after it started. The
-scheduler that starts runs on a server is designed in section C of
-`docs/mini-app-contract.md` and not built yet: no server runs a job
-today.
+followed by the next an interval to a tenth more after it started.
+
+The scheduler (`packages/server/src/apps/scheduler.ts`) starts the runs on
+a server, one at a time across the whole server: the job that falls due
+first, and a job that has not run in an install at once, so an app's first
+run follows its being added. With nothing due it sleeps until the next job
+is, at most 30 seconds, so that what another process sharing the database
+changed is seen within that, and adding an app or bringing one back wakes
+it. All it knows is in `app_jobs`, so a restart goes on where the last
+process stopped. `main.ts` starts it once the server listens and stops it
+before the database closes, ending the run going on at once; `createApp`
+starts none, so tests run no job unless one asks. `HEARTH_JOBS=off` keeps
+it from starting: the deploy's trial start runs that way, and so does every
+copy of the server the end-to-end tests start, so that nothing they do
+reaches a real host.
 
 ## An app's settings
 
@@ -494,7 +506,8 @@ builds a fresh release: both repositories at their new commits, side by side
 in a folder of their own. The mini-apps are linked to the SDK of that
 release with an offline install, since their lockfile holds nothing but that
 link, and the framework is built with them in. The script then tries the
-release on a spare port against a copy of the database, switches a `current`
+release on a spare port against a copy of the database, with the mini-apps'
+jobs switched off so that the trial fetches nothing, switches a `current`
 link to it and restarts the service. If the build or the trial fails, the
 old release keeps running untouched. If the new release fails as the live
 service, the script goes back to the old release and puts the database back

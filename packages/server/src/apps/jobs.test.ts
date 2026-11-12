@@ -17,6 +17,7 @@ import {
   jobStatus,
   keptError,
   MAX_ERROR_LENGTH,
+  nextJob,
   recordRun,
   REQUEST_GAP_MS,
   requestRun,
@@ -1048,6 +1049,119 @@ describe("runOnce", () => {
     pause.open();
     expect(await running).toEqual({ kind: "succeeded" });
     expect(fake.pending()).toBe(0);
+  });
+});
+
+/* -------------------------------------------------------------------------
+ * Which job runs next
+ * ---------------------------------------------------------------------- */
+
+describe("nextJob", () => {
+  const next = (ms: number, on = registry) => nextJob(place.db, on, at(ms));
+  /** The family's and Lin's ticker spaces, in the order of their IDs. */
+  function spaces(): [string, string] {
+    const [first, second] = [place.family, place.linsSpace].sort();
+    if (first === undefined || second === undefined) throw new Error("Two spaces were expected.");
+    return [first, second];
+  }
+  /** A run of a job claimed at `start` (forced) and recorded at once. */
+  const record = (spaceId: string, start: number, outcome: RunOutcome, job = "refresh") =>
+    recordRun(place.db, claim(spaceId, start, { force: true, job }), outcome, { now: at(start), random: () => 0 });
+  const failed: RunOutcome = { kind: "failed", error: "Down.", cause: new Error("Down.") };
+
+  it("is null while no install has a job, and passes by apps without one", () => {
+    const quiet = family();
+    install(quiet.db, quiet.family, "checklist", quiet.sam.id);
+    install(quiet.db, quiet.family, "feed", quiet.sam.id);
+    expect(nextJob(quiet.db, registry, at(0))).toBeNull();
+    // The ticker is in the family and in Lin's space, but this build does not hold it.
+    expect(next(0, createRegistry(APPS))).toBeNull();
+  });
+
+  it("gives a job that has not run as due now, and of jobs due together the first by space, app and job name", () => {
+    const [first, second] = spaces();
+    expect(next(5 * MINUTE)).toEqual({ key: key(first, "refresh"), at: at(5 * MINUTE) });
+    // Its row is made only when it is claimed.
+    expect(jobRows()).toEqual([]);
+
+    record(first, 0, { kind: "succeeded" });
+    expect(next(MINUTE)).toEqual({ key: key(first, "tidy"), at: at(MINUTE) });
+    record(first, 0, { kind: "succeeded" }, "tidy");
+    expect(next(MINUTE)).toEqual({ key: key(second, "refresh"), at: at(MINUTE) });
+  });
+
+  it("takes the job that falls due first, however long ago, and says when that is", () => {
+    const [first, second] = spaces();
+    // Every job of both installs has run: the refreshes went well, the tidies did not.
+    record(first, 0, { kind: "succeeded" });
+    record(second, 2 * MINUTE, { kind: "succeeded" });
+    record(first, 4 * MINUTE, failed, "tidy");
+    record(second, 3 * MINUTE, failed, "tidy");
+    // The second's tidy falls due first: 5 minutes after its failure at 3 minutes.
+    expect(next(4 * MINUTE)).toEqual({ key: key(second, "tidy"), at: at(8 * MINUTE) });
+    expect(next(30 * MINUTE)).toEqual({ key: key(second, "tidy"), at: at(8 * MINUTE) });
+    record(second, 30 * MINUTE, { kind: "succeeded" }, "tidy");
+    expect(next(30 * MINUTE)).toEqual({ key: key(first, "tidy"), at: at(9 * MINUTE) });
+    // Both tidies due at 45 minutes: the first space's goes first.
+    record(first, 30 * MINUTE, { kind: "succeeded" }, "tidy");
+    expect(next(31 * MINUTE)).toEqual({ key: key(first, "tidy"), at: at(45 * MINUTE) });
+    // A run asked for brings its job forward.
+    requestRun(place.db, registry, { userId: place.lin.id, spaceId: place.linsSpace, appId: "ticker", job: "refresh" }, at(40 * MINUTE));
+    expect(next(40 * MINUTE)).toEqual({ key: key(place.linsSpace, "refresh"), at: at(40 * MINUTE) });
+  });
+
+  it("gives a job a run holds as due once that claim runs out, not before", () => {
+    const [first, second] = spaces();
+    for (const job of ["refresh", "tidy"]) record(second, 0, { kind: "succeeded" }, job);
+    record(first, 0, { kind: "succeeded" }, "tidy");
+    // The first's refresh has not run, and a run holds it from the first minute: it is due when that
+    // claim runs out (at 7 minutes), before the tidies (at 15), as claimRun then takes it over.
+    const taken = claim(first, MINUTE);
+    const runsOut = MINUTE + RUN_TIME_LIMIT_MS + CLAIM_GRACE_MS;
+    expect(runsOut).toBe(7 * MINUTE);
+    expect(next(2 * MINUTE)).toEqual({ key: key(first, "refresh"), at: at(runsOut) });
+    expect(claimRun(place.db, registry, key(first), { now: at(runsOut - 1) })).toBe("running");
+    // Then it is due as it was when that run started.
+    expect(next(runsOut)).toEqual({ key: key(first, "refresh"), at: at(MINUTE) });
+    expect(claim(first, runsOut).runId).not.toBe(taken.runId);
+    // Held now until 13 minutes, still before the tidies.
+    expect(next(runsOut)).toEqual({ key: key(first, "refresh"), at: at(runsOut + RUN_TIME_LIMIT_MS + CLAIM_GRACE_MS) });
+  });
+
+  it("gives a job a run holds that is not due before the claim runs out as due when it is", () => {
+    // A run forced before its job was due (as an app's own tests force one) holds the job until 8
+    // minutes, but claimRun would not take a job due at 60 minutes then.
+    const quiet = family();
+    install(quiet.db, quiet.family, "ticker", quiet.sam.id);
+    for (const job of ["refresh", "tidy"]) {
+      const taken = claimRun(quiet.db, registry, { spaceId: quiet.family, appId: "ticker", job }, { now: at(0) });
+      if (typeof taken === "string") throw new Error(`No claim was taken: ${taken}.`);
+      recordRun(quiet.db, taken, { kind: "succeeded" }, { now: at(0), random: () => 0 });
+    }
+    claimRun(quiet.db, registry, { spaceId: quiet.family, appId: "ticker", job: "refresh" }, { now: at(2 * MINUTE), force: true });
+    expect(nextJob(quiet.db, registry, at(3 * MINUTE))).toEqual({
+      key: { spaceId: quiet.family, appId: "ticker", job: "tidy" },
+      at: at(15 * MINUTE),
+    });
+    claimRun(quiet.db, registry, { spaceId: quiet.family, appId: "ticker", job: "tidy" }, { now: at(3 * MINUTE), force: true });
+    expect(nextJob(quiet.db, registry, at(4 * MINUTE))).toEqual({
+      key: { spaceId: quiet.family, appId: "ticker", job: "tidy" },
+      at: at(15 * MINUTE),
+    });
+  });
+
+  it("passes by a removed app, and what this build does not hold", () => {
+    removeApp(place.db, registry, { userId: place.lin.id, spaceId: place.linsSpace, appId: "ticker" });
+    expect(next(0)).toEqual({ key: key(place.family, "refresh"), at: at(0) });
+    removeApp(place.db, registry, { userId: place.sam.id, spaceId: place.family, appId: "ticker" });
+    expect(next(0)).toBeNull();
+    // Brought back, and every job of it run; a row of a job the build no longer holds is passed by.
+    addApp(place.db, registry, { userId: place.sam.id, spaceId: place.family, appId: "ticker" });
+    for (const job of ["refresh", "tidy"]) record(place.family, 0, { kind: "succeeded" }, job);
+    place.db
+      .prepare("INSERT INTO app_jobs (space_id, app_id, job, next_run_at) VALUES (?, 'ticker', 'retired', ?)")
+      .run(place.family, iso(-60 * MINUTE));
+    expect(next(MINUTE)).toEqual({ key: key(place.family, "tidy"), at: at(15 * MINUTE) });
   });
 });
 

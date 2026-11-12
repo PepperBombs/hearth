@@ -35,6 +35,14 @@ export type AppOptions = {
   identify?: Identify;
   /** Receives unexpected errors. Defaults to the console. Nothing of them reaches the client. */
   logError?: (error: unknown) => void;
+  /**
+   * Called when a job may have fallen due at once: an app was added to a
+   * space or brought back. main.ts gives the scheduler's `wake`
+   * (src/apps/scheduler.ts), so that the app's jobs run without waiting for
+   * the scheduler to look again. Left out when no job runs: with
+   * HEARTH_JOBS=off, and in tests, since createApp starts no scheduler.
+   */
+  wakeJobs?: () => void;
 };
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -109,7 +117,7 @@ export function createApp(options: AppOptions): Hono<Env> {
   });
 
   registerGroupRoutes(app, { db, config, requireMember });
-  registerAppRoutes(app, { db, registry, requireMember });
+  registerAppRoutes(app, { db, registry, requireMember, wakeJobs: options.wakeJobs ?? (() => {}) });
 
   app.all("/api", (c) => apiError(c, 404, "not_found", NOTHING_HERE));
   app.all("/api/*", (c) => apiError(c, 404, "not_found", NOTHING_HERE));

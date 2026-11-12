@@ -36,6 +36,8 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     ownerEmail: OWNER_EMAIL,
     groupPolicy: "owner",
     version: "test",
+    // Tests run no job unless one asks; createApp starts no scheduler anyway.
+    jobs: "off",
     fetchStandIns: null,
     ...overrides,
   };
@@ -61,6 +63,8 @@ export type TestAppOptions = {
   /** "from-config" uses the real login method the configuration names. */
   identify?: Identify | "from-config";
   logError?: AppOptions["logError"];
+  /** What the routes call to wake the scheduler, which no test server has. */
+  wakeJobs?: AppOptions["wakeJobs"];
 };
 
 export function testApp(options: TestAppOptions = {}) {
@@ -73,6 +77,7 @@ export function testApp(options: TestAppOptions = {}) {
     identify:
       options.identify === "from-config" ? undefined : (options.identify ?? identifyFromTestHeader),
     logError: options.logError ?? ((error) => errors.push(error)),
+    wakeJobs: options.wakeJobs,
   });
   return { app, db, errors };
 }

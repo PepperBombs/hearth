@@ -28,11 +28,17 @@ import { addApp, deleteAppData, listSpaceApps, moveApp, removeApp, setAppAccess,
 import type { Registry } from "./registry";
 import { changeAppSettings, readAppSettings } from "./settings";
 
-export type AppRoutesOptions = { db: Db; registry: Registry; requireMember: RequireMember };
+export type AppRoutesOptions = {
+  db: Db;
+  registry: Registry;
+  requireMember: RequireMember;
+  /** Tells the scheduler that a job may have fallen due at once (see `AppOptions.wakeJobs`). */
+  wakeJobs: () => void;
+};
 
 /** Adds the routes to the application. Call it before the catch-all for unknown `/api` paths. */
 export function registerAppRoutes(app: Hono<Env>, options: AppRoutesOptions): void {
-  const { db, registry, requireMember } = options;
+  const { db, registry, requireMember, wakeJobs } = options;
 
   // Every app the space has, removed ones and those without code included, with who can use
   // each, and everyone in the space: what its owners manage access with.
@@ -45,7 +51,9 @@ export function registerAppRoutes(app: Hono<Env>, options: AppRoutesOptions): vo
   app.put("/api/spaces/:spaceId/apps/:appId", requireMember, async (c) => {
     const { memberAccess } = await readBody(c, addAppRequestSchema);
     const { spaceId, appId } = c.req.param();
-    addApp(db, registry, { userId: c.get("user").id, spaceId, appId, memberAccess });
+    const done = addApp(db, registry, { userId: c.get("user").id, spaceId, appId, memberAccess });
+    // A job that has not run in this space is due at once, and one brought back may be overdue.
+    if (done !== "unchanged") wakeJobs();
     return c.body(null, 204);
   });
 

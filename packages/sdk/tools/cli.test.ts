@@ -254,9 +254,9 @@ describe("hearth-apps check", () => {
 });
 
 /**
- * An app with a job, which nothing runs yet: a manifest naming the host it
- * fetches from, and a server file with a query and the job, which fetches
- * and then writes in a work of its own.
+ * An app with a job, which `check` takes but does not run: a manifest
+ * naming the host it fetches from, and a server file with a query and the
+ * job, which fetches and then writes in a work of its own.
  */
 const HEADLINES: Record<string, string> = {
   "headlines/manifest.ts": `import { defineApp } from "@hearth/sdk";

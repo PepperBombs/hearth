@@ -53,7 +53,11 @@ HEARTH_CONFIG=/path/to/hearth.json pnpm start
 
 `pnpm start` runs `node dist/main.js` in this package. The server listens on
 `127.0.0.1` and expects Cloudflare Access (through a tunnel on the same
-machine) in front of it. It stops cleanly on `SIGINT` and `SIGTERM`.
+machine) in front of it. Once it listens it starts the scheduler, which runs
+the mini-apps' jobs (see "Mini-apps"), unless `HEARTH_JOBS=off`. It stops
+cleanly on `SIGINT` and `SIGTERM`: the scheduler first, so that a job's run
+ends at once and its job is due again at the next start, then the server and
+the database, which is closed within 5 seconds whatever holds things up.
 
 On a server, `deploy/hearth-deploy.sh` does this for each release: it links
 the release's copy of `hearth-stones` to the release's SDK
@@ -88,6 +92,7 @@ config file that still has it is accepted, and the value ignored.
 | `HEARTH_DEV_USER` | the owner | The email address every request is treated as when `HEARTH_AUTH=dev`. |
 | `HEARTH_GROUP_POLICY` | `owner` | Who may create groups and invite people who are not on the server yet: `owner`, the server's owner alone, or `everyone` on the server. Adding someone who is already on the server to a group is for that group's owners either way. |
 | `HEARTH_VERSION` | `dev` | Shown as the running version; the deploy sets it to the short commit hash. |
+| `HEARTH_JOBS` | `on` | Whether the mini-apps' jobs run: `on` or `off`. Off, no job runs and none fetches anything; a job's status still answers, and a run asked for waits until jobs run again. The deploy's trial start and the end-to-end tests run with `off`. |
 | `HEARTH_FETCH_STANDINS` | none | For end-to-end tests: the path of a JSON file of stand-in answers for every `ctx.fetch` of a job, so that nothing reaches the network (see "Mini-apps"). Refused unless `HEARTH_AUTH=dev`; the server says at start-up that it is on. |
 
 Relative paths are resolved against the working directory, except the default
@@ -203,8 +208,7 @@ and no field is called like one of the fields every row has. An app whose
 manifest names hosts in `network` must define a job, since only a job
 fetches. If anything is wrong the server prints every problem and exits
 with status 1, before it opens the database or listens. How a job runs is
-under "Running a job" below; nothing starts a run on a server yet, since
-the scheduler is the next step of `docs/mini-app-contract.md`, section C.
+under "Running a job" below, and when under "The scheduler".
 
 `main.ts` takes the list from `src/apps/registry.generated.js`, which
 `hearth-apps sync` writes before every build and before `pnpm dev` from the
@@ -431,8 +435,8 @@ manifest does not list. A run gives its job a `ctx.fetch` for the hosts of
 its app, which stops working when the run is over (see below).
 
 **Running a job** (`src/apps/jobs.ts`) goes through three functions, and
-nothing else runs one. `runOnce` does the three in order; nothing calls it
-on a server yet, since the scheduler that will is the next step.
+nothing else runs one. `runOnce` does the three in order, for the
+scheduler (below) and for an app's own tests.
 
 - `claimRun`, one immediate transaction: the app's entry is in the space
   and not removed, the build holds the app and the job, the job is due
@@ -469,6 +473,37 @@ on a server yet, since the scheduler that will is the next step.
   backoff). A run the server stopped, and one refused for its install,
   record nothing and leave the job due at once.
 
+**The scheduler** (`src/apps/scheduler.ts`) is what starts runs on a
+server. `main.ts` makes it when `HEARTH_JOBS` is `on` and starts it once
+the server listens; `createApp` starts none, so tests run no job unless
+one asks.
+
+- It runs one job at a time on the whole server: the one that falls due
+  first (`nextJob` in `jobs.ts`), ties going by space ID, app ID and job
+  name, through `runOnce`; then it looks again. A job that has not run in
+  an install is due at once; one that a run holds, in this process or
+  another sharing the database, when that claim runs out; any other at its
+  `next_run_at`. Only installs that are there count: the app's entry in
+  its space, not removed, and the app and the job in this build. It never
+  asks who may use the app.
+- With nothing due it sleeps until the next job is due, at most 30
+  seconds, so that a change made by another process sharing the database
+  is seen within that. Adding an app to a space or bringing one back wakes
+  it at once (`wakeJobs`, which `main.ts` hands `createApp`).
+- Timing is the runs': at most 5 minutes each, the next an interval to a
+  tenth more after a run that went well, and 5, 10, 20 ... minutes after
+  failures in a row, never more than the interval.
+- All it knows is in `app_jobs`, so after a restart what is due runs, in
+  order, and a run cut off by a crash is taken over once its claim runs
+  out. The claim keeps a run single when two processes share a database
+  file, as the end-to-end tests' copies of the server do.
+- It logs one line for each run that went wrong, `App "...", job "...",
+  space <ID>: the run failed: <message>`, and nothing for the others. If
+  the database cannot be read it says so and looks again 30 seconds
+  later.
+- Stopping it (SIGTERM or SIGINT) starts no new run and ends the one going
+  on at once, recorded as nothing, its job due again at the next start.
+
 `requestRun` asks for a run now, for someone with edit access to the app:
 unless a run is going on, the job becomes due at once, or 5 minutes after
 the last run started if that is later, and never later than it already
@@ -478,7 +513,18 @@ wrong, the last error, the next run, and `running`, `requested` or
 `idle`. Both answer `404` when the app is not there for the person, has no
 server file or has no job of that name, and `requestRun` then `403` for
 someone who may only view. The routes that call them come in a later
-step.
+step; the one that asks for a run will wake the scheduler, as adding an
+app does.
+
+**Outgoing connections.** The server reaches out to two kinds of host:
+Cloudflare Access, for the keys that sign its identity header
+(`https://<team domain>/cdn-cgi/access/certs`), and the hosts the mini-apps
+it holds name in `network`, from their jobs alone, through `ctx.fetch`
+(GET over https, `User-Agent: Hearth`, at most one request every 6.5
+seconds to each host). `HEARTH_JOBS=off` stops the second kind; with
+`HEARTH_FETCH_STANDINS` they are answered from a file instead and nothing
+leaves the machine. `docs/self-hosting.md` lists the connections of a
+whole server, the deploy's included.
 
 ## Groups and members
 

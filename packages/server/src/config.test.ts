@@ -36,7 +36,8 @@ describe("loadConfig", () => {
       // Owner's decision 4: groups and new people are the server's owner's alone until opened up.
       groupPolicy: "owner",
       version: "dev",
-      // Jobs fetch from the hosts themselves.
+      // The mini-apps' jobs run, and fetch from the hosts themselves.
+      jobs: "on",
       fetchStandIns: null,
     });
     expect(config.webDist).toBe(resolve(import.meta.dirname, "../../web/dist"));
@@ -52,6 +53,7 @@ describe("loadConfig", () => {
       HEARTH_WEB_DIST: "web",
       HEARTH_GROUP_POLICY: "everyone",
       HEARTH_VERSION: "abc1234",
+      HEARTH_JOBS: "off",
     });
     expect(config).toMatchObject({
       host: "::1",
@@ -61,6 +63,24 @@ describe("loadConfig", () => {
       webDist: "/srv/hearth/web",
       groupPolicy: "everyone",
       version: "abc1234",
+      jobs: "off",
+    });
+  });
+
+  it("switches the mini-apps' jobs on or off, and nothing else", () => {
+    expect(load({ ...cloudflare, HEARTH_JOBS: "on" }).jobs).toBe("on");
+    expect(load({ ...cloudflare, HEARTH_JOBS: "off" }).jobs).toBe("off");
+    // Empty counts as not set: on.
+    expect(load({ ...cloudflare, HEARTH_JOBS: " " }).jobs).toBe("on");
+    for (const value of ["no", "false", "0", "OFF", "disabled"]) {
+      expect(problemsOf({ ...cloudflare, HEARTH_JOBS: value })).toContain('HEARTH_JOBS must be "on" or "off"');
+    }
+    // In dev mode, with or without stand-ins, as the end-to-end tests start the server.
+    const dev = { HEARTH_AUTH: "dev", HEARTH_OWNER_EMAIL: "owner@example.com" };
+    expect(load({ ...dev, HEARTH_JOBS: "off" }).jobs).toBe("off");
+    expect(load({ ...dev, HEARTH_FETCH_STANDINS: "/tmp/standins.json" })).toMatchObject({
+      jobs: "on",
+      fetchStandIns: "/tmp/standins.json",
     });
   });
 
@@ -181,12 +201,14 @@ describe("loadConfig", () => {
 
     it("supplies settings, and the environment wins", () => {
       const path = fileWith(
-        JSON.stringify({ ...cloudflare, PORT: 5000, HEARTH_VERSION: "from-file" }),
+        JSON.stringify({ ...cloudflare, PORT: 5000, HEARTH_VERSION: "from-file", HEARTH_JOBS: "off" }),
       );
       const config = load({ HEARTH_CONFIG: path, HEARTH_VERSION: "from-env" });
       expect(config.port).toBe(5000);
       expect(config.version).toBe("from-env");
       expect(config.ownerEmail).toBe("owner@example.com");
+      expect(config.jobs).toBe("off");
+      expect(load({ HEARTH_CONFIG: path, HEARTH_JOBS: "on" }).jobs).toBe("on");
     });
 
     it("may name stand-ins for jobs only as dev mode may", () => {

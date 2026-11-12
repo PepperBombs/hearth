@@ -54,6 +54,10 @@ export const WITH_REAL_SERVER = process.env.HEARTH_E2E_SERVER !== "0";
  * The command that starts one copy of the built server, serving the built
  * web app, with sign-in switched off: every request it answers is from
  * `devUser`. The server's owner is always OWNER_EMAIL.
+ *
+ * Its jobs are switched off (HEARTH_JOBS=off), so that no app it holds
+ * fetches anything from outside: a command that starts a real server for a
+ * test runs jobs only with stand-in answers (HEARTH_FETCH_STANDINS).
  */
 export function realServerCommand(port: number, devUser: string, database = ":memory:"): string {
   return [
@@ -65,6 +69,7 @@ export function realServerCommand(port: number, devUser: string, database = ":me
     `HEARTH_DB=${JSON.stringify(database)}`,
     `HEARTH_VERSION=${SERVER_VERSION}`,
     "HEARTH_WEB_DIST=packages/web/dist",
+    "HEARTH_JOBS=off",
     "node packages/server/dist/main.js",
   ].join(" ");
 }
