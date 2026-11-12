@@ -106,13 +106,17 @@ version 0.1.1; and C2, jobs in the SDK (`app.job` beside the queries and
 mutations, a job's `ctx` with `fetch`, `read` and `write`, `FetchError`,
 `SpaceSettingsOf`, `JobName`), checked when the server starts and by
 `hearth-apps check`, which also refuse hosts in an app without a job;
-and C3, `ctx.fetch` itself (`packages/server/src/apps/fetch.ts`): the
-rules every request meets, the pace that keeps requests to one host 6.5
+C3, `ctx.fetch` itself (`packages/server/src/apps/fetch.ts`): the rules
+every request meets, the pace that keeps requests to one host 6.5
 seconds apart across the server, Node's fetch as the way out, and the
 file of stand-in answers that `HEARTH_FETCH_STANDINS` names for
-end-to-end tests. Nothing runs a job yet, so nothing calls it. The
-document's last two sections, the questions behind decisions 1 to 5 and
-the risks, are D and E.
+end-to-end tests; and C4, running a job
+(`packages/server/src/apps/jobs.ts`): migration 3's table `app_jobs`, a
+run claimed, run with its `ctx` and its five minutes, and recorded with
+the backoff and the jitter, and the work behind asking for a run and
+reading a job's status, which the routes of C6 will call. Nothing starts
+a run yet: the scheduler is C5. The document's last two sections, the
+questions behind decisions 1 to 5 and the risks, are D and E.
 
 ## Layout and commands
 
@@ -120,7 +124,7 @@ the risks, are D and E.
 |---|---|
 | `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. Every route of the mini-app contract's section A8 is built. |
 | `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too, and `appHooks` (`src/web/hooks.ts`), the hooks a widget or page is written with. `@hearth/sdk/web/scope` is the React context those hooks read, which the shell fills; for the framework only. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer` (queries, mutations and jobs), `AppError`, `FetchError`, `z`, the types of a handler's `ctx` and those of a job's (`JobCtx`, `FetchInit`, `FetchResponse`); it holds no logic. `@hearth/sdk/testing` (`src/testing.ts`) is what an app's tests are written with: `testApp`, `AppCallError` and their types; it holds no logic, only the hand-over to what the framework installs through `@hearth/sdk/testing/host` (`src/testing-host.ts`, for the framework only). `src/routes.ts` holds the types that name an app's routes and jobs (`QueryName`, `MutationName`, `JobName`), shared by the hooks and the tests and exported from `@hearth/sdk/web`. `@hearth/sdk/manifest-schema` is the run-time check of a manifest and of a setting's value (`settingValueProblems`), for the framework only. `bin/hearth-apps.mjs` and `tools` are the `hearth-apps` command, plain JavaScript: `sync.mjs` (finds the apps, the version handshake, writes the generated lists), `import-scan.mjs` (what a file of an app may import), `default-export.mjs` (whether `widget.tsx`, `page.tsx` and `server.ts` have the default export the generated lists import), `check.mjs`, `test.mjs` (runs the apps' tests), `dev.mjs` (the dev servers with the apps in), `new.mjs` (a new app, copied from the sample checklist), `eslint-boundary.mjs`. `@hearth/sdk/eslint` (`eslint.js`) and `tsconfig.app.json` are the ESLint and TypeScript configuration of a mini-apps repository. Imports no other Hearth package. |
-| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file, its jobs included), `installs.ts` (who may use which app where; add, remove, bring back, move to another space, delete data, each person's switch and pin), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db`, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds), `fetch.ts` (`ctx.fetch`: the rules, the pace, Node's transport and the stand-in file; `outboundFor` picks the last two from the settings), `routes.ts`, `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports), `check-bundle.ts` (run by `hearth-apps check`, not by the server), and `app-testing.ts` with `app-testing.setup.ts` (the implementation of `testApp` for an app's own tests, which `vitest.apps.config.ts` at the package's root installs; not part of the server). `installs.ts` also holds the owners' list of a space's apps (`listSpaceApps`) and the access route's work (`setAppAccess`). `src/groups` is groups and their people: `policy.ts` (`groupRights`: who may create groups and invite), `members.ts` (create, rename, add or invite, change, remove or leave, take an invitation back) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
+| `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file, its jobs included), `installs.ts` (who may use which app where; add, remove, bring back, move to another space, delete data, each person's switch and pin), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db` and the `db` a job's work gets, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds, a handler's and a job's), `fetch.ts` (`ctx.fetch`: the rules, the pace, Node's transport and the stand-in file; `outboundFor` picks the last two from the settings), `jobs.ts` (running a job: `claimRun`, the run (`runClaimed`), `recordRun`, and `runOnce`, which does the three; `requestRun` and `jobStatus`; the only SQL for `app_jobs`), `routes.ts`, `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports), `check-bundle.ts` (run by `hearth-apps check`, not by the server), `test-world.ts` and `test-clock.ts` (a world of people, spaces and apps, and a clock that moves only when told, for the server's tests), and `app-testing.ts` with `app-testing.setup.ts` (the implementation of `testApp` for an app's own tests, which `vitest.apps.config.ts` at the package's root installs; not part of the server). `installs.ts` also holds the owners' list of a space's apps (`listSpaceApps`) and the access route's work (`setAppAccess`). `src/groups` is groups and their people: `policy.ts` (`groupRights`: who may create groups and invite), `members.ts` (create, rename, add or invite, change, remove or leave, take an invitation back) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file, a widget, a page and tests of its own (`checklist.test.ts`, written with `testApp`), and is the template `hearth-apps new` copies; `feed` a manifest and a widget, no server file. |
 | `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card, the avatar and `LinkedText` in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes and settings, and adding, removing, moving, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, moving, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page, with the dialogs that add, move and remove an app; the one that adds names the hosts an app's manifest lists in `network`. `src/groups` is the groups' cards in Settings: `groups.tsx` (the cards, creating, renaming, leaving), `people.tsx` (the people, adding, the dialog for one person, invitations), `access-table.tsx` (the member-by-app table), `api.ts` and `queries.ts`. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). `servers.ts` holds the addresses, the people and the command that starts a copy of the built server. `e2e/mini-apps` holds the tests of mini-apps from another repository, one file per app named after its ID (`grocery.spec.ts`), which `playwright.mini-apps.config.ts` runs against Hearth built with them. |
@@ -459,7 +463,44 @@ Things that bite:
   out (`JobName` names them). A job's function may be `async`; the `work`
   it gives `ctx.read` and `ctx.write` may not, and the types refuse a
   promise there (`NotAPromise` in `packages/sdk/src/server.ts`). Nothing
-  runs a job yet: the run and the scheduler are C4 and C5 of section C.
+  starts a run yet: the scheduler is C5 of section C.
+- A job runs through three functions in `packages/server/src/apps/jobs.ts`,
+  and nothing else runs one: `claimRun` (one immediate transaction: the
+  install is there, the job due or forced, no run holds it; it sets
+  `run_id` and `run_until`, the start plus the 5 minutes and one more),
+  the run (`runClaimed`, outside any transaction) and `recordRun` (one
+  immediate transaction that finds the row by `run_id`, so it follows a
+  move). `runOnce` does the three in order: the scheduler and `testApp`
+  run jobs through it. A run ends at once when its 5 minutes are up (it
+  failed, with the backoff), when the server stops it or when `ctx.read`
+  or `ctx.write` is refused for the install (both recorded as nothing,
+  the job due at once), and when work hands them a promise (it failed);
+  its `ctx` stops working then, whatever the function goes on to do. The
+  SQL of `app_jobs` is in `jobs.ts` alone; an app's rows are still read
+  and written through `store.ts`.
+- `ctx.read` and `ctx.write` make their store inside their own
+  transaction, after checking there that the run's time is not up by the
+  clock of the day and that the run still holds its install (`holder` in
+  `jobs.ts`: the app's entry in the space the run started in, not
+  removed, and the job's row holding this run's ID), as `resolveInstall`
+  comes first for a handler. Keep both checks inside the transaction and
+  before the work. A job's store records whoever added the app
+  (`space_apps.created_by`) as the writer, with the time of the write, and
+  refuses `list({ mine: true })`, since a job is no one (`StoreScope.job`
+  in `store.ts`); a job's `ctx.settings` is the space's alone
+  (`spaceSettingsFor`).
+- What a run needs from around it is given (`RunWorld` in `jobs.ts`: the
+  `Outbound` for `ctx.fetch`, a `Clock` for the time limit, the time of
+  day, the randomness for the jitter, a signal for the server stopping).
+  Its tests give their own: `fakeClock` (`src/apps/test-clock.ts`, which
+  `fetch.test.ts` uses too) moves only when told, and a transport written
+  in the test answers. Keep job tests that way: nothing in them waits for
+  real time or reaches a network.
+- `requestRun` and `jobStatus` (`jobs.ts`) hold the checks of the routes
+  that C6 adds: 404 when `resolveInstall` gives null, the app has no
+  server file or no job of that name, then 403 for a run asked for with
+  view. A run asked for starts at once, or 5 minutes after the last one
+  started, never sooner, and nothing changes during a run.
 - `ctx.fetch` is `fetchFor` in `packages/server/src/apps/fetch.ts`, in
   three parts. The rules, at every request: GET to https on the default
   port, no user name or password, a host the manifest lists exactly;
@@ -488,8 +529,9 @@ Things that bite:
   `network` with a message that says so.
 - Settings are stored as values only, one JSON object for the space and
   one per person, and read against today's manifest in one place, `fill` in
-  `packages/server/src/apps/settings.ts`, which the two routes and
-  `ctx.settings` (`settingsFor`) share. A name the manifest does not
+  `packages/server/src/apps/settings.ts`, which the two routes, a
+  handler's `ctx.settings` (`settingsFor`) and a job's
+  (`spaceSettingsFor`) share. A name the manifest does not
   declare under that scope is not read; a value that no longer fits reads
   as the default. Saving replaces the named values and must leave the rest
   of the stored object alone, so that a rolled-back release finds its
@@ -530,7 +572,8 @@ Things that bite:
   foreign key to `space_apps` with `ON UPDATE CASCADE` (a test in
   `packages/server/src/db/apps-schema.test.ts` fails without it): moving an
   app is one `UPDATE` of `space_apps.space_id`. `app_rows` and `app_settings`
-  are `ON DELETE RESTRICT` on purpose.
+  are `ON DELETE RESTRICT` on purpose; `app_jobs` is `ON DELETE CASCADE`,
+  since a job's status is not data and goes with the app's entry.
 - Moving an app (`moveApp` in `packages/server/src/apps/installs.ts`, one
   immediate transaction) cannot carry a row about a person into a space that
   person is not in: the database refuses it. So it first deletes every

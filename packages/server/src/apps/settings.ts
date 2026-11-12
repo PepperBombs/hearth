@@ -19,8 +19,9 @@
  * value and leaves the rest of the stored object alone. A release that is
  * rolled back, or a setting that returns, finds its values again.
  *
- * Three callers: a handler's `ctx.settings` (`settingsFor`, called from
- * calls.ts inside the call's transaction) and the two settings routes
+ * Four callers: a handler's `ctx.settings` (`settingsFor`, called from
+ * calls.ts inside the call's transaction), a job's (`spaceSettingsFor`,
+ * called from jobs.ts when a run is claimed) and the two settings routes
  * (`readAppSettings`, `changeAppSettings`). The SQL is in store.ts.
  *
  * Design: docs/mini-app-contract.md, sections A2, A6 and A8, and the
@@ -35,6 +36,7 @@ import { resolveInstall, type AppRequest } from "./installs";
 import type { Registry } from "./registry";
 import {
   readSettingsData,
+  readSpaceSettingsData,
   writeSettingsData,
   type SettingsData,
   type SettingsOwner,
@@ -84,6 +86,23 @@ export function settingsFor(db: Db, owner: SettingsOwner, manifest: Manifest): R
   const { space, user } = fill(manifest, readSettingsData(db, owner));
   // A name is declared once, so it is in one of the two.
   return { ...space, ...user };
+}
+
+/**
+ * An app's settings as a job reads them (`ctx.settings` of a run): every
+ * setting the manifest declares with scope "space", by name, with the
+ * space's value. A job runs for no one, so nobody's own settings are read,
+ * and those of scope "user" are not there at all.
+ *
+ * The caller holds the transaction that claimed the run, in which it found
+ * the app in the space.
+ */
+export function spaceSettingsFor(
+  db: Db,
+  install: { spaceId: string; appId: string },
+  manifest: Manifest,
+): Record<string, SettingValue> {
+  return fill(manifest, { space: readSpaceSettingsData(db, install), user: {} }).space;
 }
 
 /**

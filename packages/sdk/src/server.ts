@@ -73,7 +73,7 @@ export type ListOptions<T> = {
    * kind and an undefined value are errors: leave a key out to match all.
    */
   where?: Partial<T>;
-  /** Only rows the caller created. */
+  /** Only rows the caller created. A job is no one: in a job's `ctx.read` and `ctx.write` it throws. */
   mine?: boolean;
   /** A field of the collection, or when the row was created or last changed. Default: `createdAt`. */
   orderBy?: Extract<keyof T, string> | "createdAt" | "updatedAt";
@@ -287,9 +287,19 @@ export type JobCtx<M, C extends Collections> = {
    * there is no answer.
    */
   fetch(url: string, init?: FetchInit): Promise<FetchResponse>;
-  /** Reads the app's rows in this space in one transaction. `work` must not be async. */
+  /**
+   * Reads the app's rows in this space in one transaction. `work` must not
+   * be async, and cannot call `read` or `write` itself. Throws, and reads
+   * nothing, once the run is over or when the app was removed from the
+   * space, moved to another or had its data deleted since the run started;
+   * the run ends then.
+   */
   read<T>(work: (db: { readonly [K in keyof C]: ReadCollection<z.output<C[K]>> }) => NotAPromise<T>): T;
-  /** Changes them in one immediate transaction, all of it or none. `work` must not be async. */
+  /**
+   * Changes them in one immediate transaction, all of it or none, in the
+   * name of whoever added the app to the space. The same rules as `read`;
+   * work that hands back a promise is undone, and the run fails.
+   */
   write<T>(work: (db: { readonly [K in keyof C]: Collection<z.output<C[K]>> }) => NotAPromise<T>): T;
 };
 

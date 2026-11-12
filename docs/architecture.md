@@ -264,9 +264,22 @@ GitHub's 10 searches a minute for an address without a token. A server
 sends them with Node's own `fetch`; for end-to-end tests,
 `HEARTH_FETCH_STANDINS` names a file of stand-in answers instead, which
 only a server in dev mode accepts, so that no test reaches the network.
-Running jobs (the run and its transactions, the scheduler) is designed in
-section C of `docs/mini-app-contract.md` and not built yet: nothing runs a
-job today, so nothing calls `ctx.fetch`.
+
+A run of a job is claimed, run and recorded by
+`packages/server/src/apps/jobs.ts`. The claim is the job's row in
+`app_jobs` (migration 3): it holds the job for one run at a time, also
+across processes that share the database, and another run takes it over
+once the run's 5 minutes, and one more, have passed. A run gets `ctx.read`
+and `ctx.write`, which check inside their own transaction that the run
+still holds its install (the app not removed, moved away or deleted)
+before they read or write, in the name of whoever added the app; so no
+transaction waits on the network, and nothing is written after a removal,
+a move or a deletion. A run that went wrong is tried again after 5, 10, 20
+... minutes, never more than the job's interval; one that went well is
+followed by the next an interval to a tenth more after it started. The
+scheduler that starts runs on a server is designed in section C of
+`docs/mini-app-contract.md` and not built yet: no server runs a job
+today.
 
 ## An app's settings
 

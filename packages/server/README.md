@@ -202,8 +202,9 @@ input, and that the names of routes, jobs, collections and fields are plain
 and no field is called like one of the fields every row has. An app whose
 manifest names hosts in `network` must define a job, since only a job
 fetches. If anything is wrong the server prints every problem and exits
-with status 1, before it opens the database or listens. Nothing runs a job
-yet (`docs/mini-app-contract.md`, section C).
+with status 1, before it opens the database or listens. How a job runs is
+under "Running a job" below; nothing starts a run on a server yet, since
+the scheduler is the next step of `docs/mini-app-contract.md`, section C.
 
 `main.ts` takes the list from `src/apps/registry.generated.js`, which
 `hearth-apps sync` writes before every build and before `pnpm dev` from the
@@ -426,7 +427,58 @@ as is when it is text, as JSON otherwise), or fails at once with its
 `network`, and so does every request while the file is missing or is not
 such a list, with a message that says which. Stand-ins answer at once and
 are not paced; the rules still come first, so a stand-in opens no host the
-manifest does not list. Until jobs run, nothing calls `ctx.fetch`.
+manifest does not list. A run gives its job a `ctx.fetch` for the hosts of
+its app, which stops working when the run is over (see below).
+
+**Running a job** (`src/apps/jobs.ts`) goes through three functions, and
+nothing else runs one. `runOnce` does the three in order; nothing calls it
+on a server yet, since the scheduler that will is the next step.
+
+- `claimRun`, one immediate transaction: the app's entry is in the space
+  and not removed, the build holds the app and the job, the job is due
+  (or the caller forces it) and no run holds it. It writes the run's ID
+  and `run_until` (the start, the 5 minutes a run may take and one more)
+  into the job's row in `app_jobs`, making the row if the job has not run
+  in this install before, and reads the space's kind, name and settings.
+  A claim whose `run_until` has passed was left by a server that died, and
+  is taken over; that run counts for nothing.
+- The run, outside any transaction: the job's function with its `ctx`.
+  `ctx.settings` holds the space's settings and nobody's own
+  (`spaceSettingsFor`), as they were at the claim. `ctx.read(work)` and
+  `ctx.write(work)` run `work` in one transaction each, deferred and
+  immediate, after checking inside it that the run's 5 minutes are not up
+  and that it still holds its install: the app's entry in the space the
+  run started in, not removed, and the job's row holding the run's ID.
+  `work` gets a store as a handler does, which writes in the name of
+  whoever added the app (`space_apps.created_by`) with the time of the
+  write, refuses `list({ mine: true })` (a job is no one), and is closed
+  when `work` returns. The run ends at once when its 5 minutes are up,
+  when the server stops it, when `ctx.read` or `ctx.write` is refused for
+  the install (the app was removed, moved or had its data deleted, or
+  another run took the job over), and when work hands back a promise;
+  from then on `ctx.fetch` rejects with `stopped` and `ctx.read` and
+  `ctx.write` throw.
+- `recordRun`, one immediate transaction, finds the job's row by the
+  run's ID, which follows a moved app, and lets the claim go. A run that
+  went well sets `last_succeeded_at`, clears `failures`, and is followed
+  by the next an interval to a tenth more after it started (the jitter).
+  One that went wrong (it threw or rejected, ran out of time, or handed
+  back a promise) sets `last_failed_at`, `last_error` (its message on one
+  line, at most 200 characters) and one more failure, and the next waits
+  5, 10, 20, 40 ... minutes, never more than the job's interval (the
+  backoff). A run the server stopped, and one refused for its install,
+  record nothing and leave the job due at once.
+
+`requestRun` asks for a run now, for someone with edit access to the app:
+unless a run is going on, the job becomes due at once, or 5 minutes after
+the last run started if that is later, and never later than it already
+was. `jobStatus` says how its runs went, for anyone who may see the app:
+when the last run started, the last one went well and the last one went
+wrong, the last error, the next run, and `running`, `requested` or
+`idle`. Both answer `404` when the app is not there for the person, has no
+server file or has no job of that name, and `requestRun` then `403` for
+someone who may only view. The routes that call them come in a later
+step.
 
 ## Groups and members
 
@@ -531,7 +583,9 @@ Tables so far, from migration 1: `users`, `spaces`, `space_members`,
 `invitations`. Migration 2 adds the tables of the mini-app contract:
 `space_apps` (an app added to a space), `app_rows` (every mini-app's data),
 `app_settings`, `app_access`, `app_prefs` and `space_invitations`, plus the
-column `space_members.can_add_apps`. The server writes `space_apps`; the
+column `space_members.can_add_apps`. Migration 3 adds `app_jobs`: for each
+job of an app in a space, when it runs next, the run that holds it and how
+its last runs went. The server writes `space_apps`; the
 access route, and adding or moving an app as a member, write `app_access`;
 an app's mutations write `app_rows` through the store, the settings route
 writes `app_settings` and the switch-and-pin route `app_prefs`; all of them
@@ -539,7 +593,8 @@ are deleted from when an app's data is deleted, and a move deletes from the
 last three what is about people who are not in the new space. The routes
 for groups write
 `spaces`, `space_members`, `invitations` and `space_invitations`. SQL for
-`app_rows` and `app_settings` lives in `src/apps/store.ts` only.
+`app_rows` and `app_settings` lives in `src/apps/store.ts` only, and for
+`app_jobs` in `src/apps/jobs.ts`.
 
 Rules the database keeps by itself, tested as SQL in
 `src/db/apps-schema.test.ts`:
@@ -551,7 +606,8 @@ Rules the database keeps by itself, tested as SQL in
   not in the new space; another test names the three there are and fails
   for a fourth.
 - `app_rows` and `app_settings` use `ON DELETE RESTRICT`: delete them first,
-  on purpose, then the `space_apps` row.
+  on purpose, then the `space_apps` row. `app_jobs` uses `ON DELETE
+  CASCADE`: a job's status is not data, and goes with the app's entry.
 - A space keeps at least one owner. Three triggers on `space_members` refuse
   a first member who is not an owner, and refuse to remove or demote the last
   owner. They fail with `SQLITE_CONSTRAINT_TRIGGER`.

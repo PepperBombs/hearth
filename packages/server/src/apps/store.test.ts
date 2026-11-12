@@ -36,6 +36,7 @@ const scopeOf = (spaceId: string, appId: string, userId: string, now = AT): Stor
   spaceId,
   appId,
   userId,
+  job: null,
   now,
 });
 
@@ -699,5 +700,51 @@ describe("a closed store", () => {
     const second = readOnlyStore(world.db, scopeOf(world.samsSpace, "checklist", world.sam.id), checklistServer.collections);
     first.close();
     expect(second.collections.items!.count()).toBe(0);
+  });
+});
+
+describe("a job's store", () => {
+  /** Sam's own checklist as a job's work gets it, written in Kim's name. */
+  const jobScope = (): StoreScope => ({
+    spaceId: world.samsSpace,
+    appId: "checklist",
+    userId: world.kim.id,
+    job: "tidy",
+    now: LATER,
+  });
+  const jobWrites = () => writableStore(world.db, jobScope(), checklistServer.collections);
+  const jobReads = () => readOnlyStore(world.db, jobScope(), checklistServer.collections);
+
+  it("records the person it was given, and the time, on what it writes", () => {
+    const row = jobWrites().collections.items!.insert({ name: "Milk" });
+    expect(row).toMatchObject({ createdBy: world.kim.id, updatedBy: world.kim.id, createdAt: LATER.toISOString() });
+    const updated = jobWrites().collections.items!.update(sams().insert({ name: "Eggs" }).id, { done: true });
+    expect(updated).toMatchObject({ createdBy: world.sam.id, updatedBy: world.kim.id, updatedAt: LATER.toISOString() });
+  });
+
+  it("refuses list({ mine: true }), since a job is no one, in a work that writes and one that reads", () => {
+    sams().insert({ name: "Milk" });
+    for (const items of [jobWrites().collections.items!, jobReads().collections.items!]) {
+      const error = thrownBy(() => items.list({ mine: true }));
+      expect(error).toBeInstanceOf(StoreUsageError);
+      expect((error as Error).message).toBe(
+        'App "checklist", collection "items": list({ mine: true }) finds the rows of the person asking, and the job "tidy" runs for no one in the space. Leave mine out.',
+      );
+      // Everything else reads as for anyone.
+      expect(names(items.list())).toEqual(["Milk"]);
+      expect(names(items.list({ mine: false }))).toEqual(["Milk"]);
+    }
+  });
+
+  it("refuses everything once closed, saying that it was the job's work that kept it", () => {
+    const store = jobWrites();
+    const items = store.collections.items!;
+    store.close();
+    const error = thrownBy(() => items.insert({ name: "Milk" }));
+    expect(error).toBeInstanceOf(StoreUsageError);
+    expect((error as Error).message).toBe(
+      'App "checklist", collection "items": the db that ctx.read or ctx.write gave the job "tidy" was used after its work returned. Work cannot keep it for later, and cannot use it after an await.',
+    );
+    expect(everything()).toEqual([]);
   });
 });

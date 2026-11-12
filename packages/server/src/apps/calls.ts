@@ -47,7 +47,8 @@ export class AppFaultError extends Error {
 
 const STATUS = { invalid_request: 400, not_found: 404, conflict: 409 } as const;
 
-const isThenable = (value: unknown): value is PromiseLike<unknown> =>
+/** Whether a handler, or a job's work, handed back a promise or something that acts like one. */
+export const isThenable = (value: unknown): value is PromiseLike<unknown> =>
   (typeof value === "object" || typeof value === "function") &&
   value !== null &&
   typeof (value as { then?: unknown }).then === "function";
@@ -113,7 +114,7 @@ export function callApp(db: Db, registry: Registry, call: AppCall): string {
     };
     const now = new Date();
     // The scope comes from the address and the sign-in, both checked above.
-    const scope = { spaceId, appId, userId: user.id, now };
+    const scope = { spaceId, appId, userId: user.id, job: null, now };
     const store =
       kind === "query"
         ? readOnlyStore(db, scope, app.server.collections)

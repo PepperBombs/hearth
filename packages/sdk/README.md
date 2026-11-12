@@ -254,15 +254,30 @@ The manifest of this app lists `network: ["feeds.example.com"]`.
     searches without a token. A job that asks for 30 pages waits over
     three minutes for them, which counts against its run.
 - A run went well when the function returned or its promise resolved;
-  whatever it throws or rejects with makes it fail.
+  whatever it throws or rejects with makes it fail. A run has 5 minutes,
+  then it is stopped and fails. After a failure the job runs again in 5
+  minutes, then 10, 20, 40 ..., never later than its interval; after a run
+  that went well, its interval to a tenth more after that run started.
+  The message of what a failed run threw is kept with the job's status,
+  on one line and at most 200 characters.
+- **What a job writes** carries the ID of the person who added the app to
+  the space, on whose behalf it runs, and the time of the write.
+  `list({ mine: true })` throws in a job: a job is no one.
+- **A run ends at once** when its time is up, when the server stops it,
+  and when `ctx.read` or `ctx.write` finds that the app was removed from
+  the space, moved to another or had its data deleted since the run
+  started: they throw, and nothing is read or written. From then on
+  `ctx.fetch` rejects with `stopped` and `ctx.read` and `ctx.write` throw,
+  whatever the job does next. Work that hands back a promise makes the run
+  fail, and what it did is undone. Work cannot call `ctx.read` or
+  `ctx.write` itself: do it all in one.
 - **A job is not a route.** `useQuery`, `useMutation` and a test's `query`
   and `mutation` cannot name it (`JobName<typeof server>` names an app's
   jobs), and the server answers 404 when one is asked for as a query or a
   mutation.
-- **Nothing runs a job yet.** The SDK has its types, the server checks
-  every job when it starts, and `ctx.fetch` is built; the run and the
-  scheduler come in the next steps of docs/mini-app-contract.md, section
-  C.
+- **Nothing starts a run yet.** The server can run a job as described
+  here, but the scheduler that starts each one every `everyMinutes` comes
+  in the next step of docs/mini-app-contract.md, section C.
 
 ## A widget and a page
 
