@@ -309,8 +309,8 @@ run going on at once; `createApp` starts none, so tests run no job unless
 one asks. `HEARTH_JOBS=off` keeps it from starting: the deploy's trial
 start runs that way. Nothing the end-to-end tests do reaches a real host:
 the copies of the server they start run no job, except the owner's and the
-member's in `pnpm e2e`, whose jobs get every answer from a file of
-stand-ins (see "Checks").
+member's, in `pnpm e2e` and in `pnpm e2e:mini-apps`, whose jobs get every
+answer from a file of stand-ins (see "Checks").
 
 A job's two routes are what people see of it. `GET
 /api/spaces/:spaceId/apps/:appId/jobs/:job`, for anyone who can see the
@@ -632,10 +632,17 @@ The mini-apps of `hearth-stones` have their end-to-end tests here as well,
 in `e2e/mini-apps`, because that repository installs nothing but the link
 to the SDK and so has no Playwright. `pnpm e2e:mini-apps` builds Hearth
 with them, starts the owner's and the member's copies of the server again,
-and runs the file of each app the build holds: for the grocery list, two
+their jobs running over a file of stand-in answers of their own, and runs
+the file of each app the build holds: for the grocery list, two
 people of a family sharing one list, each on their own screen, one of them
 on a phone and in Chinese, who see each other's changes without
-reloading.
+reloading; for GitHub Trending, the same two following GitHub's new
+repositories while the stand-ins play GitHub's search: the first refresh
+failing, then the lists in GitHub's order with the spam left out, a
+repository the owner hides from both, the member's own choice to hide
+descriptions, and a refresh GitHub turns down, after which both read when
+it failed and from when the lists are. A link to GitHub there opens a
+stand-in page, so the browsers reach nothing outside either.
 `pnpm test` also runs `deploy/tests/deploy.test.sh`, which drives the real
 deploy script through a failed trial, a failed switch with the database put
 back, and a restart that cannot be confirmed, using stand-ins for git, pnpm

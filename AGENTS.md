@@ -96,10 +96,10 @@ which passes `check` untouched; and step 15, the grocery list, the first
 mini-app of `hearth-stones` (`grocery/` there), which the people of a space
 share, with tests of its own and an end-to-end test here of two family
 members sharing one list (`e2e/mini-apps`, `pnpm e2e:mini-apps`). Items 2
-to 4 are built; item 5 is being built. It follows section C of the same
+to 5 are built. Item 5 follows section C of the same
 document: the owner's decisions 8 to 15 at its top, the design of jobs,
 `ctx.fetch` and the scheduler, the GitHub Trending app, and eleven build
-steps, C1 to C11, each marked there once built. Built so far: C1, the
+steps, C1 to C11, each marked there once built. Built: C1, the
 hosts an app's jobs may fetch from (`network` in the manifest, checked by
 `manifestSchema`), which the dialog that adds an app names, and the SDK's
 version 0.1.1; C2, jobs in the SDK (`app.job` beside the queries and
@@ -142,14 +142,18 @@ card: a job that searches GitHub every hour for the new repositories with
 the most stars by day, week and month, for every language and each one
 the space follows, a deny-list against spam and the space's Hide list,
 and a widget with the first five of each person's own range, with tests
-of its own (`hearth-stones` declares SDK `^0.1.1` from then on); and C10,
+of its own (`hearth-stones` declares SDK `^0.1.1` from then on); C10,
 in `hearth-stones` too, the trending app's page: "Updated N min ago" and
 "Refresh now", the banner when a refresh failed with "Try again", the
 range control and the chips of the languages the space follows, the list
 with rank, link, description, language, stars, forks and age, and "Hide",
-"Undo" and "Hidden (n)" for edit access. C11, its end-to-end test here,
-remains. The document's last two sections, the questions behind
-decisions 1 to 5 and the risks, are D and E.
+"Undo" and "Hidden (n)" for edit access; and C11, its end-to-end test
+here (`e2e/mini-apps/trending.spec.ts`): the owner and Lin on the copies
+of `pnpm e2e:mini-apps`, which now run their jobs over one file of
+stand-in answers (`MINI_APPS_STAND_INS`) that plays GitHub's search, from
+a first refresh that fails to one GitHub turns down. The document's last
+two sections, the questions behind decisions 1 to 5 and the risks, are D
+and E.
 
 ## Layout and commands
 
@@ -160,7 +164,7 @@ decisions 1 to 5 and the risks, are D and E.
 | `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file, its jobs included), `installs.ts` (who may use which app where; add, remove, bring back, move to another space, delete data, each person's switch and pin), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db` and the `db` a job's work gets, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds, a handler's and a job's), `fetch.ts` (`ctx.fetch`: the rules, the pace, Node's transport and the stand-in file; `outboundFor` picks the last two from the settings), `jobs.ts` (running a job: `claimRun`, the run (`runClaimed`), `recordRun`, and `runOnce`, which does the three; `nextJob`, which job falls due first; `requestRun` and `jobStatus`; the only SQL for `app_jobs`), `scheduler.ts` (the scheduler: due jobs one at a time, through `runOnce`; `start`, `wake` and `stop`; only `main.ts` makes one), `routes.ts` (every route about apps in a space, a job's status and a run asked for among them), `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports), `check-bundle.ts` (run by `hearth-apps check`, not by the server), `test-world.ts` and `test-clock.ts` (a world of people, spaces and apps, and a clock that moves only when told, for the server's tests), and `app-testing.ts` with `app-testing.setup.ts` (the implementation of `testApp` for an app's own tests, its jobs' runs and statuses included, which `vitest.apps.config.ts` at the package's root installs; not part of the server). `installs.ts` also holds the owners' list of a space's apps (`listSpaceApps`) and the access route's work (`setAppAccess`). `src/groups` is groups and their people: `policy.ts` (`groupRights`: who may create groups and invite), `members.ts` (create, rename, add or invite, change, remove or leave, take an invitation back) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository (it declares SDK `^0.1.1`). Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file, a widget, a page and tests of its own (`checklist.test.ts`, written with `testApp`), and is the template `hearth-apps new` copies; `feed` a manifest and a widget, no server file; `headlines` a manifest that names one host (`feeds.example.com`), a server file with a query and a job (`refresh`, every hour), a widget that reads `useJob`, and tests of its own that run the job with stand-ins. |
 | `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card, the avatar and `LinkedText` in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes, settings and jobs' statuses, a run asked for, and adding, removing, moving, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, moving, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page, with the dialogs that add, move and remove an app; the one that adds names the hosts an app's manifest lists in `network`. `src/groups` is the groups' cards in Settings: `groups.tsx` (the cards, creating, renaming, leaving), `people.tsx` (the people, adding, the dialog for one person, invitations), `access-table.tsx` (the member-by-app table), `api.ts` and `queries.ts`. |
-| `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). `servers.ts` holds the addresses, the people, the command that starts a copy of the built server (`realServerCommand`), and the file of stand-in answers the owner's and Lin's copies share (`STAND_INS`), which tests write with `writeStandIns`. `e2e/mini-apps` holds the tests of mini-apps from another repository, one file per app named after its ID (`grocery.spec.ts`), which `playwright.mini-apps.config.ts` runs against Hearth built with them. |
+| `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). `servers.ts` holds the addresses, the people, the command that starts a copy of the built server (`realServerCommand`), and the file of stand-in answers the owner's and Lin's copies share (`STAND_INS`, and `MINI_APPS_STAND_INS` for those of `pnpm e2e:mini-apps`), which tests write with `writeStandIns`. `e2e/mini-apps` holds the tests of mini-apps from another repository, one file per app named after its ID (`grocery.spec.ts`, `trending.spec.ts`), which `playwright.mini-apps.config.ts` runs against Hearth built with them. |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Each release is built with the mini-apps of `APPS_REPO` at the same moment, copied in beside the framework and linked to its SDK. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
 | `.github/workflows` | `ci.yml`: the framework by itself (`check`), end to end with the sample apps (`e2e`), and with `main` of `hearth-stones` checked out beside it, checked, built and end to end (`mini-apps`). |
 | `docs` | `architecture.md`, `self-hosting.md` and `mini-app-contract.md` (the agreed design for mini-apps and its build plan). |
@@ -179,7 +183,7 @@ Commands, from the repository root (Node 22, pnpm 10):
 | `HEARTH_APPS_DIR=../hearth-stones node packages/sdk/bin/hearth-apps.mjs dev` | `hearth-apps dev`: sync, then `pnpm dev` with those apps and sign-in switched off. In a mini-apps repository it is `pnpm dev` there. |
 | `HEARTH_APPS_DIR=../hearth-stones node packages/sdk/bin/hearth-apps.mjs new <id>` | `hearth-apps new`: a new mini-app in that folder, named `<id>`, as a copy of the sample checklist. In a mini-apps repository it is `pnpm new <id>` there. |
 | `pnpm e2e` | End-to-end tests against the built app. Run `pnpm build` first. They build again with the sample apps, which stay in both `dist` folders until the next `pnpm build`. |
-| `pnpm e2e:mini-apps` | End-to-end tests of the mini-apps of `HEARTH_APPS_DIR`, or of `../hearth-stones` when it is not set: Hearth built with them, and the owner and Lin on one server. It runs the file in `e2e/mini-apps` of each app those folders hold, and passes when there is none. Those apps stay in both `dist` folders until the next `pnpm build`. |
+| `pnpm e2e:mini-apps` | End-to-end tests of the mini-apps of `HEARTH_APPS_DIR`, or of `../hearth-stones` when it is not set: Hearth built with them, and the owner and Lin on one server, whose jobs run over a file of stand-in answers. It runs the file in `e2e/mini-apps` of each app those folders hold, and passes when there is none. Those apps stay in both `dist` folders until the next `pnpm build`. |
 | `pnpm start` | Start the built server. |
 
 Things that bite:
@@ -300,17 +304,25 @@ Things that bite:
   failed run logs a line, which shows in Playwright's output. The
   stranger's copy runs no job (`HEARTH_JOBS=off` in `realServerCommand`).
 - `e2e/mini-apps` tests apps of another repository, today the grocery list
-  of `hearth-stones`; GitHub Trending's file comes with C11. That
+  and GitHub Trending of `hearth-stones`. That
   repository has no Playwright of its own (it installs
   nothing but the SDK's link). `pnpm e2e` leaves the folder out; `pnpm
   e2e:mini-apps` (`playwright.mini-apps.config.ts`) builds Hearth with
   those apps and starts the owner's and Lin's copies of the server on ports
   4183 and 4184 over a database of their own (`MINI_APPS_*` in
-  `e2e/servers.ts`). A file runs only when the folders hold the app it is
+  `e2e/servers.ts`). Both run their jobs over one file of stand-in answers
+  beside that database (`MINI_APPS_STAND_INS`), as in `pnpm e2e`.
+  A file runs only when the folders hold the app it is
   named after, so CI's `mini-apps` job passes against a `hearth-stones`
   without that app. CI in `hearth-stones` does not run these tests: a
   change there to an app's texts or layout needs its file here changed
-  with it, and shows first in this repository's next CI run. Do not run
+  with it, and shows first in this repository's next CI run. So does a
+  change to GitHub Trending's searches: `trending.spec.ts` answers each
+  search by the text of its `q` (the filters against spam, the fewest forks
+  of its range, the language), and a search no stand-in answers fails the
+  run. Its browsers follow a link to GitHub only into a stand-in page: a
+  route on each context answers `https://github.com` itself and refuses
+  every other host but the test's servers. Do not run
   the two Playwright commands at the same time: both build into the same
   `dist` folders.
 - An app's `useQuery` suspends and is read again after any mutation of the
@@ -602,8 +614,9 @@ Things that bite:
   server gives stand-ins instead: given a file, `realServerCommand` starts
   the copy with `HEARTH_JOBS=on` and `HEARTH_FETCH_STANDINS`, as
   `playwright.config.ts` does for the owner's and Lin's copies
-  (`STAND_INS`). `playwright.mini-apps.config.ts` gives none yet (C11
-  does), so its copies run no job, GitHub Trending's included. `pnpm dev`
+  (`STAND_INS`) and `playwright.mini-apps.config.ts` for its two
+  (`MINI_APPS_STAND_INS`), so that GitHub Trending's job runs there
+  against stand-ins and never against GitHub. `pnpm dev`
   runs jobs against the real hosts their manifests name (owner's decision
   15): with `hearth-stones` in it, GitHub Trending searches the real
   `api.github.com` once it is added to a space, so give it stand-ins when

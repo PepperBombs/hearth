@@ -115,6 +115,16 @@ export const MINI_APPS_SHARED_DB_DIR = join(tmpdir(), `hearth-e2e-mini-apps-${mi
 export const MINI_APPS_SHARED_DB = join(MINI_APPS_SHARED_DB_DIR, "hearth.db");
 
 /**
+ * The stand-in answers for every `ctx.fetch` of those two copies, which
+ * run their apps' jobs, as STAND_INS is for `pnpm e2e`: one file for both,
+ * beside their database, so that it goes when the owner's copy starts.
+ * Until a test writes it with `writeStandIns`, every request a job makes
+ * fails as the network would, so no job of a mini-app reaches the host its
+ * manifest names (GitHub Trending's `api.github.com` among them).
+ */
+export const MINI_APPS_STAND_INS = join(MINI_APPS_SHARED_DB_DIR, "stand-ins.json");
+
+/**
  * The folders of mini-apps those tests build in: HEARTH_APPS_DIR, read as
  * `hearth-apps sync` reads it (several separated like PATH, a relative one
  * from the root of this checkout), or else `hearth-stones` beside this

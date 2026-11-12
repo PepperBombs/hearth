@@ -93,7 +93,7 @@ config file that still has it is accepted, and the value ignored.
 | `HEARTH_GROUP_POLICY` | `owner` | Who may create groups and invite people who are not on the server yet: `owner`, the server's owner alone, or `everyone` on the server. Adding someone who is already on the server to a group is for that group's owners either way. |
 | `HEARTH_VERSION` | `dev` | Shown as the running version; the deploy sets it to the short commit hash. |
 | `HEARTH_JOBS` | `on` | Whether the mini-apps' jobs run: `on` or `off`. Off, no job runs and none fetches anything; a job's status still answers, and a run asked for waits until jobs run again. The deploy's trial start runs with `off`, and so does every copy of the server the end-to-end tests start without stand-ins. |
-| `HEARTH_FETCH_STANDINS` | none | For end-to-end tests: the path of a JSON file of stand-in answers for every `ctx.fetch` of a job, so that nothing reaches the network (see "Mini-apps"). `pnpm e2e` gives one file to the owner's and Lin's copies, which run their jobs. Refused unless `HEARTH_AUTH=dev`; the server says at start-up that it is on. |
+| `HEARTH_FETCH_STANDINS` | none | For end-to-end tests: the path of a JSON file of stand-in answers for every `ctx.fetch` of a job, so that nothing reaches the network (see "Mini-apps"). `pnpm e2e` gives one file to the owner's and Lin's copies, which run their jobs, and `pnpm e2e:mini-apps` one to its own two. Refused unless `HEARTH_AUTH=dev`; the server says at start-up that it is on. |
 
 Relative paths are resolved against the working directory, except the default
 for `HEARTH_WEB_DIST`. Started through pnpm (`pnpm start`, `pnpm --filter
