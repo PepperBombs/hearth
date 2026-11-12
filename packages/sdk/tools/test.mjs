@@ -15,6 +15,11 @@
  * tests of apps a build would refuse are not run, and a folder written for
  * another SDK version ends with status 3, as there.
  *
+ * The tests run in one time zone, 8 hours from UTC (APP_TESTS_TIME_ZONE),
+ * wherever the command runs: a server may be set to any zone, so what an
+ * app keeps must not follow the server's time of day, and a test of it
+ * that passed in UTC alone would prove nothing.
+ *
  * Design: docs/mini-app-contract.md, section A9.
  */
 import { spawnSync } from "node:child_process";
@@ -23,6 +28,9 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { TEST_FILE, isUnread } from "./import-scan.mjs";
 import { AppsError, EXIT_PROBLEMS, findApps, frameworkRoot } from "./sync.mjs";
+
+/** The time zone an app's tests run in: off UTC, without summer time. */
+export const APP_TESTS_TIME_ZONE = "Asia/Shanghai";
 
 /**
  * The script a package runs as `name`, as an absolute path, for the copy of
@@ -89,6 +97,7 @@ export function runAppTests({ apps, root, log }) {
     env: {
       ...process.env,
       HEARTH_APP_TESTS: JSON.stringify([...byFolder].map(([folder, ids]) => ({ folder, apps: ids }))),
+      TZ: APP_TESTS_TIME_ZONE,
     },
   });
   if (result.error) {

@@ -437,6 +437,36 @@ describe("the sleep and the wake", () => {
     expect(started()).toEqual(["A/ticker/refresh", "A/ticker/tidy"]);
   });
 
+  it.each([
+    ["a millisecond after it looks", 1, 1],
+    ["less than a second after it looks", 400, 400],
+    ["after a whole sleep of 30 seconds and a little more", LONGEST_WAIT_MS + 400, LONGEST_WAIT_MS + 400],
+  ])("runs a job due %s at its time, never claiming it early", async (_, dueAt, ranAt) => {
+    install(place.db, "a-team", "digest", place.sam.id);
+    due("a-team", "digest", "refresh", dueAt);
+    scheduler().start();
+    await settle();
+    await fake.advance(ranAt - 1);
+    expect(runs).toEqual([]);
+    await fake.advance(1);
+    expect(runs).toEqual([{ run: "A/digest/refresh", minute: ranAt / MINUTE }]);
+    expect(lines).toEqual([]);
+  });
+
+  it("lets the process do what waits for its turn between one run and the next, however quick the runs", async () => {
+    install(place.db, "a-team", "ticker", place.sam.id);
+    install(place.db, "a-team", "digest", place.sam.id);
+    // Three jobs due at once, none of which waits for anything. During the first, something else asks for its turn.
+    const order: string[] = [];
+    behaviour = (_ctx, run) => {
+      order.push(run);
+      if (order.length === 1) setImmediate(() => order.push("the process's own work"));
+    };
+    scheduler().start();
+    await settle();
+    expect(order).toEqual(["A/digest/refresh", "the process's own work", "A/ticker/refresh", "A/ticker/tidy"]);
+  });
+
   it("does nothing before it is started, and starts once", async () => {
     install(place.db, "a-team", "digest", place.sam.id);
     const running = scheduler();

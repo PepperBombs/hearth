@@ -21,11 +21,12 @@
  *    the component until it is there, as a query does. It is read every 3
  *    seconds while a run is going on or was asked for, so that the end of
  *    the run shows soon after it comes. When the last run that went well is
- *    a later one than before, every query of the app here is read again
- *    before the new status is shown: the run brought new data, and the app
- *    never shows data older than its status says. `run()` is POST
- *    .../jobs/:name/run, whose answer is the status; it is refused and
- *    reported as a mutation is.
+ *    a later one than before, every query of the app here on the screen is
+ *    read again before the new status is shown, and the answers kept of the
+ *    others are dropped, to be read afresh when shown again: the run brought
+ *    new data, and the app never shows data older than its status says.
+ *    `run()` is POST .../jobs/:name/run, whose answer is the status; it is
+ *    refused and reported as a mutation is.
  *
  * Queries, settings and jobs' statuses are also read again when the window
  * gets the focus back and every 15 seconds while it is visible. That is how
@@ -192,14 +193,20 @@ function useAppMutation(name: string): MutationHandle {
  * Takes a job's status that has just come from the server, before it is
  * cached and shown. When the last run that went well is not the one the
  * cached status named, that run brought new data: every query of the app
- * here is read again first, so that the app never shows data older than
- * its status says. The first status of all has nothing to compare with.
+ * here on the screen is read again first, and waited for, and every answer
+ * kept of one that is not on the screen is dropped, so that the app never
+ * shows data older than its status says. A list shown again later, such as
+ * another range of a page or the page's lists after the dashboard, is read
+ * afresh first. The first status of all has nothing to compare with.
  */
 async function received(client: QueryClient, install: Install, job: string, status: JobStatus): Promise<JobStatus> {
   const before = client.getQueryData<JobStatus>(jobQueryKey(install, job));
   if (before !== undefined && before.lastSucceededAt !== status.lastSucceededAt) {
+    client.removeQueries({ queryKey: queriesKey(install), type: "inactive" });
     // A failed re-read leaves the queries as they were; they are read again at their next turn.
     await client.invalidateQueries({ queryKey: queriesKey(install) });
+    // One that left the screen meanwhile may have been called off before its answer came.
+    client.removeQueries({ queryKey: queriesKey(install), type: "inactive" });
   }
   return status;
 }

@@ -5,12 +5,13 @@
  * moves only when told, and ctx.fetch answers from a transport written
  * here: nothing waits and nothing reaches a network.
  */
+import { getEventListeners } from "node:events";
 import { defineApp } from "@hearth/sdk";
 import { AppError, defineServer, FetchError, z, type JobCtx } from "@hearth/sdk/server";
 import type { JobStatus } from "@hearth/shared";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Refusal } from "../http/errors";
-import type { TransportRequest } from "./fetch";
+import { createPace, PACE_MS, type TransportRequest } from "./fetch";
 import { addApp, deleteAppData, moveApp, removeApp } from "./installs";
 import {
   CLAIM_GRACE_MS,
@@ -771,6 +772,23 @@ describe("how a run ends", () => {
     });
   });
 
+  it("leaves nothing listening to the server's stop signal once a run is over, however it ended", async () => {
+    // One signal lasts as long as the server: a run that left its listener there would be kept for good.
+    const stop = new AbortController();
+    expect(await run(place.family, { stop: stop.signal })).toEqual({ kind: "succeeded" });
+    behaviour = () => {
+      throw new Error("The feed is down.");
+    };
+    expect(await run(place.linsSpace, { stop: stop.signal })).toMatchObject({ kind: "failed" });
+    behaviour = () => new Promise<void>(() => {});
+    const timed = run(place.family, { stop: stop.signal }, "tidy");
+    await settle();
+    expect(getEventListeners(stop.signal, "abort")).toHaveLength(1);
+    await fake.advance(RUN_TIME_LIMIT_MS);
+    expect(await timed).toMatchObject({ kind: "failed" });
+    expect(getEventListeners(stop.signal, "abort")).toEqual([]);
+  });
+
   it("does not start the job at all when the server is already stopping", async () => {
     let ran = false;
     behaviour = () => {
@@ -781,6 +799,145 @@ describe("how a run ends", () => {
     expect(await run(place.family, { stop: stop.signal })).toEqual({ kind: "stopped" });
     expect(ran).toBe(false);
     expect(jobRow(place.family)).toMatchObject({ run_id: null, next_run_at: iso(0), last_succeeded_at: null });
+  });
+});
+
+describe("requests a run leaves behind", () => {
+  /**
+   * The rejections nothing handled while the test ran. A server would end
+   * on one, so a request the job started and no longer waits for when its
+   * run ends must leave none: the run tells it it is over, and nobody is
+   * there to hear it.
+   */
+  let unhandled: unknown[];
+  const heard = (reason: unknown) => void unhandled.push(reason);
+  beforeEach(() => {
+    unhandled = [];
+    process.on("unhandledRejection", heard);
+  });
+  afterEach(() => {
+    process.off("unhandledRejection", heard);
+  });
+
+  const DAY = "https://feeds.example.com/day.json";
+  const WEEK = "https://feeds.example.com/week.json";
+
+  /** What a job that still waited for the request would be told: its code. */
+  async function toldOf(request: Promise<unknown> | undefined): Promise<string> {
+    const told = await request?.then(
+      () => "answered",
+      (error: unknown) => (error instanceof FetchError ? error.code : String(error)),
+    );
+    return told ?? "never started";
+  }
+
+  it.each([
+    [
+      "its function threw",
+      async (ctx: Ctx, left: (request: Promise<unknown>) => void) => {
+        const day = ctx.fetch(DAY);
+        left(ctx.fetch(WEEK));
+        const first = await day;
+        if (!first.ok) throw new Error(`The day's feed answered ${first.status}.`);
+      },
+      { kind: "failed", error: "The day's feed answered 500." },
+    ],
+    [
+      "the app was removed, so that its write was refused",
+      async (ctx: Ctx, left: (request: Promise<unknown>) => void) => {
+        left(ctx.fetch(WEEK));
+        removeApp(place.db, registry, { userId: place.sam.id, spaceId: place.family, appId: "ticker" });
+        ctx.write((db) => db.items.insert({ text: "Late" }));
+      },
+      { kind: "gone" },
+    ],
+  ] as const)("leave nothing unhandled when the run ends because %s while one waits for its answer", async (_, job, ending) => {
+    // The day's feed answers at once with 500; the week's never answers.
+    answer = (request) => (request.url === DAY ? new Response("down", { status: 500 }) : "never");
+    let week: Promise<unknown> | undefined;
+    behaviour = (ctx) => job(ctx, (request) => (week = request));
+    expect(await run(place.family)).toMatchObject(ending);
+    await settle();
+    expect(unhandled).toEqual([]);
+    // The request was called off, and a job that still waited for it would be told the run is over.
+    expect(requests.find((request) => request.url === WEEK)?.signal.aborted).toBe(true);
+    expect(await toldOf(week)).toBe("stopped");
+  });
+
+  it("leave nothing unhandled when the run's 5 minutes run out while one waits for its answer", async () => {
+    answer = () => "never";
+    const late = gate();
+    let week: Promise<unknown> | undefined;
+    behaviour = async (ctx) => {
+      await late.pass();
+      week = ctx.fetch(WEEK);
+      await new Promise<void>(() => {});
+    };
+    const running = run(place.family);
+    await late.arrived;
+    // Asked for 10 seconds before the end, so that the run ends before the answer's own 20 seconds do.
+    await fake.advance(RUN_TIME_LIMIT_MS - 10_000);
+    late.open();
+    await fake.advance(10_000);
+    expect(await running).toMatchObject({ kind: "failed", error: "The run took longer than 5 minutes, so it was stopped." });
+    await settle();
+    expect(unhandled).toEqual([]);
+    expect(await toldOf(week)).toBe("stopped");
+  });
+
+  it("leave nothing unhandled when one runs out of time for its answer while the job waits for something else", async () => {
+    answer = () => "never";
+    let week: Promise<unknown> | undefined;
+    behaviour = async (ctx) => {
+      week = ctx.fetch(WEEK);
+      await new Promise<void>(() => {});
+    };
+    const running = watch(run(place.family));
+    await fake.advance(20_000);
+    await settle();
+    expect(unhandled).toEqual([]);
+    expect(await toldOf(week)).toBe("timeout");
+    // The run goes on, until its own time is up.
+    expect(running.settled).toBe(false);
+    await fake.advance(RUN_TIME_LIMIT_MS);
+    expect(await running.promise).toMatchObject({ kind: "failed" });
+  });
+
+  it("leave nothing unhandled when the server stops the run while one waits for its answer", async () => {
+    answer = () => "never";
+    let week: Promise<unknown> | undefined;
+    behaviour = async (ctx) => {
+      week = ctx.fetch(WEEK);
+      await new Promise<void>(() => {});
+    };
+    const stop = new AbortController();
+    const running = run(place.family, { stop: stop.signal });
+    await settle();
+    expect(requests).toHaveLength(1);
+    stop.abort();
+    expect(await running).toEqual({ kind: "stopped" });
+    await settle();
+    expect(unhandled).toEqual([]);
+    expect(await toldOf(week)).toBe("stopped");
+  });
+
+  it("leave nothing unhandled when the run ends while many wait for their turn at the host", async () => {
+    // Sixty pages of a feed, which the server's pace lets go one every 6.5 seconds: more than the run's 5 minutes.
+    const pages: Promise<unknown>[] = [];
+    behaviour = async (ctx) => {
+      for (let page = 0; page < 60; page += 1) pages.push(ctx.fetch(`https://feeds.example.com/page-${page}.json`));
+      for (const page of pages) await page;
+    };
+    const running = run(place.family, { outbound: { ...world().outbound, pace: createPace(fake.clock) } });
+    await fake.advance(RUN_TIME_LIMIT_MS);
+    expect(await running).toMatchObject({ kind: "failed", error: "The run took longer than 5 minutes, so it was stopped." });
+    await settle();
+    expect(unhandled).toEqual([]);
+    // Those whose turn came were sent; the others never were.
+    expect(requests).toHaveLength(Math.ceil(RUN_TIME_LIMIT_MS / PACE_MS));
+    const told = await Promise.all(pages.map(toldOf));
+    expect(told.slice(0, requests.length)).toEqual(requests.map(() => "answered"));
+    expect(told.slice(requests.length)).toEqual(Array.from({ length: 60 - requests.length }, () => "stopped"));
   });
 });
 

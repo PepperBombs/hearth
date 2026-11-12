@@ -485,7 +485,8 @@ scheduler (below) and for an app's own tests.
   record nothing and leave the job due at once.
 
 **The scheduler** (`src/apps/scheduler.ts`) is what starts runs on a
-server. `main.ts` makes it when `HEARTH_JOBS` is `on` and starts it once
+server. `startServer` (`src/serve.ts`, which `main.ts` runs through
+`serveHearth`) makes it when `HEARTH_JOBS` is `on` and starts it once
 the server listens; `createApp` starts none, so tests run no job unless
 one asks.
 
@@ -500,7 +501,7 @@ one asks.
 - With nothing due it sleeps until the next job is due, at most 30
   seconds, so that a change made by another process sharing the database
   is seen within that. Adding an app to a space or bringing one back, and
-  a run asked for, wake it at once (`wakeJobs`, which `main.ts` hands
+  a run asked for, wake it at once (`wakeJobs`, which `startServer` hands
   `createApp`).
 - Timing is the runs': at most 5 minutes each, the next an interval to a
   tenth more after a run that went well, and 5, 10, 20 ... minutes after
@@ -514,7 +515,14 @@ one asks.
   the database cannot be read it says so and looks again 30 seconds
   later.
 - Stopping it (SIGTERM or SIGINT) starts no new run and ends the one going
-  on at once, recorded as nothing, its job due again at the next start.
+  on at once, recorded as nothing, its job due again at the next start;
+  then the database is closed, within 5 seconds whatever holds things up.
+- A job's function is not waited for once its run is over, and a request
+  it started then fails with `stopped`. The promise `ctx.fetch` gave counts
+  as handled, so a request nobody waited for any more is no fault; a
+  promise the job made itself that rejects with nothing to handle it is
+  logged on one line ("A job left behind ..." for one made of a request)
+  instead of ending the process, which serves everyone's apps.
 
 `requestRun` asks for a run now, for someone with edit access to the app:
 unless a run is going on, the job becomes due at once, or 5 minutes after

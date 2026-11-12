@@ -303,14 +303,17 @@ run follows its being added. With nothing due it sleeps until the next job
 is, at most 30 seconds, so that what another process sharing the database
 changed is seen within that, and adding an app or bringing one back wakes
 it, as does a run someone asked for. All it knows is in `app_jobs`, so a
-restart goes on where the last process stopped. `main.ts` starts it once
-the server listens and stops it before the database closes, ending the
-run going on at once; `createApp` starts none, so tests run no job unless
-one asks. `HEARTH_JOBS=off` keeps it from starting: the deploy's trial
-start runs that way. Nothing the end-to-end tests do reaches a real host:
-the copies of the server they start run no job, except the owner's and the
-member's, in `pnpm e2e` and in `pnpm e2e:mini-apps`, whose jobs get every
-answer from a file of stand-ins (see "Checks").
+restart goes on where the last process stopped. The server
+(`packages/server/src/serve.ts`, which `main.ts` runs) starts it once it
+listens and stops it before the database closes, ending the run going on
+at once; `createApp` starts none, so tests run no job unless one asks. A
+rejected promise a job's function leaves behind once its run is over is
+logged, and the server serves on. `HEARTH_JOBS=off` keeps it from
+starting: the deploy's trial start runs that way. Nothing the end-to-end
+tests do reaches a real host: the copies of the server they start run no
+job, except the owner's and the member's, in `pnpm e2e` and in
+`pnpm e2e:mini-apps`, whose jobs get every answer from a file of
+stand-ins (see "Checks").
 
 A job's two routes are what people see of it. `GET
 /api/spaces/:spaceId/apps/:appId/jobs/:job`, for anyone who can see the

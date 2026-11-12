@@ -280,6 +280,13 @@ tests and README are worth reading beside this section.
   whatever the job does next. Work that hands back a promise makes the run
   fail, and what it did is undone. Work cannot call `ctx.read` or
   `ctx.write` itself: do it all in one.
+- **Wait for every request you start**, with `await` or `Promise.all`,
+  before the job returns or throws. A request still on its way when the
+  run ends rejects with `stopped`, and so does every promise made of it
+  (`ctx.fetch(url).then(...)`). The server hears a `ctx.fetch` that nothing
+  waits for and goes on, but a promise of the job's own that rejects with
+  nothing to handle it is logged as a mistake of the job's. One at a time
+  is simplest: the requests to a host go out one at a time anyway.
 - **A job is not a route.** `useQuery`, `useMutation` and a test's `query`
   and `mutation` cannot name it, only `useJob` can, and in a test `runJob`,
   `job` and `requestRun` (`JobName<typeof server>` names an app's jobs);
@@ -461,6 +468,14 @@ describe("grocery", () => {
   app's other files may. Run the tests with `hearth-apps test` (`pnpm test`
   in a mini-apps repository): they run inside the framework, which supplies
   the store. `vitest` started by hand has none, and `testApp` says so.
+- **The tests run 8 hours from UTC** (`Asia/Shanghai`), wherever the
+  command runs. A server may keep any time zone, so what a job or a
+  handler keeps must not follow the server's time of day: write times in
+  UTC, as `toISOString()` does, and a test that expects UTC's digits then
+  shows it. A test of what the widget or page writes on the reader's clock
+  reads that clock with `Date`'s own getters (`getHours()`), not UTC's.
+  A file of the app's that imports nothing at run time (no React), such as
+  one of functions that write times and counts, can be tested by itself.
 
 ### A job in a test
 

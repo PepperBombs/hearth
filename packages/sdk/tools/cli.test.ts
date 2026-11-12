@@ -386,6 +386,17 @@ describe("hearth-apps test", () => {
     expect(run.status).toBe(0);
   });
 
+  it("runs them in a time zone 8 hours from UTC, whatever zone the command runs in", { timeout: SLOW }, () => {
+    const zone =
+      'import { expect, it } from "vitest";\n\nit("is 8 hours from UTC", () => {\n  expect(new Date("2026-11-12T14:05:00Z").getHours()).toBe(22);\n  expect(new Date(0).getTimezoneOffset()).toBe(-480);\n});\n';
+    const repo = makeRepo({ files: { ...appFiles("notes"), "notes/zone.test.ts": zone } });
+    const env: NodeJS.ProcessEnv = { ...process.env, TZ: "UTC" };
+    delete env.HEARTH_APPS_DIR;
+    const run = spawnSync(process.execPath, [BIN, "test"], { cwd: repo, env, encoding: "utf8" });
+    expect(printed(run)).toMatch(/Test Files\s+1 passed \(1\)/);
+    expect(run.status).toBe(0);
+  });
+
   it("runs the tests of every folder HEARTH_APPS_DIR names, in one run", { timeout: SLOW }, () => {
     const first = makeRepo({ files: { ...appFiles("notes"), "notes/notes.test.ts": PASSING_TEST } });
     const second = makeRepo({ files: { ...appFiles("diary"), "diary/diary.test.ts": PASSING_TEST } });

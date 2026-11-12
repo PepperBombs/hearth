@@ -152,12 +152,19 @@ export type StandInAnswer = {
  * `ctx.fetch` for one run of a job: the rules, then the pace, then the
  * transport. Every argument is checked as it comes, since JavaScript that
  * ignores the SDK's types may pass anything.
+ *
+ * The promise it gives counts as handled from the start. When a run ends,
+ * every request of it still waiting for its turn or its answer rejects with
+ * "stopped", and the job may no longer be waiting for it: one that started
+ * two requests and failed on the first, or ran out of time. A rejection
+ * nobody handles would end the server's process, so this one is heard
+ * here, and a job that still awaits the request is told all the same.
  */
 export function fetchFor(
   outbound: Outbound,
   scope: FetchScope,
 ): (url: string, init?: FetchInit) => Promise<FetchResponse> {
-  return async (url: unknown, init?: unknown): Promise<FetchResponse> => {
+  const request = async (url: unknown, init?: unknown): Promise<FetchResponse> => {
     if (scope.signal.aborted) {
       throw new FetchError("stopped", "The run is over: ctx.fetch works only while its job runs.");
     }
@@ -172,6 +179,11 @@ export function fetchFor(
       }
       address = redirectTarget(answer.location, address, first.hostname);
     }
+  };
+  return (url: unknown, init?: unknown): Promise<FetchResponse> => {
+    const answer = request(url, init);
+    answer.catch(() => {});
+    return answer;
   };
 }
 

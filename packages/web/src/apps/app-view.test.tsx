@@ -9,7 +9,7 @@ import { appHooks } from "@hearth/sdk/web";
 import type { AppSummary, JobStatus, Session } from "@hearth/shared";
 import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ComponentType } from "react";
+import { useDeferredValue, useState, type ComponentType } from "react";
 import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import checklistManifest from "../../../fixture-apps/checklist/manifest";
@@ -222,6 +222,12 @@ function start(server: FakeServer, options: { at?: string; apps?: readonly Bundl
     </MemoryRouter>,
   );
   return client;
+}
+
+/** The window hidden, as when the reader turns to another tab, or looked at again. */
+async function setVisible(visible: boolean) {
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue(visible ? "visible" : "hidden");
+  await act(async () => void window.dispatchEvent(new Event("visibilitychange")));
 }
 
 const card = async (name: string) => (await screen.findByRole("heading", { level: 2, name })).closest("section") as HTMLElement;
@@ -628,10 +634,6 @@ describe("keeping a widget up to date", () => {
   /** Lets everything that is due happen: timers, answers, and the drawing that follows. */
   const settle = (ms = 0) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
   const names = () => screen.queryAllByRole("checkbox").map((box) => box.closest("label")?.textContent);
-  const setVisible = async (visible: boolean) => {
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue(visible ? "visible" : "hidden");
-    await act(async () => void window.dispatchEvent(new Event("visibilitychange")));
-  };
 
   async function open(server: FakeServer) {
     // The widget's code is fetched before the clock is stopped, as it would be from the browser's cache.
@@ -867,6 +869,31 @@ describe("a job in a widget", () => {
     expect(server.count(QUERY)).toBe(3);
   });
 
+  it("reads nothing while the window is hidden, a run asked for or not, and reads at once when it is looked at again", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([tickerApp()]);
+    server.job = { ...NOT_RUN, lastStartedAt: STARTED, lastSucceededAt: SUCCEEDED, state: "requested" };
+    await open(server);
+    expect(shown().running).toBe(true);
+    const read = { status: server.count(STATUS), query: server.count(QUERY) };
+
+    // A run asked for on a server whose jobs are off never starts: a hidden window reads nothing all the same.
+    await setVisible(false);
+    await settle(RUNNING_REFRESH_MS * 10);
+    await settle(REFRESH_EVERY_MS * 2);
+    expect(server.count(STATUS)).toBe(read.status);
+    expect(server.count(QUERY)).toBe(read.query);
+
+    // Meanwhile the run went well. Looked at again, the widget reads the status at once, and what the run brought.
+    server.job = { ...server.job, lastSucceededAt: LATER, state: "idle" };
+    server.headlines = ["Snow in the hills", "Rain expected"];
+    await setVisible(true);
+    await settle(20);
+    expect(server.count(STATUS)).toBe(read.status + 1);
+    expect(shown()).toMatchObject({ running: false, succeededAt: LATER });
+    expect(headlines()).toEqual(["Snow in the hills", "Rain expected"]);
+  });
+
   it("asks for a run, shows it going on at once, and is pending until the server answered", async () => {
     const server = new FakeServer();
     server.session = sessionWith([tickerApp()]);
@@ -987,6 +1014,178 @@ describe("a job in a widget", () => {
     fireEvent.click(within(card).getByRole("button", { name: "Try again" }));
     expect(await within(card).findByRole("button", { name: "Refresh now" })).toBeTruthy();
     expect(shown().succeededAt).toBeNull();
+  });
+});
+
+describe("lists read before a run that went well", () => {
+  const manifest = defineApp({
+    id: "ticker",
+    name: { en: "Ticker", zh: "快讯" },
+    description: { en: "Keeps the latest headlines of a feed.", zh: "保存一个订阅源的最新标题。" },
+    icon: "file-text",
+    color: "teal",
+    widget: { size: "small" },
+    network: ["feeds.example.com"],
+  });
+  const ticker = defineServer(manifest, { headlines: z.object({ title: z.string() }) });
+  const server = ticker.routes({
+    latest: ticker.query(
+      { description: "Lists one page of the headlines kept, newest first.", input: z.object({ page: z.number().int().min(0) }) },
+      (ctx) => ctx.db.headlines.list({ desc: true }),
+    ),
+    refresh: ticker.job({ description: "Keeps the latest headlines of the feed, every hour.", everyMinutes: 60 }, () => {}),
+  });
+  const { useQuery, useJob } = appHooks<typeof server>();
+
+  /** A widget with two pages of headlines, as GitHub Trending's page has ranges: the one shown follows a control. */
+  function Paged() {
+    const [page, setPage] = useState(0);
+    const shownPage = useDeferredValue(page);
+    const headlines = useQuery("latest", { page: shownPage });
+    const { succeededAt } = useJob("refresh");
+    return (
+      <div>
+        <ul aria-label="Headlines">
+          {headlines.map((headline) => (
+            <li key={headline.id}>{headline.title}</li>
+          ))}
+        </ul>
+        <output data-testid="updated">{succeededAt}</output>
+        <output data-testid="page">{shownPage}</output>
+        <button type="button" onClick={() => setPage((value) => 1 - value)}>
+          Other page
+        </button>
+      </div>
+    );
+  }
+  const PAGED: BundledApp = { id: "ticker", manifest: server.manifest, hasPage: false, widget: async () => ({ default: Paged }) };
+
+  /** The headlines of the first page in a part of their own, which the reader folds away and back. */
+  function List() {
+    const headlines = useQuery("latest", { page: 0 });
+    return (
+      <ul aria-label="Headlines">
+        {headlines.map((headline) => (
+          <li key={headline.id}>{headline.title}</li>
+        ))}
+      </ul>
+    );
+  }
+  function Folding() {
+    const [open, setOpen] = useState(true);
+    const { succeededAt } = useJob("refresh");
+    return (
+      <div>
+        {open ? <List /> : null}
+        <output data-testid="updated">{succeededAt}</output>
+        <output data-testid="page">0</output>
+        <button type="button" onClick={() => setOpen((was) => !was)}>
+          {open ? "Fold" : "Unfold"}
+        </button>
+      </div>
+    );
+  }
+  const FOLDING: BundledApp = { id: "ticker", manifest: server.manifest, hasPage: false, widget: async () => ({ default: Folding }) };
+
+  const SUCCEEDED = "2026-03-01T13:05:21.000Z";
+  const LATER = "2026-03-01T14:05:30.000Z";
+  const BEFORE = ["Rain expected", "Market opens"];
+  const AFTER = ["Snow in the hills", "Rain expected"];
+  const settle = (ms = 0) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
+  /** What the widget shows: which page, from when, and the headlines. */
+  const seen = () => ({
+    page: screen.getByTestId("page").textContent,
+    updated: screen.getByTestId("updated").textContent,
+    list: within(screen.getByRole("list", { name: "Headlines" }))
+      .queryAllByRole("listitem")
+      .map((item) => item.textContent),
+  });
+
+  async function readBothPages(fake: FakeServer) {
+    fake.session = sessionWith([summary(manifest, FAMILY)]);
+    fake.job = { ...NOT_RUN, lastStartedAt: SUCCEEDED, lastSucceededAt: SUCCEEDED };
+    vi.useFakeTimers();
+    start(fake, { apps: [PAGED] });
+    for (let round = 0; round < 20 && screen.queryByTestId("updated") === null; round += 1) await settle(10);
+    expect(seen()).toEqual({ page: "0", updated: SUCCEEDED, list: BEFORE });
+    // The reader looks at the other page: both are read, and kept.
+    fireEvent.click(screen.getByRole("button", { name: "Other page" }));
+    await settle(50);
+    expect(seen()).toEqual({ page: "1", updated: SUCCEEDED, list: BEFORE });
+  }
+
+  it("never shows one again beside the time of the run: it is read afresh first", async () => {
+    const fake = new FakeServer();
+    await readBothPages(fake);
+
+    // A run goes well and brings new headlines; the next reading of the status says so.
+    fake.headlines = AFTER;
+    fake.job = { ...fake.job, lastStartedAt: LATER, lastSucceededAt: LATER };
+    await settle(REFRESH_EVERY_MS + 100);
+    expect(seen()).toEqual({ page: "1", updated: LATER, list: AFTER });
+
+    // The reader turns back to the first page while the network is slow: until its list is read
+    // again, the page shown stays, with what the run brought.
+    let open = () => {};
+    fake.hold = { ending: "/q/latest", until: new Promise<void>((resolve) => (open = resolve)) };
+    const reads = fake.count("/q/latest");
+    fireEvent.click(screen.getByRole("button", { name: "Other page" }));
+    await settle(50);
+    expect(fake.count("/q/latest")).toBe(reads + 1);
+    expect(seen()).toEqual({ page: "1", updated: LATER, list: AFTER });
+    open();
+    await settle(50);
+    expect(seen()).toEqual({ page: "0", updated: LATER, list: AFTER });
+  });
+
+  it("and keeps the time it shows with the list it shows while the list on the screen is read again", async () => {
+    const fake = new FakeServer();
+    await readBothPages(fake);
+    fake.headlines = AFTER;
+    fake.job = { ...fake.job, lastStartedAt: LATER, lastSucceededAt: LATER };
+    let open = () => {};
+    fake.hold = { ending: "/q/latest", until: new Promise<void>((resolve) => (open = resolve)) };
+    await settle(REFRESH_EVERY_MS + 100);
+    // The run's status has come, and the list on the screen is being read again: the old time stays with the old list.
+    expect(seen()).toEqual({ page: "1", updated: SUCCEEDED, list: BEFORE });
+    // Turning back to the first page meanwhile shows no list from before the run beside the new time either.
+    fireEvent.click(screen.getByRole("button", { name: "Other page" }));
+    await settle(50);
+    const shown = seen();
+    expect(shown.updated === LATER && shown.list.join() === BEFORE.join()).toBe(false);
+    open();
+    await settle(50);
+    expect(seen()).toEqual({ page: "0", updated: LATER, list: AFTER });
+  });
+
+  it("drops one that left the screen while it was being read again, so that it is read afresh when it comes back", async () => {
+    const fake = new FakeServer();
+    fake.session = sessionWith([summary(manifest, FAMILY)]);
+    fake.job = { ...NOT_RUN, lastStartedAt: SUCCEEDED, lastSucceededAt: SUCCEEDED };
+    vi.useFakeTimers();
+    start(fake, { apps: [FOLDING] });
+    for (let round = 0; round < 20 && screen.queryByTestId("updated") === null; round += 1) await settle(10);
+    expect(seen()).toEqual({ page: "0", updated: SUCCEEDED, list: BEFORE });
+
+    // The run's status comes while the network is slow; the list on the screen is read again.
+    fake.headlines = AFTER;
+    fake.job = { ...fake.job, lastStartedAt: LATER, lastSucceededAt: LATER };
+    let open = () => {};
+    fake.hold = { ending: "/q/latest", until: new Promise<void>((resolve) => (open = resolve)) };
+    await settle(REFRESH_EVERY_MS + 100);
+    expect(seen()).toEqual({ page: "0", updated: SUCCEEDED, list: BEFORE });
+    // The reader folds the list away before that answer comes: it is called off, and the new status shows.
+    fireEvent.click(screen.getByRole("button", { name: "Fold" }));
+    await settle(50);
+    expect(screen.getByTestId("updated").textContent).toBe(LATER);
+    // Unfolded, the list is not the one from before the run: it is read afresh.
+    fireEvent.click(screen.getByRole("button", { name: "Unfold" }));
+    await settle(50);
+    const shown = screen.queryByRole("list", { name: "Headlines" });
+    expect(shown === null ? null : within(shown).queryAllByRole("listitem").map((item) => item.textContent)).not.toEqual(BEFORE);
+    open();
+    await settle(50);
+    expect(seen()).toEqual({ page: "0", updated: LATER, list: AFTER });
   });
 });
 

@@ -298,6 +298,13 @@ describe("ctx.fetch's answer", () => {
     expect(Object.isFrozen(answer)).toBe(true);
   });
 
+  it("leaves out set-cookie2 too, the older name for a cookie", async () => {
+    const { fetch } = throughNode(
+      () => new Response("ok", { headers: { "Set-Cookie2": 'session=1; Version="1"', "Set-Cookie": "other=2", Etag: '"x"' } }),
+    );
+    expect((await fetch(FEED)).headers).toEqual({ "content-type": "text/plain;charset=UTF-8", etag: '"x"' });
+  });
+
   it.each([
     [403, '{"message":"API rate limit exceeded"}'],
     [404, "Not Found"],
@@ -398,6 +405,22 @@ describe("ctx.fetch follows redirects", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it.each([300, 304, 305])("only of the five redirect statuses: a %i is the answer, its location and all", async (status) => {
+    const { fetch, calls } = throughNode((url) =>
+      url.endsWith("/choices")
+        ? new Response(status === 304 ? null : "choose one", { status, headers: { location: "/elsewhere" } })
+        : new Response("followed"),
+    );
+    expect(await fetch("https://feeds.example.com/choices")).toMatchObject({
+      url: "https://feeds.example.com/choices",
+      status,
+      ok: false,
+      headers: { location: "/elsewhere" },
+      text: status === 304 ? "" : "choose one",
+    });
+    expect(calls.map((call) => call.url)).toEqual(["https://feeds.example.com/choices"]);
+  });
+
   it("and gives a redirect status without a location, or a 304, as the answer", async () => {
     const { fetch, calls } = throughNode((url) =>
       url.endsWith("/moved") ? new Response("no location", { status: 301 }) : new Response(null, { status: 304, headers: { etag: '"abc"' } }),
@@ -432,6 +455,40 @@ describe("ctx.fetch's limits", () => {
     const call = watch(fetch(SEARCH));
     await fake.advance(ANSWER_TIME_LIMIT_MS);
     expect(await failure(call.promise)).toMatchObject({ code: "timeout" });
+  });
+
+  it("cancel an answer that such a transport still gives after the 20 seconds, unread", async () => {
+    let read = false;
+    let cancelled = false;
+    const fake = fakeClock();
+    // Read only when asked for: nothing pulls it ahead of a reader.
+    const late = () =>
+      new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            pull: (controller) => {
+              read = true;
+              controller.enqueue(bytes("too late"));
+              controller.close();
+            },
+            cancel: () => void (cancelled = true),
+          },
+          { highWaterMark: 0 },
+        ),
+      );
+    const outbound: Outbound = {
+      // Deaf to its signal: the answer comes 5 seconds after the limit all the same.
+      transport: () => new Promise((resolve) => fake.clock.after(ANSWER_TIME_LIMIT_MS + 5_000, () => resolve(late()))),
+      pace: null,
+      clock: fake.clock,
+    };
+    const call = watch(fetchFor(outbound, { hosts: HOSTS, signal: new AbortController().signal })(SEARCH));
+    await fake.advance(ANSWER_TIME_LIMIT_MS);
+    expect(await failure(call.promise)).toMatchObject({ code: "timeout" });
+    expect(cancelled).toBe(false);
+    await fake.advance(5_000);
+    expect(cancelled).toBe(true);
+    expect(read).toBe(false);
   });
 
   it("count the body in the 20 seconds, and stop a body that stalls", async () => {
