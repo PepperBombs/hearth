@@ -12,7 +12,8 @@
  * scan does not read either (`node_modules`, names that start with a dot).
  *
  * This package's own tests are in vitest.config.ts. Without the variable
- * this file has nothing to run and says so.
+ * this file has nothing to run and says so. The command also sets TZ, so
+ * that every app's tests run 8 hours from UTC, wherever they run.
  */
 import path from "node:path";
 import { defineConfig } from "vitest/config";

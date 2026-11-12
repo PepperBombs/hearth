@@ -202,4 +202,32 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX app_rows_by_scope ON app_rows (space_id, app_id, collection, created_at, id);
     `,
   },
+  {
+    // Scheduled jobs (docs/mini-app-contract.md, section C, "Table"). Its SQL
+    // is in src/apps/jobs.ts.
+    id: 3,
+    name: "app-jobs",
+    sql: `
+      -- One app's job in one space: when it runs next and how its runs went. No row: it has not
+      -- run there yet. Status, not data: it follows the app to another space and goes with its entry.
+      CREATE TABLE app_jobs (
+        space_id          TEXT NOT NULL,
+        app_id            TEXT NOT NULL,
+        job               TEXT NOT NULL,     -- its name in the app's server.ts
+        next_run_at       TEXT NOT NULL,
+        requested_at      TEXT,              -- someone asked for a run that has not started
+        run_id            TEXT,              -- the run that holds the job now
+        run_until         TEXT,              -- when that run counts as lost: its start + the time limit + 1 minute
+        last_started_at   TEXT,
+        last_succeeded_at TEXT,              -- when the last run that went well ended
+        last_failed_at    TEXT,              -- when the last run that went wrong ended
+        last_error        TEXT CHECK (last_error IS NULL OR length(last_error) <= 200),
+        failures          INTEGER NOT NULL DEFAULT 0 CHECK (failures >= 0),   -- in a row, for the backoff
+        PRIMARY KEY (space_id, app_id, job),
+        CHECK ((run_id IS NULL) = (run_until IS NULL)),
+        FOREIGN KEY (space_id, app_id) REFERENCES space_apps (space_id, app_id)
+          ON UPDATE CASCADE ON DELETE CASCADE
+      ) STRICT;
+    `,
+  },
 ];

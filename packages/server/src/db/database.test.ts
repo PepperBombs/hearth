@@ -54,6 +54,7 @@ describe("migrate", () => {
     expect(ran.map((migration) => migration.id)).toEqual(MIGRATIONS.map((m) => m.id));
     expect(tables(db)).toEqual([
       "app_access",
+      "app_jobs",
       "app_prefs",
       "app_rows",
       "app_settings",

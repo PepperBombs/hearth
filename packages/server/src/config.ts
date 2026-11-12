@@ -19,6 +19,15 @@ export type AuthMode = (typeof AUTH_MODES)[number];
 export const GROUP_POLICIES = ["owner", "everyone"] as const;
 export type GroupPolicy = (typeof GROUP_POLICIES)[number];
 
+/**
+ * Whether this server runs its mini-apps' jobs (docs/mini-app-contract.md,
+ * section C, "Switches"): "on", the default, or "off". Off, no job runs and
+ * none fetches anything. The deploy's trial start and the end-to-end tests
+ * switch them off.
+ */
+export const JOBS_SWITCH = ["on", "off"] as const;
+export type JobsSwitch = (typeof JOBS_SWITCH)[number];
+
 export type AuthConfig =
   | { mode: "cloudflare-access"; teamDomain: string; audience: string }
   | { mode: "dev"; devUser: string };
@@ -38,6 +47,18 @@ export type Config = {
   ownerEmail: string;
   groupPolicy: GroupPolicy;
   version: string;
+  /**
+   * Whether startServer (src/serve.ts) starts the scheduler
+   * (src/apps/scheduler.ts). Off, no job runs; a job's status still
+   * answers, and a run asked for waits until jobs run again.
+   */
+  jobs: JobsSwitch;
+  /**
+   * Absolute path of a JSON file of stand-in answers for every `ctx.fetch`
+   * of a job, so that nothing reaches the network, or null. For end-to-end
+   * tests, and only with HEARTH_AUTH=dev (src/apps/fetch.ts).
+   */
+  fetchStandIns: string | null;
 };
 
 /** Thrown when the settings are missing or wrong. The message is meant to be shown as is. */
@@ -70,6 +91,8 @@ const SETTING_NAMES = [
   "HEARTH_DEV_USER",
   "HEARTH_GROUP_POLICY",
   "HEARTH_VERSION",
+  "HEARTH_JOBS",
+  "HEARTH_FETCH_STANDINS",
 ] as const;
 type SettingName = (typeof SETTING_NAMES)[number];
 
@@ -114,6 +137,8 @@ const settingsSchema = z.object({
     .string()
     .max(64, { error: "must be at most 64 characters" })
     .default("dev"),
+  HEARTH_JOBS: z.enum(JOBS_SWITCH, { error: 'must be "on" or "off"' }).default("on"),
+  HEARTH_FETCH_STANDINS: z.string().optional(),
 });
 
 /** True for addresses that only this machine can reach. */
@@ -260,6 +285,15 @@ export function loadConfig(
     if (devUser) auth = { mode: "dev", devUser };
   }
 
+  // Stand-ins answer for every host a job may reach. Only a server that
+  // signs everyone in without checking, and so listens on loopback alone,
+  // may have them: a real server can never be given made-up answers.
+  if (settings.HEARTH_FETCH_STANDINS && settings.HEARTH_AUTH !== "dev") {
+    problems.push(
+      "HEARTH_FETCH_STANDINS answers every fetch of a job from a file, which is for end-to-end tests, so it needs HEARTH_AUTH=dev. A real server fetches from the hosts themselves: leave it unset.",
+    );
+  }
+
   if (problems.length > 0 || !auth || !settings.HEARTH_OWNER_EMAIL) {
     throw new ConfigError(problems);
   }
@@ -277,5 +311,7 @@ export function loadConfig(
     ownerEmail: settings.HEARTH_OWNER_EMAIL,
     groupPolicy: settings.HEARTH_GROUP_POLICY,
     version: settings.HEARTH_VERSION,
+    jobs: settings.HEARTH_JOBS,
+    fetchStandIns: optionalPath(settings.HEARTH_FETCH_STANDINS),
   };
 }

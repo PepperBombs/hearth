@@ -4,11 +4,12 @@
  * the server that answers the session and the apps' routes from memory.
  */
 import { defineApp, type Manifest } from "@hearth/sdk";
+import { defineServer, z } from "@hearth/sdk/server";
 import { appHooks } from "@hearth/sdk/web";
-import type { AppSummary, Session } from "@hearth/shared";
+import type { AppSummary, JobStatus, Session } from "@hearth/shared";
 import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ComponentType } from "react";
+import { useDeferredValue, useState, type ComponentType } from "react";
 import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import checklistManifest from "../../../fixture-apps/checklist/manifest";
@@ -16,7 +17,7 @@ import feedManifest from "../../../fixture-apps/feed/manifest";
 import { App } from "../app";
 import { reloadPage } from "../lib/reload";
 import { BundledAppsProvider, type BundledApp, type LazyComponent } from "./bundled";
-import { REFRESH_EVERY_MS, appTranslator } from "./scope";
+import { REFRESH_EVERY_MS, RUNNING_REFRESH_MS, appTranslator } from "./scope";
 
 vi.mock("../lib/reload", () => ({ reloadPage: vi.fn() }));
 
@@ -97,6 +98,16 @@ const row = (item: Item) => ({ ...item, createdBy: "u1", updatedBy: "u1", create
 
 type Refusal = { status: number; code: string };
 
+/** The status of a job that has not run yet, due at the start. */
+const NOT_RUN: JobStatus = {
+  lastStartedAt: null,
+  lastSucceededAt: null,
+  lastFailedAt: null,
+  lastError: null,
+  nextRunAt: "2026-03-01T13:05:00.000Z",
+  state: "idle",
+};
+
 /** Stands in for the server. Tests change what it holds and how it answers between requests. */
 class FakeServer {
   session: Session = sessionWith([]);
@@ -110,8 +121,18 @@ class FakeServer {
     checklist: { space: { sections: [] }, user: { hideDone: false } },
     feed: { space: {}, user: { topics: [], period: "day" } },
   };
+  /** The headlines the ticker's query answers with, newest first. */
+  headlines: string[] = ["Rain expected", "Market opens"];
+  /** The status of the ticker's job, as the server would answer it. */
+  job: JobStatus = NOT_RUN;
   /** Answer the next requests whose path ends like this with a refusal, until cleared. */
   refuse: { ending: string; with: Refusal } | null = null;
+  /**
+   * Hold back the answers to requests whose path ends like this until the
+   * promise resolves, as a slow network would: the answer is what was true
+   * when the request arrived.
+   */
+  hold: { ending: string; until: Promise<void> } | null = null;
   /** Every request, as "METHOD path". */
   readonly requests: string[] = [];
   readonly bodies: unknown[] = [];
@@ -122,6 +143,13 @@ class FakeServer {
 
   fetch = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
     const path = String(input);
+    const hold = this.hold !== null && path.endsWith(this.hold.ending) ? this.hold.until : null;
+    const response = this.answer(path, init);
+    if (hold !== null) await hold;
+    return response;
+  };
+
+  private answer(path: string, init: RequestInit): Response {
     const method = init.method ?? "GET";
     this.requests.push(`${method} ${path}`);
     const body: unknown = typeof init.body === "string" ? JSON.parse(init.body) : undefined;
@@ -162,8 +190,20 @@ class FakeServer {
         return json(200, { output: before - this.items.length });
       }
     }
+    if (appId === "ticker") {
+      if (rest === "q/latest" && method === "POST") {
+        const kept = { createdBy: "u1", updatedBy: "u1", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+        return json(200, { output: this.headlines.map((title, index) => ({ id: `h${index}`, title, ...kept })) });
+      }
+      if (rest === "jobs/refresh" && method === "GET") return json(200, this.job);
+      if (rest === "jobs/refresh/run" && method === "POST") {
+        // As on the server: during a run, asking changes nothing.
+        if (this.job.state !== "running") this.job = { ...this.job, state: "requested" };
+        return json(202, this.job);
+      }
+    }
     return json(404, { error: { code: "not_found", message: "No such route" } });
-  };
+  }
 }
 
 function Where() {
@@ -182,6 +222,12 @@ function start(server: FakeServer, options: { at?: string; apps?: readonly Bundl
     </MemoryRouter>,
   );
   return client;
+}
+
+/** The window hidden, as when the reader turns to another tab, or looked at again. */
+async function setVisible(visible: boolean) {
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue(visible ? "visible" : "hidden");
+  await act(async () => void window.dispatchEvent(new Event("visibilitychange")));
 }
 
 const card = async (name: string) => (await screen.findByRole("heading", { level: 2, name })).closest("section") as HTMLElement;
@@ -588,10 +634,6 @@ describe("keeping a widget up to date", () => {
   /** Lets everything that is due happen: timers, answers, and the drawing that follows. */
   const settle = (ms = 0) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
   const names = () => screen.queryAllByRole("checkbox").map((box) => box.closest("label")?.textContent);
-  const setVisible = async (visible: boolean) => {
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue(visible ? "visible" : "hidden");
-    await act(async () => void window.dispatchEvent(new Event("visibilitychange")));
-  };
 
   async function open(server: FakeServer) {
     // The widget's code is fetched before the clock is stopped, as it would be from the browser's cache.
@@ -648,6 +690,502 @@ describe("keeping a widget up to date", () => {
     expect(server.count("/q/list")).toBe(2);
     expect(names()).toEqual(["Water the plants", "Book the dentist"]);
     expect(screen.queryByText("This app could not be loaded.")).toBeNull();
+  });
+});
+
+describe("a job in a widget", () => {
+  const manifest = defineApp({
+    id: "ticker",
+    name: { en: "Ticker", zh: "快讯" },
+    description: { en: "Keeps the latest headlines of a feed.", zh: "保存一个订阅源的最新标题。" },
+    icon: "file-text",
+    color: "teal",
+    widget: { size: "small" },
+    network: ["feeds.example.com"],
+  });
+  const ticker = defineServer(manifest, { headlines: z.object({ title: z.string() }) });
+  const server = ticker.routes({
+    latest: ticker.query({ description: "Lists the headlines kept, newest first." }, (ctx) => ctx.db.headlines.list({ desc: true })),
+    refresh: ticker.job({ description: "Keeps the latest headlines of the feed, every hour.", everyMinutes: 60 }, () => {}),
+  });
+  const { useQuery, useJob } = appHooks<typeof server>();
+
+  /** What the last `run()` came to. */
+  let outcome: "asked" | "refused" | null;
+  function Ticker() {
+    const headlines = useQuery("latest");
+    const job = useJob("refresh");
+    const { succeededAt, failedAt, running, canRun, pending } = job;
+    const refresh = () =>
+      job.run().then(
+        () => void (outcome = "asked"),
+        () => void (outcome = "refused"),
+      );
+    return (
+      <div>
+        <ul aria-label="Headlines">
+          {headlines.map((headline) => (
+            <li key={headline.id}>{headline.title}</li>
+          ))}
+        </ul>
+        <output data-testid="job">{JSON.stringify({ succeededAt, failedAt, running, canRun, pending })}</output>
+        <button type="button" disabled={pending} onClick={() => void refresh()}>
+          Refresh now
+        </button>
+      </div>
+    );
+  }
+  // The build's list holds the manifest, which the server file carries too.
+  const TICKER: BundledApp = { id: "ticker", manifest: server.manifest, hasPage: false, widget: async () => ({ default: Ticker }) };
+
+  const STARTED = "2026-03-01T13:05:00.000Z";
+  const SUCCEEDED = "2026-03-01T13:05:21.000Z";
+  const LATER = "2026-03-01T14:05:30.000Z";
+  const STATUS = `GET /api/spaces/${FAMILY}/apps/ticker/jobs/refresh`;
+  const RUN = `POST /api/spaces/${FAMILY}/apps/ticker/jobs/refresh/run`;
+  const QUERY = `POST /api/spaces/${FAMILY}/apps/ticker/q/latest`;
+
+  const tickerApp = (extra: Partial<AppSummary> = {}) => summary(manifest, FAMILY, extra);
+  /** What the widget shows of its job. */
+  const shown = () =>
+    JSON.parse(screen.getByTestId("job").textContent ?? "") as {
+      succeededAt: string | null;
+      failedAt: string | null;
+      running: boolean;
+      canRun: boolean;
+      pending: boolean;
+    };
+  const headlines = () =>
+    within(screen.getByRole("list", { name: "Headlines" }))
+      .queryAllByRole("listitem")
+      .map((item) => item.textContent);
+  /** A promise the test resolves when it likes, to hold an answer back. */
+  function gate() {
+    let open = () => {};
+    const until = new Promise<void>((resolve) => (open = resolve));
+    return { until, open };
+  }
+  /** Lets everything that is due happen: timers, answers, and the drawing that follows. */
+  const settle = (ms = 0) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
+
+  async function open(server: FakeServer) {
+    vi.useFakeTimers();
+    start(server, { apps: [TICKER] });
+    for (let round = 0; round < 20 && screen.queryByTestId("job") === null; round += 1) await settle(10);
+    expect(screen.getByTestId("job")).toBeTruthy();
+  }
+
+  afterEach(() => {
+    outcome = null;
+  });
+
+  it("waits for the job's status before the widget is drawn, as for a query", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([tickerApp()]);
+    const held = gate();
+    server.hold = { ending: "/jobs/refresh", until: held.until };
+    start(server, { apps: [TICKER] });
+    const card = (await screen.findByRole("heading", { level: 2, name: /Ticker/ })).closest("section") as HTMLElement;
+
+    await waitFor(() => expect(server.count(STATUS)).toBe(1));
+    expect(within(card).getByTestId("app-skeleton")).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: "Refresh now" })).toBeNull();
+
+    held.open();
+    expect(await within(card).findByRole("button", { name: "Refresh now" })).toBeTruthy();
+    expect(within(card).queryByTestId("app-skeleton")).toBeNull();
+    expect(shown()).toEqual({ succeededAt: null, failedAt: null, running: false, canRun: true, pending: false });
+    expect(headlines()).toEqual(["Rain expected", "Market opens"]);
+  });
+
+  it("reads the status every 3 seconds while a run is going on or asked for, and with the queries otherwise", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([tickerApp()]);
+    server.job = { ...NOT_RUN, lastStartedAt: STARTED, state: "running" };
+    await open(server);
+    expect(shown().running).toBe(true);
+    expect(server.count(STATUS)).toBe(1);
+
+    await settle(RUNNING_REFRESH_MS - 100);
+    expect(server.count(STATUS)).toBe(1);
+    await settle(200);
+    expect(server.count(STATUS)).toBe(2);
+    await settle(RUNNING_REFRESH_MS);
+    expect(server.count(STATUS)).toBe(3);
+
+    // The run ends: from then on the status is read every 15 seconds, as the queries are.
+    server.job = { ...server.job, lastSucceededAt: SUCCEEDED, state: "idle" };
+    await settle(RUNNING_REFRESH_MS);
+    expect(server.count(STATUS)).toBe(4);
+    expect(shown()).toMatchObject({ running: false, succeededAt: SUCCEEDED });
+    await settle(REFRESH_EVERY_MS - 1000);
+    expect(server.count(STATUS)).toBe(4);
+    await settle(1100);
+    expect(server.count(STATUS)).toBe(5);
+
+    // A run asked for that has not started counts as going on.
+    server.job = { ...server.job, state: "requested" };
+    await settle(REFRESH_EVERY_MS);
+    expect(server.count(STATUS)).toBe(6);
+    expect(shown().running).toBe(true);
+    await settle(RUNNING_REFRESH_MS);
+    expect(server.count(STATUS)).toBe(7);
+  });
+
+  it("reads the app's queries again once a run went well, and shows the new status with what the run brought", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([tickerApp()]);
+    server.job = { ...NOT_RUN, lastStartedAt: LATER, lastSucceededAt: SUCCEEDED, state: "running" };
+    await open(server);
+    expect(server.count(QUERY)).toBe(1);
+
+    // Still running: nothing new to read.
+    await settle(RUNNING_REFRESH_MS);
+    expect(server.count(STATUS)).toBe(2);
+    expect(server.count(QUERY)).toBe(1);
+
+    // The run went well and brought a new headline. Until the query has answered, the widget shows
+    // the old status beside the old headlines, never the new status beside them.
+    server.job = { ...server.job, lastSucceededAt: LATER, state: "idle" };
+    server.headlines = ["Snow in the hills", "Rain expected"];
+    const held = gate();
+    server.hold = { ending: "/q/latest", until: held.until };
+    await settle(RUNNING_REFRESH_MS);
+    // Whatever was to be drawn by now has been drawn.
+    await settle(500);
+    expect(server.count(STATUS)).toBe(3);
+    expect(server.count(QUERY)).toBe(2);
+    expect(shown()).toMatchObject({ succeededAt: SUCCEEDED, running: true });
+    expect(headlines()).toEqual(["Rain expected", "Market opens"]);
+
+    held.open();
+    await settle(10);
+    expect(headlines()).toEqual(["Snow in the hills", "Rain expected"]);
+    expect(shown()).toMatchObject({ succeededAt: LATER, running: false });
+    // A status read again with the same run gone well asks for nothing more.
+    server.hold = null;
+    await settle(REFRESH_EVERY_MS);
+    expect(server.count(STATUS)).toBe(4);
+    expect(server.count(QUERY)).toBe(3);
+  });
+
+  it("reads nothing while the window is hidden, a run asked for or not, and reads at once when it is looked at again", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([tickerApp()]);
+    server.job = { ...NOT_RUN, lastStartedAt: STARTED, lastSucceededAt: SUCCEEDED, state: "requested" };
+    await open(server);
+    expect(shown().running).toBe(true);
+    const read = { status: server.count(STATUS), query: server.count(QUERY) };
+
+    // A run asked for on a server whose jobs are off never starts: a hidden window reads nothing all the same.
+    await setVisible(false);
+    await settle(RUNNING_REFRESH_MS * 10);
+    await settle(REFRESH_EVERY_MS * 2);
+    expect(server.count(STATUS)).toBe(read.status);
+    expect(server.count(QUERY)).toBe(read.query);
+
+    // Meanwhile the run went well. Looked at again, the widget reads the status at once, and what the run brought.
+    server.job = { ...server.job, lastSucceededAt: LATER, state: "idle" };
+    server.headlines = ["Snow in the hills", "Rain expected"];
+    await setVisible(true);
+    await settle(20);
+    expect(server.count(STATUS)).toBe(read.status + 1);
+    expect(shown()).toMatchObject({ running: false, succeededAt: LATER });
+    expect(headlines()).toEqual(["Snow in the hills", "Rain expected"]);
+  });
+
+  it("asks for a run, shows it going on at once, and is pending until the server answered", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([tickerApp()]);
+    server.job = { ...NOT_RUN, lastStartedAt: STARTED, lastSucceededAt: SUCCEEDED };
+    await open(server);
+    expect(shown()).toMatchObject({ running: false, canRun: true, pending: false });
+
+    const held = gate();
+    server.hold = { ending: "/jobs/refresh/run", until: held.until };
+    fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+    await settle(10);
+    expect(server.count(RUN)).toBe(1);
+    expect(shown()).toMatchObject({ running: false, pending: true });
+    expect((screen.getByRole("button", { name: "Refresh now" }) as HTMLButtonElement).disabled).toBe(true);
+
+    held.open();
+    await settle(10);
+    expect(outcome).toBe("asked");
+    // The answer is the status: no reading of it was needed to show the run asked for.
+    expect(shown()).toMatchObject({ running: true, pending: false });
+    expect(server.count(STATUS)).toBe(1);
+    // From then on it is read every 3 seconds, to see the run end.
+    server.hold = null;
+    await settle(RUNNING_REFRESH_MS);
+    expect(server.count(STATUS)).toBe(2);
+    expect(screen.queryByText(/could not be saved|but not change|was not made/)).toBeNull();
+  });
+
+  it("keeps showing the run asked for when a reading of the status sent before it arrives after it", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([tickerApp()]);
+    server.job = { ...NOT_RUN, lastStartedAt: STARTED, lastSucceededAt: SUCCEEDED };
+    await open(server);
+    // A reading of the status is on its way, slowly, when the person asks for a run.
+    const slow = gate();
+    server.hold = { ending: "/jobs/refresh", until: slow.until };
+    await settle(REFRESH_EVERY_MS);
+    expect(server.count(STATUS)).toBe(2);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+    await settle(10);
+    expect(shown()).toMatchObject({ running: true, pending: false });
+
+    // It says what was true before the request, and is not taken.
+    slow.open();
+    await settle(500);
+    expect(shown()).toMatchObject({ running: true });
+  });
+
+  it("reports a run the server refused as a refused change, and reads the app again", async () => {
+    const server = new FakeServer();
+    // The session still says edit; an owner has just made this person a viewer.
+    server.session = sessionWith([tickerApp()]);
+    await open(server);
+    server.refuse = { ending: "/jobs/refresh/run", with: { status: 403, code: "forbidden" } };
+    fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+    await settle(10);
+    expect(outcome).toBe("refused");
+    expect(screen.getByText("You can look at this app, but not change anything in it.")).toBeTruthy();
+    expect(shown()).toMatchObject({ running: false, pending: false });
+    expect(server.count(STATUS)).toBe(2);
+    expect(server.count(QUERY)).toBe(2);
+
+    // The next run asked for that goes through takes the notice away.
+    server.refuse = null;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+    await settle(10);
+    expect(outcome).toBe("asked");
+    expect(screen.queryByText("You can look at this app, but not change anything in it.")).toBeNull();
+    expect(shown().running).toBe(true);
+  });
+
+  it("asks for the session again when the server says the app is not there, and the card goes", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([tickerApp(), checklistApp()]);
+    await open(server);
+    server.session = sessionWith([checklistApp()]);
+    server.refuse = { ending: "/jobs/refresh/run", with: { status: 404, code: "not_found" } };
+    fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+    await settle(10);
+    await settle(10);
+    expect(outcome).toBe("refused");
+    expect(screen.queryByRole("heading", { level: 2, name: /Ticker/ })).toBeNull();
+    expect(server.count("GET /api/session")).toBe(2);
+    expect(screen.getByRole("heading", { level: 2, name: "Checklist" })).toBeTruthy();
+  });
+
+  it("lets only someone with edit access ask for a run", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([tickerApp({ access: "view" })]);
+    await open(server);
+    expect(shown().canRun).toBe(false);
+  });
+
+  it("says when the last run failed, until one goes well", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([tickerApp()]);
+    server.job = { ...NOT_RUN, lastStartedAt: LATER, lastSucceededAt: SUCCEEDED, lastFailedAt: LATER, lastError: "The feed answered 500." };
+    await open(server);
+    expect(shown()).toMatchObject({ succeededAt: SUCCEEDED, failedAt: LATER });
+    // The message itself is the server's, in English: the widget is not given it.
+    expect(screen.getByTestId("job").textContent).not.toContain("500");
+
+    server.job = { ...server.job, lastSucceededAt: "2026-03-01T14:10:00.000Z" };
+    await settle(REFRESH_EVERY_MS + 100);
+    expect(shown()).toMatchObject({ succeededAt: "2026-03-01T14:10:00.000Z", failedAt: null });
+  });
+
+  it("fails the card as a query does when the status cannot be read, and reads it on another try", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const server = new FakeServer();
+    server.session = sessionWith([tickerApp()]);
+    server.refuse = { ending: "/jobs/refresh", with: { status: 500, code: "internal" } };
+    start(server, { apps: [TICKER] });
+    const card = (await screen.findByRole("heading", { level: 2, name: /Ticker/ })).closest("section") as HTMLElement;
+    expect(await within(card).findByText("This app could not be loaded.")).toBeTruthy();
+
+    server.refuse = null;
+    fireEvent.click(within(card).getByRole("button", { name: "Try again" }));
+    expect(await within(card).findByRole("button", { name: "Refresh now" })).toBeTruthy();
+    expect(shown().succeededAt).toBeNull();
+  });
+});
+
+describe("lists read before a run that went well", () => {
+  const manifest = defineApp({
+    id: "ticker",
+    name: { en: "Ticker", zh: "快讯" },
+    description: { en: "Keeps the latest headlines of a feed.", zh: "保存一个订阅源的最新标题。" },
+    icon: "file-text",
+    color: "teal",
+    widget: { size: "small" },
+    network: ["feeds.example.com"],
+  });
+  const ticker = defineServer(manifest, { headlines: z.object({ title: z.string() }) });
+  const server = ticker.routes({
+    latest: ticker.query(
+      { description: "Lists one page of the headlines kept, newest first.", input: z.object({ page: z.number().int().min(0) }) },
+      (ctx) => ctx.db.headlines.list({ desc: true }),
+    ),
+    refresh: ticker.job({ description: "Keeps the latest headlines of the feed, every hour.", everyMinutes: 60 }, () => {}),
+  });
+  const { useQuery, useJob } = appHooks<typeof server>();
+
+  /** A widget with two pages of headlines, as GitHub Trending's page has ranges: the one shown follows a control. */
+  function Paged() {
+    const [page, setPage] = useState(0);
+    const shownPage = useDeferredValue(page);
+    const headlines = useQuery("latest", { page: shownPage });
+    const { succeededAt } = useJob("refresh");
+    return (
+      <div>
+        <ul aria-label="Headlines">
+          {headlines.map((headline) => (
+            <li key={headline.id}>{headline.title}</li>
+          ))}
+        </ul>
+        <output data-testid="updated">{succeededAt}</output>
+        <output data-testid="page">{shownPage}</output>
+        <button type="button" onClick={() => setPage((value) => 1 - value)}>
+          Other page
+        </button>
+      </div>
+    );
+  }
+  const PAGED: BundledApp = { id: "ticker", manifest: server.manifest, hasPage: false, widget: async () => ({ default: Paged }) };
+
+  /** The headlines of the first page in a part of their own, which the reader folds away and back. */
+  function List() {
+    const headlines = useQuery("latest", { page: 0 });
+    return (
+      <ul aria-label="Headlines">
+        {headlines.map((headline) => (
+          <li key={headline.id}>{headline.title}</li>
+        ))}
+      </ul>
+    );
+  }
+  function Folding() {
+    const [open, setOpen] = useState(true);
+    const { succeededAt } = useJob("refresh");
+    return (
+      <div>
+        {open ? <List /> : null}
+        <output data-testid="updated">{succeededAt}</output>
+        <output data-testid="page">0</output>
+        <button type="button" onClick={() => setOpen((was) => !was)}>
+          {open ? "Fold" : "Unfold"}
+        </button>
+      </div>
+    );
+  }
+  const FOLDING: BundledApp = { id: "ticker", manifest: server.manifest, hasPage: false, widget: async () => ({ default: Folding }) };
+
+  const SUCCEEDED = "2026-03-01T13:05:21.000Z";
+  const LATER = "2026-03-01T14:05:30.000Z";
+  const BEFORE = ["Rain expected", "Market opens"];
+  const AFTER = ["Snow in the hills", "Rain expected"];
+  const settle = (ms = 0) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
+  /** What the widget shows: which page, from when, and the headlines. */
+  const seen = () => ({
+    page: screen.getByTestId("page").textContent,
+    updated: screen.getByTestId("updated").textContent,
+    list: within(screen.getByRole("list", { name: "Headlines" }))
+      .queryAllByRole("listitem")
+      .map((item) => item.textContent),
+  });
+
+  async function readBothPages(fake: FakeServer) {
+    fake.session = sessionWith([summary(manifest, FAMILY)]);
+    fake.job = { ...NOT_RUN, lastStartedAt: SUCCEEDED, lastSucceededAt: SUCCEEDED };
+    vi.useFakeTimers();
+    start(fake, { apps: [PAGED] });
+    for (let round = 0; round < 20 && screen.queryByTestId("updated") === null; round += 1) await settle(10);
+    expect(seen()).toEqual({ page: "0", updated: SUCCEEDED, list: BEFORE });
+    // The reader looks at the other page: both are read, and kept.
+    fireEvent.click(screen.getByRole("button", { name: "Other page" }));
+    await settle(50);
+    expect(seen()).toEqual({ page: "1", updated: SUCCEEDED, list: BEFORE });
+  }
+
+  it("never shows one again beside the time of the run: it is read afresh first", async () => {
+    const fake = new FakeServer();
+    await readBothPages(fake);
+
+    // A run goes well and brings new headlines; the next reading of the status says so.
+    fake.headlines = AFTER;
+    fake.job = { ...fake.job, lastStartedAt: LATER, lastSucceededAt: LATER };
+    await settle(REFRESH_EVERY_MS + 100);
+    expect(seen()).toEqual({ page: "1", updated: LATER, list: AFTER });
+
+    // The reader turns back to the first page while the network is slow: until its list is read
+    // again, the page shown stays, with what the run brought.
+    let open = () => {};
+    fake.hold = { ending: "/q/latest", until: new Promise<void>((resolve) => (open = resolve)) };
+    const reads = fake.count("/q/latest");
+    fireEvent.click(screen.getByRole("button", { name: "Other page" }));
+    await settle(50);
+    expect(fake.count("/q/latest")).toBe(reads + 1);
+    expect(seen()).toEqual({ page: "1", updated: LATER, list: AFTER });
+    open();
+    await settle(50);
+    expect(seen()).toEqual({ page: "0", updated: LATER, list: AFTER });
+  });
+
+  it("and keeps the time it shows with the list it shows while the list on the screen is read again", async () => {
+    const fake = new FakeServer();
+    await readBothPages(fake);
+    fake.headlines = AFTER;
+    fake.job = { ...fake.job, lastStartedAt: LATER, lastSucceededAt: LATER };
+    let open = () => {};
+    fake.hold = { ending: "/q/latest", until: new Promise<void>((resolve) => (open = resolve)) };
+    await settle(REFRESH_EVERY_MS + 100);
+    // The run's status has come, and the list on the screen is being read again: the old time stays with the old list.
+    expect(seen()).toEqual({ page: "1", updated: SUCCEEDED, list: BEFORE });
+    // Turning back to the first page meanwhile shows no list from before the run beside the new time either.
+    fireEvent.click(screen.getByRole("button", { name: "Other page" }));
+    await settle(50);
+    const shown = seen();
+    expect(shown.updated === LATER && shown.list.join() === BEFORE.join()).toBe(false);
+    open();
+    await settle(50);
+    expect(seen()).toEqual({ page: "0", updated: LATER, list: AFTER });
+  });
+
+  it("drops one that left the screen while it was being read again, so that it is read afresh when it comes back", async () => {
+    const fake = new FakeServer();
+    fake.session = sessionWith([summary(manifest, FAMILY)]);
+    fake.job = { ...NOT_RUN, lastStartedAt: SUCCEEDED, lastSucceededAt: SUCCEEDED };
+    vi.useFakeTimers();
+    start(fake, { apps: [FOLDING] });
+    for (let round = 0; round < 20 && screen.queryByTestId("updated") === null; round += 1) await settle(10);
+    expect(seen()).toEqual({ page: "0", updated: SUCCEEDED, list: BEFORE });
+
+    // The run's status comes while the network is slow; the list on the screen is read again.
+    fake.headlines = AFTER;
+    fake.job = { ...fake.job, lastStartedAt: LATER, lastSucceededAt: LATER };
+    let open = () => {};
+    fake.hold = { ending: "/q/latest", until: new Promise<void>((resolve) => (open = resolve)) };
+    await settle(REFRESH_EVERY_MS + 100);
+    expect(seen()).toEqual({ page: "0", updated: SUCCEEDED, list: BEFORE });
+    // The reader folds the list away before that answer comes: it is called off, and the new status shows.
+    fireEvent.click(screen.getByRole("button", { name: "Fold" }));
+    await settle(50);
+    expect(screen.getByTestId("updated").textContent).toBe(LATER);
+    // Unfolded, the list is not the one from before the run: it is read afresh.
+    fireEvent.click(screen.getByRole("button", { name: "Unfold" }));
+    await settle(50);
+    const shown = screen.queryByRole("list", { name: "Headlines" });
+    expect(shown === null ? null : within(shown).queryAllByRole("listitem").map((item) => item.textContent)).not.toEqual(BEFORE);
+    open();
+    await settle(50);
+    expect(seen()).toEqual({ page: "0", updated: LATER, list: AFTER });
   });
 });
 

@@ -581,6 +581,30 @@ describe("deleting an app's data", () => {
   });
 });
 
+describe("the scheduler's wake", () => {
+  it("comes when an app is added to a space or brought back, and not when nothing changed", async () => {
+    let wakes = 0;
+    ({ app } = testApp({ db: world.db, apps: APPS, wakeJobs: () => (wakes += 1) }));
+    await expectDone(await add(SAM, world.samsSpace, "checklist"));
+    expect(wakes).toBe(1);
+    // Already there: nothing new to run.
+    await expectDone(await add(SAM, world.samsSpace, "checklist"));
+    expect(wakes).toBe(1);
+    // Turned down: nothing changed either.
+    await expectError(await add(LIN, world.family, "checklist"), 403, "forbidden");
+    await expectError(await add(SAM, world.family, "journal"), 409, "conflict");
+    expect(wakes).toBe(1);
+    // Removing an app gives the scheduler nothing to do; bringing it back may.
+    await expectDone(await remove(SAM, world.samsSpace, "checklist"));
+    expect(wakes).toBe(1);
+    await expectDone(await add(SAM, world.samsSpace, "checklist"));
+    expect(wakes).toBe(2);
+    // A member who may add apps, in a group.
+    await expectDone(await add(KIM, world.family, "checklist"));
+    expect(wakes).toBe(3);
+  });
+});
+
 describe("addresses that are not routes", () => {
   it.each([
     ["GET", "/apps/checklist"],

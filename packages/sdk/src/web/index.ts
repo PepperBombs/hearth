@@ -2,10 +2,10 @@
  * `@hearth/sdk/web`: what a mini-app's widget and page are built from.
  *
  * Two things: the hooks (`appHooks`), which give a widget its data, its
- * strings and its settings, and Hearth's UI kit: small, generic, themeable
- * components that the shell itself is built from too. The components use
- * only the design tokens (the Tailwind class names the shell's styles
- * define), so those names are part of the SDK's version.
+ * strings, its settings and how its jobs are doing, and Hearth's UI kit:
+ * small, generic, themeable components that the shell itself is built from
+ * too. The components use only the design tokens (the Tailwind class names
+ * the shell's styles define), so those names are part of the SDK's version.
  *
  * Anything exported here is a promise to mini-apps in other repositories:
  * changing a component's props, or removing one, raises the SDK's version.
@@ -21,6 +21,8 @@ export {
   type AppHooks,
   type AppLike,
   type InputArgs,
+  type JobName,
+  type JobState,
   type MutationName,
   type MutationResult,
   type Output,

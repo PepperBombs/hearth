@@ -53,7 +53,7 @@ describe("hearth-apps sync", () => {
 
   it("builds the framework's sample apps in, named relative to the repository's root", () => {
     const run = hearthApps(["sync"], { appsDir: "packages/fixture-apps", cwd: path.join(ROOT, "packages/web") });
-    expect(run).toMatchObject({ status: 0, output: expect.stringContaining("this build holds 2 mini-apps (checklist, feed)") });
+    expect(run).toMatchObject({ status: 0, output: expect.stringContaining("this build holds 3 mini-apps (checklist, feed, headlines)") });
     expect(generated(run, "server")).toContain('{ id: "checklist", manifest: manifest0, hasPage: true, server: server0 },');
     expect(generated(run, "web")).toContain('id: "feed"');
   });
@@ -119,18 +119,44 @@ describe("hearth-apps sync", () => {
 describe("hearth-apps check", () => {
   it("passes the framework's sample apps", { timeout: SLOW }, () => {
     const run = hearthApps(["check"], { appsDir: "packages/fixture-apps" });
-    expect(run.output).toContain("2 mini-apps passed (checklist, feed)");
+    // The checklist's tests and the headlines', which run its job with stand-ins for the feed.
+    expect(run.output).toContain("running the tests of 2 mini-apps (checklist, headlines)");
+    expect(run.output).toContain("3 mini-apps passed (checklist, feed, headlines)");
     expect(run.status).toBe(0);
   });
 
   it("passes the same apps in a repository of their own, checked from inside it", { timeout: SLOW }, () => {
     // As hearth-stones will be: beside this checkout, linked to its SDK,
     // with a one-line tsconfig.json and eslint.config.js.
-    const repo = makeRepo({ fixtures: ["checklist", "feed"] });
+    const repo = makeRepo({ fixtures: ["checklist", "feed", "headlines"] });
     const run = hearthApps(["check"], { cwd: repo });
-    expect(run.output).toContain("2 mini-apps passed (checklist, feed)");
+    expect(run.output).toContain("3 mini-apps passed (checklist, feed, headlines)");
     expect(run.status).toBe(0);
     expect(generated(run, "web")).toContain(`${path.basename(repo)}/checklist/widget.tsx`);
+  });
+
+  it("passes an app whose job fetches from the hosts its manifest names, and fails a job that runs too often and hosts without a job", { timeout: SLOW }, () => {
+    const repo = makeRepo({ files: { ...appFiles("headlines"), ...HEADLINES } });
+    const passed = hearthApps(["check"], { cwd: repo });
+    // Its own test runs the job with a stand-in, as the scheduler would, and reads its status.
+    expect(passed.output).toContain("running the tests of 1 mini-app (headlines)");
+    expect(passed.output).toContain("1 mini-app passed (headlines)");
+    expect(passed.status).toBe(0);
+
+    const server = path.join(repo, "headlines/server.ts");
+    fs.writeFileSync(server, fs.readFileSync(server, "utf8").replace("everyMinutes: 60", "everyMinutes: 14"));
+    const quiet = appFiles("quiet");
+    const manifest = "quiet/manifest.ts";
+    write(repo, { ...quiet, [manifest]: quiet[manifest]!.replace('widget: { size: "small" },', 'widget: { size: "small" },\n  network: ["feeds.example.com"],') });
+    const failed = hearthApps(["check"], { cwd: repo });
+    expect(failed.output).toContain(
+      'App "headlines": server job "refresh": everyMinutes, how often it runs, must be a whole number of minutes from 15 to 10080 (a week); it is 14.',
+    );
+    expect(failed.output).toContain('App "quiet": manifest network: Names hosts to fetch from, but the app has no job, and only a job fetches.');
+    // Its own test cannot start it either.
+    expect(failed.output).toContain("testApp: the server would not start with this app:");
+    expect(failed.output).toContain("failed (manifests and server files, tests)");
+    expect(failed.status).toBe(1);
   });
 
   it("has nothing to say about a folder without apps", () => {
@@ -233,6 +259,90 @@ describe("hearth-apps check", () => {
   });
 });
 
+/**
+ * An app with a job, which `check` takes: a manifest naming the host it
+ * fetches from, a server file with a query and the job, which fetches and
+ * then writes in a work of its own, and a test of its own that runs the job
+ * with a stand-in for the feed, as an app's tests do.
+ */
+const HEADLINES: Record<string, string> = {
+  "headlines/manifest.ts": `import { defineApp } from "@hearth/sdk";
+
+export default defineApp({
+  id: "headlines",
+  name: { en: "Headlines", zh: "头条" },
+  description: { en: "The latest headlines of a news feed.", zh: "新闻源的最新头条。" },
+  icon: "file-text",
+  color: "teal",
+  widget: { size: "small" },
+  network: ["feeds.example.com"],
+});
+`,
+  "headlines/server.ts": `import { defineServer, z } from "@hearth/sdk/server";
+import manifest from "./manifest";
+
+const app = defineServer(manifest, {
+  headlines: z.object({ title: z.string().max(200) }),
+});
+
+const feed = z.object({ items: z.array(z.object({ title: z.string() })) });
+
+export default app.routes({
+  latest: app.query({ description: "Lists the headlines kept, in the feed's order." }, (ctx) => ctx.db.headlines.list()),
+  refresh: app.job(
+    { description: "Fetches the latest headlines from the feed and keeps the first ten in place of the old ones.", everyMinutes: 60 },
+    async (ctx) => {
+      const answer = await ctx.fetch("https://feeds.example.com/headlines.json", { headers: { accept: "application/json" } });
+      if (!answer.ok) throw new Error(\`The feed answered \${answer.status}.\`);
+      const { items } = feed.parse(answer.json());
+      ctx.write((db) => {
+        db.headlines.removeWhere({});
+        for (const item of items.slice(0, 10)) db.headlines.insert({ title: item.title.slice(0, 200) });
+      });
+    },
+  ),
+});
+`,
+  "headlines/headlines.test.ts": `import { testApp, type StandInRequest } from "@hearth/sdk/testing";
+import { describe, expect, it } from "vitest";
+import server from "./server";
+
+describe("headlines", () => {
+  it("keeps the first ten headlines of the feed, and keeps them when the feed fails", async () => {
+    const app = testApp(server);
+    const sam = app.as({ name: "Sam" });
+    const lin = app.as({ name: "Lin", access: "view" });
+    const seen: StandInRequest[] = [];
+    const now = new Date("2026-03-01T08:00:00.000Z");
+
+    const run = await app.runJob("refresh", {
+      now,
+      fetch: (request) => {
+        seen.push(request);
+        return { body: { items: Array.from({ length: 12 }, (_, index) => ({ title: \`Story \${index + 1}\` })) } };
+      },
+    });
+    expect(run).toEqual({ ok: true, error: null });
+    expect(seen).toEqual([
+      { url: "https://feeds.example.com/headlines.json", headers: { "user-agent": "Hearth", accept: "application/json" } },
+    ]);
+    expect(lin.query("latest").map((headline) => headline.title)).toEqual(
+      Array.from({ length: 10 }, (_, index) => \`Story \${index + 1}\`),
+    );
+    expect(lin.job("refresh")).toEqual({ succeededAt: now.toISOString(), failedAt: null, running: false, canRun: false });
+
+    expect(() => lin.requestRun("refresh")).toThrow("forbidden");
+    expect(sam.requestRun("refresh")).toMatchObject({ running: true, canRun: true });
+
+    const failed = await app.runJob("refresh", { fetch: () => ({ status: 503 }) });
+    expect(failed).toEqual({ ok: false, error: "The feed answered 503." });
+    expect(lin.query("latest")).toHaveLength(10);
+    expect(lin.job("refresh")).toMatchObject({ succeededAt: now.toISOString(), failedAt: expect.any(String), running: false });
+  });
+});
+`,
+};
+
 /** A test that fails, in an app's folder. */
 const FAILING_TEST = 'import { expect, it } from "vitest";\n\nit("counts wrongly", () => {\n  expect(1 + 1).toBe(3);\n});\n';
 /** A test that passes and needs no server file. */
@@ -273,6 +383,17 @@ describe("hearth-apps test", () => {
     });
     const run = hearthApps(["test"], { cwd: repo });
     expect(run.output).toMatch(/Test Files\s+1 passed \(1\)/);
+    expect(run.status).toBe(0);
+  });
+
+  it("runs them in a time zone 8 hours from UTC, whatever zone the command runs in", { timeout: SLOW }, () => {
+    const zone =
+      'import { expect, it } from "vitest";\n\nit("is 8 hours from UTC", () => {\n  expect(new Date("2026-11-12T14:05:00Z").getHours()).toBe(22);\n  expect(new Date(0).getTimezoneOffset()).toBe(-480);\n});\n';
+    const repo = makeRepo({ files: { ...appFiles("notes"), "notes/zone.test.ts": zone } });
+    const env: NodeJS.ProcessEnv = { ...process.env, TZ: "UTC" };
+    delete env.HEARTH_APPS_DIR;
+    const run = spawnSync(process.execPath, [BIN, "test"], { cwd: repo, env, encoding: "utf8" });
+    expect(printed(run)).toMatch(/Test Files\s+1 passed \(1\)/);
     expect(run.status).toBe(0);
   });
 

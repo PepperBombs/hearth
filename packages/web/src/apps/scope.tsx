@@ -17,37 +17,69 @@
  *    turned down was often about something another person changed first.
  *    After a `not_found` the session is loaded first, and an app it no
  *    longer lists is not read again.
+ *  - `useJob(name)`: GET .../jobs/:name, the job's status, which suspends
+ *    the component until it is there, as a query does. It is read every 3
+ *    seconds while a run is going on or was asked for, so that the end of
+ *    the run shows soon after it comes. When the last run that went well is
+ *    a later one than before, every query of the app here on the screen is
+ *    read again before the new status is shown, and the answers kept of the
+ *    others are dropped, to be read afresh when shown again: the run brought
+ *    new data, and the app never shows data older than its status says.
+ *    `run()` is POST .../jobs/:name/run, whose answer is the status; it is
+ *    refused and reported as a mutation is.
  *
- * Queries and settings are also read again when the window gets the focus
- * back and every 15 seconds while it is visible. That is how people in a
- * space see each other's changes; nothing is pushed.
+ * Queries, settings and jobs' statuses are also read again when the window
+ * gets the focus back and every 15 seconds while it is visible. That is how
+ * people in a space see each other's changes; nothing is pushed.
  *
  * A `not_found` from any of these calls means the app is no longer there
  * for this person: removed, moved, or access taken away. The session is
  * then loaded again, and the card or page goes with the app.
  *
- * Design: docs/mini-app-contract.md, section A4.
+ * Design: docs/mini-app-contract.md, section A4, and for jobs section C
+ * ("Hooks").
  */
 import type { Manifest } from "@hearth/sdk";
-import { AppScopeContext, type AppInfo, type AppScopeValue, type MutationHandle } from "@hearth/sdk/web/scope";
-import type { AppSettings, AppSummary, Locale, Session } from "@hearth/shared";
+import {
+  AppScopeContext,
+  type AppInfo,
+  type AppScopeValue,
+  type JobState,
+  type MutationHandle,
+} from "@hearth/sdk/web/scope";
+import { jobStateOf, type AppSettings, type AppSummary, type JobStatus, type Locale, type Session } from "@hearth/shared";
 import { useMutation, useQueryClient, useSuspenseQuery, type QueryClient } from "@tanstack/react-query";
-import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
 import { ApiRequestError, failureCode, type FailureCode } from "../session/api";
 import { useI18n } from "../session/preferences";
 import { SESSION_QUERY_KEY, appPath, useSession } from "../session/session";
-import { callAppRoute, fetchAppSettings, type Install } from "./api";
+import { callAppRoute, fetchAppSettings, fetchJobStatus, requestJobRun, type Install } from "./api";
 
 /** How often an app's queries are read again while the window is visible. */
 export const REFRESH_EVERY_MS = 15_000;
+/** How often a job's status is read while a run is going on or was asked for. */
+export const RUNNING_REFRESH_MS = 3_000;
 
-/** The key of everything cached for one app in one space; a query's and the settings' keys start with it. */
+/** The key of everything cached for one app in one space; a query's, the settings' and a job's keys start with it. */
 export function installQueryKey(install: Install): readonly [string, string, string] {
   return ["app", install.spaceId, install.appId];
 }
 
-/** What the scope keeps for the shell itself: which app this is, and where a failed change is reported. */
-type ScopeInternals = Install & { reportFailure: (code: FailureCode | null) => void };
+/** Where the answers of the app's queries in this space are cached: each one's key starts with this. */
+function queriesKey(install: Install): readonly [string, string, string, "q"] {
+  return [...installQueryKey(install), "q"];
+}
+
+/** Where the status of one of the app's jobs in this space is cached. */
+function jobQueryKey(install: Install, job: string): readonly [string, string, string, "job", string] {
+  return [...installQueryKey(install), "job", job];
+}
+
+/**
+ * What the scope keeps for the shell itself: which app this is, whether the
+ * person may change it, and where a failed change is reported.
+ */
+type ScopeInternals = Install & { canEdit: boolean; reportFailure: (code: FailureCode | null) => void };
 
 const InternalsContext = createContext<ScopeInternals | null>(null);
 
@@ -93,13 +125,41 @@ function useAppQuery(name: string, input: unknown): unknown {
   const { spaceId, appId } = useInternals();
   const client = useQueryClient();
   const { data } = useSuspenseQuery({
-    queryKey: [...installQueryKey({ spaceId, appId }), "q", name, input ?? null],
+    queryKey: [...queriesKey({ spaceId, appId }), name, input ?? null],
     queryFn: async ({ signal }) =>
       // A query always answers with something; null stands in so that the cache never holds "nothing yet".
       (await forApp(client, () => callAppRoute({ spaceId, appId, kind: "query", name, input, signal }))) ?? null,
     ...LIVE,
   });
   return data;
+}
+
+/**
+ * After a change the server turned down, or that did not reach it: says so
+ * under the app, and reads the app here again. A change the server turned
+ * down (the item is gone, a conflict) leaves the screen showing what the
+ * server no longer holds, so it is read again, and the caller settles once
+ * it shows what is saved. Without an answer there is nothing new to read.
+ */
+async function afterFailedChange(
+  client: QueryClient,
+  { spaceId, appId }: Install,
+  failure: unknown,
+  reportFailure: ScopeInternals["reportFailure"],
+): Promise<void> {
+  const code = failureCode(failure);
+  reportFailure(code);
+  if (code === "network") return;
+  // A not_found may be about the app itself (removed, access taken away) or only about a row in it. The
+  // session reload it started is waited for, and an app the session no longer lists is not read again.
+  if (code === "not_found") {
+    await client.invalidateQueries({ queryKey: SESSION_QUERY_KEY }, { cancelRefetch: false });
+    const listed = client
+      .getQueryData<Session>(SESSION_QUERY_KEY)
+      ?.apps.some((app) => app.spaceId === spaceId && app.id === appId && app.enabled);
+    if (!listed) return;
+  }
+  await client.invalidateQueries({ queryKey: installQueryKey({ spaceId, appId }) });
 }
 
 /** The hook behind an app's `useMutation`. */
@@ -111,24 +171,7 @@ function useAppMutation(name: string): MutationHandle {
     onMutate: () => reportFailure(null),
     // Waited for, so that `run` resolves when the screen shows the change. A failed re-read does not fail the change.
     onSuccess: () => client.invalidateQueries({ queryKey: installQueryKey({ spaceId, appId }) }),
-    // A change the server turned down (the item is gone, a conflict) leaves the screen showing what the server
-    // no longer holds: read it again, and settle `run` once it shows what is saved. Without an answer there is
-    // nothing new to read.
-    onError: async (failure) => {
-      const code = failureCode(failure);
-      reportFailure(code);
-      if (code === "network") return;
-      // A not_found may be about the app itself (removed, access taken away) or only about a row in it. The
-      // session reload it started is waited for, and an app the session no longer lists is not read again.
-      if (code === "not_found") {
-        await client.invalidateQueries({ queryKey: SESSION_QUERY_KEY }, { cancelRefetch: false });
-        const listed = client
-          .getQueryData<Session>(SESSION_QUERY_KEY)
-          ?.apps.some((app) => app.spaceId === spaceId && app.id === appId && app.enabled);
-        if (!listed) return;
-      }
-      await client.invalidateQueries({ queryKey: installQueryKey({ spaceId, appId }) });
-    },
+    onError: (failure) => afterFailedChange(client, { spaceId, appId }, failure, reportFailure),
     retry: false,
   });
   return useMemo(
@@ -144,6 +187,65 @@ function useAppMutation(name: string): MutationHandle {
     }),
     [mutateAsync, isPending, error],
   );
+}
+
+/**
+ * Takes a job's status that has just come from the server, before it is
+ * cached and shown. When the last run that went well is not the one the
+ * cached status named, that run brought new data: every query of the app
+ * here on the screen is read again first, and waited for, and every answer
+ * kept of one that is not on the screen is dropped, so that the app never
+ * shows data older than its status says. A list shown again later, such as
+ * another range of a page or the page's lists after the dashboard, is read
+ * afresh first. The first status of all has nothing to compare with.
+ */
+async function received(client: QueryClient, install: Install, job: string, status: JobStatus): Promise<JobStatus> {
+  const before = client.getQueryData<JobStatus>(jobQueryKey(install, job));
+  if (before !== undefined && before.lastSucceededAt !== status.lastSucceededAt) {
+    client.removeQueries({ queryKey: queriesKey(install), type: "inactive" });
+    // A failed re-read leaves the queries as they were; they are read again at their next turn.
+    await client.invalidateQueries({ queryKey: queriesKey(install) });
+    // One that left the screen meanwhile may have been called off before its answer came.
+    client.removeQueries({ queryKey: queriesKey(install), type: "inactive" });
+  }
+  return status;
+}
+
+/** The hook behind an app's `useJob`. */
+function useAppJob(name: string): JobState {
+  const { spaceId, appId, canEdit, reportFailure } = useInternals();
+  const client = useQueryClient();
+  const { data: status } = useSuspenseQuery({
+    queryKey: jobQueryKey({ spaceId, appId }, name),
+    queryFn: async ({ signal }) => {
+      const install = { spaceId, appId };
+      return received(client, install, name, await forApp(client, () => fetchJobStatus(install, name, signal)));
+    },
+    ...LIVE,
+    // More often while a run is going on or was asked for, so that its end shows soon after it comes.
+    refetchInterval: (query) => (query.state.data && jobStateOf(query.state.data).running ? RUNNING_REFRESH_MS : REFRESH_EVERY_MS),
+  });
+  const { mutateAsync, isPending } = useMutation({
+    mutationFn: () => forApp(client, () => requestJobRun({ spaceId, appId }, name)),
+    onMutate: () => reportFailure(null),
+    // The answer is the status with the run asked for. A reading of the status sent before the request
+    // would put back the job as it was, so one on its way is called off first.
+    onSuccess: async (answer) => {
+      const install = { spaceId, appId };
+      await client.cancelQueries({ queryKey: jobQueryKey(install, name) });
+      client.setQueryData(jobQueryKey(install, name), await received(client, install, name, answer));
+    },
+    // Refused or not sent: reported and read again as a mutation is.
+    onError: (failure) => afterFailedChange(client, { spaceId, appId }, failure, reportFailure),
+    retry: false,
+  });
+  const run = useCallback(() => {
+    const outcome = mutateAsync().then(() => undefined);
+    // The shell reports a failure itself, so a caller that does not wait for the promise leaves nothing unhandled.
+    outcome.catch(() => {});
+    return outcome;
+  }, [mutateAsync]);
+  return useMemo(() => ({ ...jobStateOf(status), canRun: canEdit, run, pending: isPending }), [status, canEdit, run, isPending]);
 }
 
 const NO_SETTINGS: AppSettings = { space: {}, user: {} };
@@ -215,9 +317,10 @@ export type AppScopeProps = {
 /** Gives the app's own code inside it what `appHooks` hands out. Suspends until the app's settings are known. */
 export function AppScope({ app, manifest, onFailure, children }: AppScopeProps) {
   const { spaceId, id: appId } = app;
+  const canEdit = app.access === "edit";
   const internals = useMemo<ScopeInternals>(
-    () => ({ spaceId, appId, reportFailure: (code) => onFailure?.(code) }),
-    [spaceId, appId, onFailure],
+    () => ({ spaceId, appId, canEdit, reportFailure: (code) => onFailure?.(code) }),
+    [spaceId, appId, canEdit, onFailure],
   );
   return (
     <InternalsContext value={internals}>
@@ -256,6 +359,7 @@ function ScopeValue({ app, manifest, children }: Pick<AppScopeProps, "app" | "ma
       },
       useQuery: useAppQuery,
       useMutation: useAppMutation,
+      useJob: useAppJob,
     }),
     [manifest, locale, userId, userName, space, access, settings, pagePath],
   );

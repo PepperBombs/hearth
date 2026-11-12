@@ -10,6 +10,7 @@ import { apiErrorSchema, appCallResponseSchema, appSettingsSchema, type ApiError
 import { beforeEach, describe, expect, it } from "vitest";
 import { as, testApp } from "../testing";
 import type { BundledApp } from "./registry";
+import { spaceSettingsFor } from "./settings";
 import { APPS, family, grant, install, KIM, LIN, NOA, NOW, SAM } from "./test-world";
 
 const BASE = "http://hearth.example.com";
@@ -663,6 +664,33 @@ describe("ctx.settings", () => {
     expect(await inHandler(SAM, world.family, "spoil")).toEqual(spoilt);
     expect(await inHandler(SAM, world.family, "spoil")).toEqual(spoilt);
     expect(await inHandler(SAM, world.family)).toEqual({ ...all, courses: ["Soup"], diets: ["halal"] });
+  });
+});
+
+describe("a job's settings (spaceSettingsFor)", () => {
+  const forJob = (spaceId = world.family) => spaceSettingsFor(world.db, { spaceId, appId: "planner" }, plannerManifest);
+
+  it("are the settings of the space alone, by name, with defaults where nothing was saved", async () => {
+    expect(forJob()).toEqual(DEFAULTS.space);
+    await settingsIn(await save(SAM, world.family, { space: { title: "Ours", servings: 6 }, user: { nickname: "Sam", compact: true } }));
+    await settingsIn(await save(LIN, world.family, { user: { nickname: "Lin" } }));
+    // Nobody's own: a job runs for no one, so the settings of each person are not there at all.
+    expect(forJob()).toEqual({ ...DEFAULTS.space, title: "Ours", servings: 6 });
+  });
+
+  it("are read against the manifest as the routes read them", () => {
+    leave(world.family, null, { title: "x".repeat(21), servings: 6, nickname: "Everyone", theme: "dark" });
+    leave(world.family, world.sam.id, { title: "Mine", firstDay: "sunday" });
+    expect(forJob()).toEqual({ ...DEFAULTS.space, servings: 6 });
+  });
+
+  it("are this space's only, and new lists each time", async () => {
+    install(world.db, world.samsSpace, "planner", world.sam.id);
+    await settingsIn(await save(SAM, world.family, { space: { courses: ["Soup"] } }));
+    expect(forJob(world.samsSpace)).toEqual(DEFAULTS.space);
+    const first = forJob();
+    (first.courses as string[]).push("Spoilt");
+    expect(forJob().courses).toEqual(["Soup"]);
   });
 });
 

@@ -73,6 +73,10 @@ describe("@hearth/sdk/eslint, the configuration of a mini-apps repository", () =
     ] as const) {
       expect(messages).toContainEqual(expect.stringMatching(new RegExp(`^no-restricted-globals ${line}: Unexpected use of '${name}'\\.`)));
     }
+    // The way an app does fetch, said where it tries the global.
+    expect(messages).toContain(
+      "no-restricted-globals 2: Unexpected use of 'fetch'. A mini-app fetches in a job, with ctx.fetch, from the hosts its manifest lists.",
+    );
     // The comment is reported as having no effect, instead of being obeyed.
     expect(messages).toContainEqual(expect.stringMatching(/^null 1: .*has no effect because you have 'noInlineConfig'/));
   });

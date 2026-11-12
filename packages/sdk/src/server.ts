@@ -1,8 +1,8 @@
 /**
  * @hearth/sdk/server: what a mini-app's `server.ts` is written with.
  *
- * An app's server file says which collections of rows the app keeps and
- * which queries and mutations it answers:
+ * An app's server file says which collections of rows the app keeps, which
+ * queries and mutations it answers, and which jobs it runs by itself:
  *
  * ```ts
  * import { defineServer, z } from "@hearth/sdk/server";
@@ -21,17 +21,19 @@
  * });
  * ```
  *
- * This file holds types, one error class and functions that only package up
- * what they are given. The framework does the work (packages/server/src/apps):
- * it decides who may call a route, opens the transaction and hands the
- * handler a `ctx` whose `db` reaches the rows of this app in this space and
- * no others. A mini-app never sees a database handle or a space ID.
+ * This file holds types, two error classes and functions that only package
+ * up what they are given. The framework does the work
+ * (packages/server/src/apps): it decides who may call a route, opens the
+ * transaction and hands the handler a `ctx` whose `db` reaches the rows of
+ * this app in this space and no others. A mini-app never sees a database
+ * handle or a space ID.
  *
  * The design is docs/mini-app-contract.md, section A3, with the owner's
- * decision 7 (every route says what it does).
+ * decision 7 (every route says what it does), and for jobs and `ctx.fetch`
+ * section C.
  */
 import { z } from "zod";
-import type { Locale, Manifest, SettingsOf, SpaceKind } from "./index";
+import type { Locale, Manifest, SettingsOf, SpaceKind, SpaceSettingsOf } from "./index";
 
 /** The one zod that mini-apps use, so that an app declares no dependency of its own. */
 export { z };
@@ -71,7 +73,7 @@ export type ListOptions<T> = {
    * kind and an undefined value are errors: leave a key out to match all.
    */
   where?: Partial<T>;
-  /** Only rows the caller created. */
+  /** Only rows the caller created. A job is no one: in a job's `ctx.read` and `ctx.write` it throws. */
   mine?: boolean;
   /** A field of the collection, or when the row was created or last changed. Default: `createdAt`. */
   orderBy?: Extract<keyof T, string> | "createdAt" | "updatedAt";
@@ -182,6 +184,125 @@ export type RouteAbout = { description: string; input?: undefined };
 /** The same for a route that takes input: `input` checks, and may reshape, what the caller sent. */
 export type RouteAboutWithInput<I extends z.ZodType> = { description: string; input: I };
 
+/* -------------------------------------------------------------------------
+ * Jobs: what an app does by itself, every so often, once for each space it
+ * is in, and the one way out to the network a job has, `ctx.fetch`.
+ * ---------------------------------------------------------------------- */
+
+/**
+ * What every job says about itself, as a route does: one English sentence
+ * saying what it does ("Fetches the latest headlines and keeps the newest
+ * twenty."), for a reader who has not seen the app, and how often it runs.
+ */
+export type JobAbout = {
+  /** One English sentence saying what the job does, for a reader who has not seen the app. */
+  description: string;
+  /** How often it runs, in minutes: a whole number from 15 to 10080 (a week). */
+  everyMinutes: number;
+};
+
+/** A job as the framework reads it: made with `app.job`, listed in `app.routes`. */
+export type Job = {
+  readonly kind: "job";
+  readonly description: string;
+  readonly everyMinutes: number;
+  readonly run: (ctx: never) => unknown;
+};
+
+/** What a job may send with a request besides the address. */
+export type FetchInit = {
+  /**
+   * Extra headers: accept, accept-language, if-modified-since, if-none-match,
+   * and names starting with "x-" but for x-forwarded-* and x-real-ip, each
+   * once, with values of visible ASCII, spaces and tabs. Every request also
+   * says `User-Agent: Hearth`. Any other header is refused.
+   */
+  readonly headers?: Readonly<Record<string, string>>;
+};
+
+/** An answer, read whole. A status that is not 2xx is an answer like any other, not an error. */
+export type FetchResponse = {
+  /** Where the answer came from, after redirects on the same host. */
+  readonly url: string;
+  readonly status: number;
+  /** The status is 200 to 299. */
+  readonly ok: boolean;
+  /** Header names in lower case; set-cookie is left out. */
+  readonly headers: Readonly<Record<string, string>>;
+  /** The body, as UTF-8 text. */
+  readonly text: string;
+  /** The body parsed as JSON; throws when it is not JSON. */
+  json(): unknown;
+};
+
+/** Why `ctx.fetch` gave no answer. */
+export const FETCH_ERROR_CODES = ["refused", "timeout", "too_large", "network", "stopped"] as const;
+export type FetchErrorCode = (typeof FETCH_ERROR_CODES)[number];
+
+/**
+ * What `ctx.fetch` rejects with when it has no answer to give:
+ * - `refused`: the request breaks a rule and was not sent (not https, not a
+ *   host the manifest lists, a header a job may not send), or a redirect
+ *   leads off https or to another host;
+ * - `timeout`: the whole answer did not arrive in time;
+ * - `too_large`: the body grew past the limit, and the download stopped;
+ * - `network`: no connection could be made;
+ * - `stopped`: the run is over, because its time ran out or the server is
+ *   stopping.
+ * Unless the job catches it, the run fails with its message.
+ */
+export class FetchError extends Error {
+  readonly code: FetchErrorCode;
+  constructor(code: FetchErrorCode, message: string) {
+    super(message);
+    this.name = "FetchError";
+    this.code = code;
+  }
+}
+
+/**
+ * What `work` may give back: anything but a promise. `work` runs inside one
+ * transaction, which cannot wait for anything; a promise in its place
+ * becomes a type error that says so.
+ */
+type NotAPromise<T> = T extends PromiseLike<unknown> ? "work must not be async: it runs inside one transaction" : T;
+
+/**
+ * What a job's function gets. A job runs for the app in one space, for no
+ * one in it: there is no person, no access level and no language. What it
+ * stores carries the ID of whoever added the app to the space.
+ */
+export type JobCtx<M, C extends Collections> = {
+  /** The space the app is in. A personal space has an empty name. There is no ID. */
+  readonly space: { readonly kind: SpaceKind; readonly name: string };
+  /** The space's settings, defaults filled in, as they were when the run started. Nobody's own. */
+  readonly settings: SpaceSettingsOf<M>;
+  /** When the run started. */
+  readonly now: Date;
+  /**
+   * GET from a host the manifest lists in `network`, over https on the
+   * default port. Redirects are followed up to 3 times on the same host; an
+   * answer takes at most 20 seconds and 2 MiB; requests to one host start
+   * 6.5 seconds apart across the server. Rejects with a `FetchError` when
+   * there is no answer.
+   */
+  fetch(url: string, init?: FetchInit): Promise<FetchResponse>;
+  /**
+   * Reads the app's rows in this space in one transaction. `work` must not
+   * be async, and cannot call `read` or `write` itself. Throws, and reads
+   * nothing, once the run is over or when the app was removed from the
+   * space, moved to another or had its data deleted since the run started;
+   * the run ends then.
+   */
+  read<T>(work: (db: { readonly [K in keyof C]: ReadCollection<z.output<C[K]>> }) => NotAPromise<T>): T;
+  /**
+   * Changes them in one immediate transaction, all of it or none, in the
+   * name of whoever added the app to the space. The same rules as `read`;
+   * work that hands back a promise is undone, and the run fails.
+   */
+  write<T>(work: (db: { readonly [K in keyof C]: Collection<z.output<C[K]>> }) => NotAPromise<T>): T;
+};
+
 /** What an app's `server.ts` default-exports. Only the framework looks inside. */
 export type AppServer<M, C, R> = {
   readonly manifest: M;
@@ -189,7 +310,7 @@ export type AppServer<M, C, R> = {
   readonly routes: R;
 };
 
-/** What `defineServer` returns. The names `job`, `search`, `files`, `exporter` and `upgrades` are reserved. */
+/** What `defineServer` returns. The names `search`, `files`, `exporter` and `upgrades` are reserved. */
 export interface ServerBuilder<M, C extends Collections> {
   /**
    * A route that reads. Anyone who can see the app may call it. The handler
@@ -216,10 +337,23 @@ export interface ServerBuilder<M, C extends Collections> {
   ): Mutation<z.input<I>, O>;
 
   /**
-   * The app's routes by name. A name is letters, digits and underscores,
-   * starting with a letter. The result is the file's default export.
+   * Something the app does by itself, every `everyMinutes`, once for each
+   * space it is in, for no one in it. Its function may be `async`, because
+   * it fetches (`ctx.fetch`, from the hosts the manifest lists in
+   * `network`). It reads and writes the app's rows only through `ctx.read`
+   * and `ctx.write`, whose `work` is not async, so that no transaction waits
+   * on the network. A run went well when the function returned or its
+   * promise resolved; whatever it throws or rejects with makes it fail.
+   * A job is never called like a query or a mutation.
    */
-  routes<R extends Record<string, Query<any, any> | Mutation<any, any>>>(routes: R): AppServer<M, C, R>; // eslint-disable-line @typescript-eslint/no-explicit-any -- any input, any output
+  job(about: JobAbout, run: (ctx: JobCtx<M, C>) => Promise<void> | void): Job;
+
+  /**
+   * The app's queries, mutations and jobs by name: one set of names for the
+   * three. A name is letters, digits and underscores, starting with a
+   * letter. The result is the file's default export.
+   */
+  routes<R extends Record<string, Query<any, any> | Mutation<any, any> | Job>>(routes: R): AppServer<M, C, R>; // eslint-disable-line @typescript-eslint/no-explicit-any -- any input, any output
 }
 
 /**
@@ -250,6 +384,15 @@ export function defineServer<M extends Manifest, const C extends Collections>(
   return {
     query: route("query"),
     mutation: route("mutation"),
+    // An input given past the types is kept, so that the start-up check
+    // refuses it rather than the job losing it without a word.
+    job: (about: JobAbout & { input?: unknown }, run: Job["run"]): Job => ({
+      kind: "job",
+      description: about.description,
+      everyMinutes: about.everyMinutes,
+      ...(about.input === undefined ? {} : { input: about.input }),
+      run,
+    }),
     routes: (routes) => ({ manifest, collections, routes }),
   } as ServerBuilder<M, C>;
 }

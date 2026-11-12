@@ -5,8 +5,9 @@
  * where the author's editor and build run. The framework parses every manifest
  * with this schema as well, so a bad one is caught whoever wrote it and
  * however it was built. It also checks what the types cannot say: that no
- * text is empty, that a default fits its own setting, and that both languages
- * of a string use the same {placeholders}.
+ * text is empty, that a default fits its own setting, that both languages
+ * of a string use the same {placeholders}, and that the hosts in `network`
+ * are plain DNS names of the internet.
  *
  * `settingValueProblems` is the check of one setting's value, which the
  * schema applies to defaults and the server to what people save.
@@ -175,6 +176,66 @@ function defaultProblems(setting: Setting): ValueProblem[] {
   return problems;
 }
 
+/** One label of a host name: lower-case letters, digits and hyphens, a hyphen at neither end, 1 to 63 characters. */
+const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** The last label: letters only, so that an IP address such as 192.0.2.1 is not taken for a name. */
+const TOP_LABEL = /^[a-z]+$/;
+
+/** The longest host name DNS allows, in characters. */
+const MAX_HOST_LENGTH = 253;
+
+/** How many hosts a manifest may name. */
+const MAX_HOSTS = 10;
+
+/**
+ * Names that lead into the network the server stands in, never out to the
+ * internet: these and every name that ends in one of them.
+ */
+const LOCAL_NAMES = ["localhost", "local", "internal", "home.arpa"];
+
+/** Whether `host` is a lower-case DNS name of two or more labels whose last label is letters only. */
+function isHostName(host: string): boolean {
+  const labels = host.split(".");
+  return (
+    host.length <= MAX_HOST_LENGTH &&
+    labels.length >= 2 &&
+    labels.every((label) => HOST_LABEL.test(label)) &&
+    TOP_LABEL.test(labels.at(-1) ?? "")
+  );
+}
+
+/** What is wrong with one of a manifest's hosts; null when nothing is. */
+function hostProblem(host: string): string | null {
+  // "localhost" has one label, so it is named for what it is rather than for its shape.
+  if (host !== "localhost" && !isHostName(host)) {
+    return `"${host}" is not a host name. Write a lower-case DNS name such as api.github.com: no scheme, port, path, wildcard or IP address.`;
+  }
+  if (LOCAL_NAMES.some((name) => host === name || host.endsWith(`.${name}`))) {
+    return `"${host}" is a name of the local network. A job fetches from hosts on the internet only.`;
+  }
+  return null;
+}
+
+/**
+ * The hosts the app's jobs may fetch from: 1 to 10 lower-case DNS names,
+ * none twice and none of the local network. A job's requests are later held
+ * to exactly these names, so there is nothing else to write: no scheme,
+ * port, path or wildcard.
+ *
+ * The number is counted here rather than with `.min()` and `.max()`, which
+ * would also measure a text given instead of a list and add a second,
+ * misleading message to the one that says a list is wanted.
+ */
+const networkSchema = z.array(z.string()).superRefine((hosts, ctx) => {
+  if (hosts.length === 0) ctx.addIssue({ code: "custom", message: "List at least one host, or leave network out." });
+  if (hosts.length > MAX_HOSTS) ctx.addIssue({ code: "custom", message: `List at most ${MAX_HOSTS} hosts.` });
+  hosts.forEach((host, index) => {
+    const problem = hostProblem(host) ?? (hosts.indexOf(host) !== index ? `"${host}" is listed twice.` : null);
+    if (problem) ctx.addIssue({ code: "custom", path: [index], message: problem });
+  });
+});
+
 const dictionary = z.record(z.string().min(1, "A message's key must not be empty."), text);
 
 const messagesSchema = z.strictObject({ en: dictionary, zh: dictionary }).superRefine((messages, ctx) => {
@@ -218,6 +279,7 @@ export const manifestSchema: z.ZodType<Manifest> = z.strictObject({
   color: z.enum(APP_COLORS),
   spaces: z.array(z.enum(SPACE_KINDS)).min(1, "List at least one kind of space, or leave spaces out.").optional(),
   widget: z.strictObject({ size: z.enum(WIDGET_SIZES) }),
+  network: networkSchema.optional(),
   settings: z.record(settingName, settingSchema).optional(),
   messages: messagesSchema.optional(),
 });

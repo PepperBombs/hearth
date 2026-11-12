@@ -7,7 +7,18 @@
 import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 import { defineApp } from "./index";
 import { defineServer, z, type Row } from "./server";
-import { APP_CALL_ERROR_CODES, AppCallError, testApp, type TestApp, type TestCaller } from "./testing";
+import {
+  APP_CALL_ERROR_CODES,
+  AppCallError,
+  testApp,
+  type JobRun,
+  type RunJobOptions,
+  type StandInAnswer,
+  type StandInFetch,
+  type StandInRequest,
+  type TestApp,
+  type TestCaller,
+} from "./testing";
 import { provideTestApp, providedTestApp, type TestAppHandle } from "./testing-host";
 
 const manifest = defineApp({
@@ -46,6 +57,9 @@ const server = app.routes({
   clear: app.mutation({ description: "Deletes every item." }, (ctx) => {
     ctx.db.items.removeWhere({});
   }),
+  tidy: app.job({ description: "Deletes every ticked item, once an hour.", everyMinutes: 60 }, (ctx) => {
+    ctx.write((db) => db.items.removeWhere({ done: true }));
+  }),
 });
 
 type Server = typeof server;
@@ -73,6 +87,10 @@ describe("testApp's types", () => {
       caller.query("find");
       // @ts-expect-error the route takes no input
       caller.query("list", {});
+      // @ts-expect-error a job is not called like a query
+      caller.query("tidy");
+      // @ts-expect-error nor like a mutation
+      caller.mutation("tidy");
     };
     expectTypeOf(calls).toBeFunction();
   });
@@ -93,6 +111,66 @@ describe("testApp's types", () => {
     // @ts-expect-error a manifest has no routes to test
     expectTypeOf(testApp<typeof manifest>).toBeFunction();
   });
+
+  it("runs a job by its name, with stand-ins for what it fetches, and says how the run went", () => {
+    const calls = async (world: TestApp<Server>) => {
+      const fetch: StandInFetch = (request) => {
+        expectTypeOf(request).toEqualTypeOf<StandInRequest>();
+        expectTypeOf(request.url).toEqualTypeOf<string>();
+        expectTypeOf(request.headers).toEqualTypeOf<Readonly<Record<string, string>>>();
+        return { status: 200, headers: { etag: '"1"' }, body: { items: [] } };
+      };
+      const run = await world.runJob("tidy", { fetch, now: new Date() });
+      expectTypeOf(run).toEqualTypeOf<JobRun>();
+      if (run.ok) expectTypeOf(run.error).toEqualTypeOf<null>();
+      else expectTypeOf(run.error).toEqualTypeOf<string>();
+      expectTypeOf(world.runJob("tidy")).toEqualTypeOf<Promise<JobRun>>();
+      // A stand-in may take its time, and may answer with nothing but a status.
+      await world.runJob("tidy", { fetch: async () => ({ status: 503 }) });
+
+      // @ts-expect-error a query is no job
+      await world.runJob("list");
+      // @ts-expect-error nor is a mutation
+      await world.runJob("clear");
+      // @ts-expect-error no job of that name
+      await world.runJob("nope");
+      // @ts-expect-error the time is a Date
+      await world.runJob("tidy", { now: "2026-03-01T08:00:00.000Z" });
+      // @ts-expect-error a stand-in answers with an answer
+      await world.runJob("tidy", { fetch: () => "OK" });
+    };
+    expectTypeOf(calls).toBeFunction();
+    expectTypeOf<RunJobOptions>().toEqualTypeOf<{ fetch?: StandInFetch; now?: Date }>();
+    expectTypeOf<StandInAnswer>().toEqualTypeOf<{ status?: number; headers?: Record<string, string>; body?: unknown }>();
+    expectTypeOf<ReturnType<StandInFetch>>().toEqualTypeOf<StandInAnswer | Promise<StandInAnswer>>();
+  });
+
+  it("shows a person how a job is doing, as useJob does, and asks for a run as they would", () => {
+    type Shown = { succeededAt: string | null; failedAt: string | null; running: boolean; canRun: boolean };
+    const calls = (caller: TestCaller<Server>) => {
+      expectTypeOf(caller.job("tidy")).toEqualTypeOf<Shown>();
+      expectTypeOf(caller.requestRun("tidy")).toEqualTypeOf<Shown>();
+
+      // @ts-expect-error a query has no status
+      caller.job("list");
+      // @ts-expect-error nor can it be asked to run
+      caller.requestRun("add");
+      // @ts-expect-error no job of that name
+      caller.job("nope");
+    };
+    expectTypeOf(calls).toBeFunction();
+
+    // An app without jobs has none to name.
+    const quiet = app.routes({ list: app.query({ description: "Lists every item." }, (ctx) => ctx.db.items.list()) });
+    expect(Object.keys(quiet.routes)).toEqual(["list"]);
+    const none = (world: TestApp<typeof quiet>) => {
+      // @ts-expect-error no job at all
+      void world.runJob("list");
+      // @ts-expect-error nor a status
+      world.as().job("list");
+    };
+    expectTypeOf(none).toBeFunction();
+  });
 });
 
 describe("testApp", () => {
@@ -101,8 +179,9 @@ describe("testApp", () => {
     expect(() => testApp(server)).toThrow('Run them with "hearth-apps test"');
   });
 
-  it("hands the server and the options to what the framework installed, and gives back its answer", () => {
+  it("hands the server and the options to what the framework installed, and gives back its answer", async () => {
     const calls: unknown[][] = [];
+    const idle = { succeededAt: null, failedAt: null, running: false, canRun: true };
     const handle: TestAppHandle = {
       space: { kind: "group", name: "Family" },
       as: () => ({
@@ -111,7 +190,10 @@ describe("testApp", () => {
         mutation: () => undefined,
         settings: () => ({}),
         saveSettings: (values) => values,
+        job: (name) => ({ ...idle, failedAt: name }),
+        requestRun: (name) => ({ ...idle, running: true, failedAt: name }),
       }),
+      runJob: (name, options) => Promise.resolve({ ok: false, error: `${name} at ${options?.now?.toISOString() ?? "no time"}` }),
     };
     provideTestApp((...args) => {
       calls.push(args);
@@ -122,6 +204,11 @@ describe("testApp", () => {
     expect(calls).toEqual([[server, { space: "personal" }]]);
     expect(world).toBe(handle);
     expect(world.as().query("find", { id: "row-1" })).toEqual({ name: "find", input: { id: "row-1" } });
+    expect(world.as().job("tidy")).toEqual({ ...idle, failedAt: "tidy" });
+    expect(world.as().requestRun("tidy")).toEqual({ ...idle, running: true, failedAt: "tidy" });
+    const now = new Date(Date.UTC(2026, 2, 1, 8));
+    expect(await world.runJob("tidy", { now })).toEqual({ ok: false, error: "tidy at 2026-03-01T08:00:00.000Z" });
+    expect(await world.runJob("tidy")).toEqual({ ok: false, error: "tidy at no time" });
 
     testApp(server);
     expect(calls[1]).toEqual([server, {}]);

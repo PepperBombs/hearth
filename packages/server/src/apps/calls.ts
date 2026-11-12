@@ -47,7 +47,8 @@ export class AppFaultError extends Error {
 
 const STATUS = { invalid_request: 400, not_found: 404, conflict: 409 } as const;
 
-const isThenable = (value: unknown): value is PromiseLike<unknown> =>
+/** Whether a handler, or a job's work, handed back a promise or something that acts like one. */
+export const isThenable = (value: unknown): value is PromiseLike<unknown> =>
   (typeof value === "object" || typeof value === "function") &&
   value !== null &&
   typeof (value as { then?: unknown }).then === "function";
@@ -81,7 +82,7 @@ function readInput(route: RouteDefinition, call: AppCall): unknown {
  *
  * Throws a Refusal:
  * - 404 when the app is not there for this person (see `resolveInstall`),
- *   or has no route of this kind and name;
+ *   or has no route of this kind and name (a job's name included);
  * - 403 for a mutation by someone who may only view;
  * - 400 when the input does not fit the route's schema;
  * - 400, 404 or 409 when the handler throws an `AppError`.
@@ -99,7 +100,8 @@ export function callApp(db: Db, registry: Registry, call: AppCall): string {
     const route =
       app?.server && Object.hasOwn(app.server.routes, name) ? app.server.routes[name] : undefined;
     // A query asked for as a mutation is not there either: it would run with a store that can write.
-    if (!app?.server || !route || route.kind !== kind) throw notFound();
+    // Nor is a job, at either address: it runs by itself, for no one, and never for a caller.
+    if (!app?.server || !route || route.kind === "job" || route.kind !== kind) throw notFound();
     if (kind === "mutation" && access !== "edit") {
       throw new Refusal(403, "forbidden", "Changing anything in this app needs edit access to it.");
     }
@@ -112,7 +114,7 @@ export function callApp(db: Db, registry: Registry, call: AppCall): string {
     };
     const now = new Date();
     // The scope comes from the address and the sign-in, both checked above.
-    const scope = { spaceId, appId, userId: user.id, now };
+    const scope = { spaceId, appId, userId: user.id, job: null, now };
     const store =
       kind === "query"
         ? readOnlyStore(db, scope, app.server.collections)

@@ -3,15 +3,20 @@
  * checked by `pnpm typecheck`, not by the test runner.
  */
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { defineApp, type MessageKey, type SettingsOf, type Translate } from "./index";
+import { defineApp, type MessageKey, type SettingsOf, type SpaceSettingsOf, type Translate } from "./index";
 import {
   APP_ERROR_CODES,
   AppError,
+  FETCH_ERROR_CODES,
+  FetchError,
   ROW_FIELDS,
   defineServer,
   z,
   type Collection,
+  type FetchResponse,
   type InputOf,
+  type Job,
+  type JobCtx,
   type Json,
   type MutationCtx,
   type OutputOf,
@@ -66,14 +71,19 @@ const forget = app.mutation(
     ctx.db.items.remove(id);
   },
 );
-const server = app.routes({ list, find, add, clearTicked, forget });
+const tidyRun = (ctx: JobCtx<typeof manifest, { items: typeof items }>) => {
+  ctx.write((db) => db.items.removeWhere({ done: true }));
+};
+const tidy = app.job({ description: "Deletes every ticked item, once an hour.", everyMinutes: 60 }, tidyRun);
+const server = app.routes({ list, find, add, clearTicked, forget, tidy });
 
 describe("defineServer", () => {
   it("hands the framework the manifest, the collections and the routes, unchanged", () => {
     expect(server.manifest).toBe(manifest);
     expect(server.collections).toEqual({ items });
     expect(server.collections.items).toBe(items);
-    expect(Object.keys(server.routes)).toEqual(["list", "find", "add", "clearTicked", "forget"]);
+    expect(Object.keys(server.routes)).toEqual(["list", "find", "add", "clearTicked", "forget", "tidy"]);
+    expect(server.routes.tidy).toBe(tidy);
   });
 
   it("packages a query with what it says about itself and its handler", () => {
@@ -100,6 +110,43 @@ describe("defineServer", () => {
     const probe = app.query({ description: "Counts how often it ran." }, () => ++ran);
     app.routes({ probe });
     expect(ran).toBe(0);
+  });
+
+  it("packages a job with what it says about itself and its function, which it does not run", () => {
+    expect(tidy).toEqual({ kind: "job", description: "Deletes every ticked item, once an hour.", everyMinutes: 60, run: tidyRun });
+    expect("input" in tidy).toBe(false);
+    let ran = 0;
+    const probe = app.job({ description: "Counts how often it ran.", everyMinutes: 15 }, async () => {
+      ran += 1;
+    });
+    app.routes({ probe, list });
+    expect(probe.run).toBeTypeOf("function");
+    expect(ran).toBe(0);
+  });
+
+  it("keeps an input given to a job past the types, so that the start-up check can refuse it", () => {
+    const input = z.object({ id: z.string() });
+    const sloppy = (app.job as (about: object, run: () => void) => Job)(
+      { description: "Takes what it cannot be given.", everyMinutes: 60, input },
+      () => {},
+    );
+    expect(sloppy).toMatchObject({ kind: "job", input });
+  });
+});
+
+describe("FetchError", () => {
+  it("carries one of five codes and a message", () => {
+    const error = new FetchError("refused", "feeds.example.com is not one of the hosts the manifest lists.");
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("FetchError");
+    expect(error.code).toBe("refused");
+    expect(error.message).toBe("feeds.example.com is not one of the hosts the manifest lists.");
+    expect(FETCH_ERROR_CODES).toEqual(["refused", "timeout", "too_large", "network", "stopped"]);
+  });
+
+  it("cannot be given another code", () => {
+    // @ts-expect-error not a way for a fetch to fail
+    expect(new FetchError("forbidden", "No.").code).toBe("forbidden");
   });
 });
 
@@ -242,9 +289,122 @@ describe("types of a route", () => {
     expectTypeOf<undefined>().not.toExtend<Json>();
   });
 
-  it("only takes routes made by query and mutation", () => {
+  it("only takes routes made by query, mutation and job", () => {
     // @ts-expect-error a bare function is not a route
     app.routes({ list: () => [] });
+    // @ts-expect-error nor is what a job says about itself
+    app.routes({ tidy: { description: "Deletes every ticked item.", everyMinutes: 60 } });
+  });
+});
+
+describe("types of a job", () => {
+  it("requires a description and how often it runs, and takes no input", () => {
+    // @ts-expect-error every job says what it does
+    app.job({ everyMinutes: 60 }, () => {});
+    // @ts-expect-error and how often it runs
+    app.job({ description: "Deletes every ticked item." }, () => {});
+    // @ts-expect-error in minutes
+    app.job({ description: "Deletes every ticked item.", everyMinutes: "hourly" }, () => {});
+    // @ts-expect-error a job takes no input: it runs by itself, for no one
+    app.job({ description: "Deletes every ticked item.", everyMinutes: 60, input: z.object({ id: z.string() }) }, () => {});
+  });
+
+  it("may wait, because it fetches, and answers nobody", () => {
+    app.job({ description: "Waits for an answer.", everyMinutes: 60 }, async (ctx) => {
+      await ctx.fetch("https://feeds.example.com/headlines.json");
+    });
+    app.job({ description: "Waits for nothing.", everyMinutes: 60 }, () => {});
+    // @ts-expect-error a job's result goes nowhere
+    app.job({ description: "Answers.", everyMinutes: 60 }, async () => 5);
+  });
+
+  it("is named apart from the queries and mutations on the finished server", () => {
+    type Routes = (typeof server)["routes"];
+    type JobName = { [K in keyof Routes]: Routes[K] extends { kind: "job" } ? K : never }[keyof Routes];
+    type QueryOrMutation = { [K in keyof Routes]: Routes[K] extends { kind: "query" | "mutation" } ? K : never }[keyof Routes];
+    expectTypeOf<JobName>().toEqualTypeOf<"tidy">();
+    expectTypeOf<QueryOrMutation>().toEqualTypeOf<"list" | "find" | "add" | "clearTicked" | "forget">();
+    expectTypeOf<Routes["tidy"]>().toEqualTypeOf<Job>();
+  });
+});
+
+describe("types of a job's context", () => {
+  type Ctx = JobCtx<typeof manifest, { items: typeof items }>;
+
+  it("gives the space's settings and no one's own, and no person, access, language or open store", () => {
+    expectTypeOf<Ctx["settings"]>().toEqualTypeOf<{ aisles: string[] }>();
+    expectTypeOf<Ctx["settings"]>().toEqualTypeOf<SpaceSettingsOf<typeof server>>();
+    expectTypeOf<Ctx["space"]>().toEqualTypeOf<{ readonly kind: "personal" | "group"; readonly name: string }>();
+    expectTypeOf<Ctx["now"]>().toEqualTypeOf<Date>();
+    expectTypeOf<Ctx>().not.toHaveProperty("user");
+    expectTypeOf<Ctx>().not.toHaveProperty("access");
+    expectTypeOf<Ctx>().not.toHaveProperty("locale");
+    expectTypeOf<Ctx>().not.toHaveProperty("db");
+    app.job({ description: "Looks at its context.", everyMinutes: 60 }, (ctx) => {
+      // @ts-expect-error a person's own setting is nobody's in a job
+      void ctx.settings.hideDone;
+      // @ts-expect-error there is no space ID to be had
+      void ctx.space.id;
+      // @ts-expect-error the context cannot be changed
+      ctx.now = new Date();
+    });
+  });
+
+  it("reads with no way to write, and writes in a work of its own", () => {
+    app.job({ description: "Reads, then writes.", everyMinutes: 60 }, (ctx) => {
+      const names = ctx.read((db) => {
+        expectTypeOf(db.items).toEqualTypeOf<ReadCollection<Item>>();
+        expectTypeOf(db.items).not.toHaveProperty("insert");
+        expectTypeOf(db.items).not.toHaveProperty("update");
+        expectTypeOf(db.items).not.toHaveProperty("remove");
+        expectTypeOf(db.items).not.toHaveProperty("removeWhere");
+        // @ts-expect-error read gives no way to write
+        db.items.insert({ name: "Milk", aisle: "", done: false });
+        // @ts-expect-error nor a collection the app does not have
+        db.lists.list();
+        return db.items.list().map((item) => item.name);
+      });
+      expectTypeOf(names).toEqualTypeOf<string[]>();
+      const removed = ctx.write((db) => {
+        expectTypeOf(db.items).toEqualTypeOf<Collection<Item>>();
+        return db.items.removeWhere({ done: true });
+      });
+      expectTypeOf(removed).toEqualTypeOf<number>();
+      const nothing = ctx.write((db) => {
+        db.items.insert({ name: "Milk", aisle: "", done: false });
+      });
+      expectTypeOf(nothing).toEqualTypeOf<void>();
+    });
+  });
+
+  it("refuses a work that waits, which would hold its transaction open", () => {
+    app.job({ description: "Tries to wait inside a transaction.", everyMinutes: 60 }, async (ctx) => {
+      // @ts-expect-error work runs inside one transaction and cannot wait
+      ctx.write(async (db) => db.items.removeWhere({ done: true }));
+      // @ts-expect-error nor hand back a promise
+      ctx.read((db) => Promise.resolve(db.items.list()));
+      // Waiting comes before or after a work, never inside it.
+      await ctx.fetch("https://feeds.example.com/headlines.json");
+      ctx.write((db) => db.items.removeWhere({ done: true }));
+    });
+  });
+
+  it("fetches with a GET and some headers, and gets the answer whole", () => {
+    app.job({ description: "Fetches.", everyMinutes: 60 }, async (ctx) => {
+      const answer = await ctx.fetch("https://feeds.example.com/headlines.json", { headers: { accept: "application/json" } });
+      expectTypeOf(answer).toEqualTypeOf<FetchResponse>();
+      expectTypeOf(answer.status).toBeNumber();
+      expectTypeOf(answer.ok).toBeBoolean();
+      expectTypeOf(answer.text).toBeString();
+      expectTypeOf(answer.headers).toEqualTypeOf<Readonly<Record<string, string>>>();
+      expectTypeOf(answer.json()).toBeUnknown();
+      // @ts-expect-error a job only GETs: there is no method to choose
+      await ctx.fetch("https://feeds.example.com/headlines.json", { method: "POST" });
+      // @ts-expect-error nor a body to send
+      await ctx.fetch("https://feeds.example.com/headlines.json", { body: "{}" });
+      // @ts-expect-error a header is text
+      await ctx.fetch("https://feeds.example.com/headlines.json", { headers: { "x-count": 1 } });
+    });
   });
 });
 

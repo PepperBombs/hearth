@@ -56,6 +56,7 @@ export const en = {
   "apps.addNothing": "Every app this server holds is already here.",
   "apps.addNothingFits": "The other apps on this server cannot be added to this space.",
   "apps.addNoneInstalled": "No apps are installed on this server yet.",
+  "apps.addNetwork": "Fetches data from {hosts} on its own.",
   "apps.addRestoreNone": "Removed earlier: adding it again brings back its settings.",
   "apps.addRestoreOne": "Removed earlier: adding it again brings back its data, 1 saved entry.",
   "apps.addRestoreMany": "Removed earlier: adding it again brings back its data, {count} saved entries.",

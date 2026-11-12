@@ -53,7 +53,11 @@ HEARTH_CONFIG=/path/to/hearth.json pnpm start
 
 `pnpm start` runs `node dist/main.js` in this package. The server listens on
 `127.0.0.1` and expects Cloudflare Access (through a tunnel on the same
-machine) in front of it. It stops cleanly on `SIGINT` and `SIGTERM`.
+machine) in front of it. Once it listens it starts the scheduler, which runs
+the mini-apps' jobs (see "Mini-apps"), unless `HEARTH_JOBS=off`. It stops
+cleanly on `SIGINT` and `SIGTERM`: the scheduler first, so that a job's run
+ends at once and its job is due again at the next start, then the server and
+the database, which is closed within 5 seconds whatever holds things up.
 
 On a server, `deploy/hearth-deploy.sh` does this for each release: it links
 the release's copy of `hearth-stones` to the release's SDK
@@ -88,6 +92,8 @@ config file that still has it is accepted, and the value ignored.
 | `HEARTH_DEV_USER` | the owner | The email address every request is treated as when `HEARTH_AUTH=dev`. |
 | `HEARTH_GROUP_POLICY` | `owner` | Who may create groups and invite people who are not on the server yet: `owner`, the server's owner alone, or `everyone` on the server. Adding someone who is already on the server to a group is for that group's owners either way. |
 | `HEARTH_VERSION` | `dev` | Shown as the running version; the deploy sets it to the short commit hash. |
+| `HEARTH_JOBS` | `on` | Whether the mini-apps' jobs run: `on` or `off`. Off, no job runs and none fetches anything; a job's status still answers, and a run asked for waits until jobs run again. The deploy's trial start runs with `off`, and so does every copy of the server the end-to-end tests start without stand-ins. |
+| `HEARTH_FETCH_STANDINS` | none | For end-to-end tests: the path of a JSON file of stand-in answers for every `ctx.fetch` of a job, so that nothing reaches the network (see "Mini-apps"). `pnpm e2e` gives one file to the owner's and Lin's copies, which run their jobs, and `pnpm e2e:mini-apps` one to its own two. Refused unless `HEARTH_AUTH=dev`; the server says at start-up that it is on. |
 
 Relative paths are resolved against the working directory, except the default
 for `HEARTH_WEB_DIST`. Started through pnpm (`pnpm start`, `pnpm --filter
@@ -177,6 +183,8 @@ app.
 | `PATCH /api/spaces/:spaceId/apps/:appId/settings` | yes | Saves the settings named in `{ space?, user? }`; answers like the `GET`. `space` needs edit access, `user` only view. |
 | `POST /api/spaces/:spaceId/apps/:appId/q/:name` | yes | Runs the app's query of that name. Takes `{ input? }`; answers `{ output }`. Needs view access. |
 | `POST /api/spaces/:spaceId/apps/:appId/m/:name` | yes | Runs the app's mutation of that name. Takes `{ input? }`; answers `{ output }`, or `{}` when it returns nothing. Needs edit access. |
+| `GET /api/spaces/:spaceId/apps/:appId/jobs/:job` | yes | How the app's job of that name went in this space: `{ lastStartedAt, lastSucceededAt, lastFailedAt, lastError, nextRunAt, state }`, `state` being `idle`, `requested` or `running`. Needs view access. |
+| `POST /api/spaces/:spaceId/apps/:appId/jobs/:job/run` | yes | Asks for a run now. No body. Answers `202` with the status, as the `GET`. Needs edit access. |
 
 Every failure has the shape `{ error: { code, message } }`. The message is
 English text for logs and network traces; the web app chooses what to show
@@ -195,11 +203,14 @@ this build holds, each as `{ id, manifest, hasPage, server? }`. It checks
 every manifest against the SDK's schema, that `id` equals the manifest's
 `id`, and that no ID comes twice. It also checks what an app's `server.ts`
 exports (`src/apps/definition.ts`): that it was made with `defineServer` and
-this app's manifest, that every query and mutation has a description, and
-that the names of routes, collections and fields are plain and no field is
-called like one of the fields every row has. If anything is wrong the server
-prints every problem and exits with status 1, before it opens the database
-or listens.
+this app's manifest, that every query, mutation and job has a description,
+that every job runs every 15 to 10080 minutes in whole minutes and takes no
+input, and that the names of routes, jobs, collections and fields are plain
+and no field is called like one of the fields every row has. An app whose
+manifest names hosts in `network` must define a job, since only a job
+fetches. If anything is wrong the server prints every problem and exits
+with status 1, before it opens the database or listens. How a job runs is
+under "Running a job" below, and when under "The scheduler".
 
 `main.ts` takes the list from `src/apps/registry.generated.js`, which
 `hearth-apps sync` writes before every build and before `pnpm dev` from the
@@ -214,16 +225,25 @@ the sample apps:
 HEARTH_APPS_DIR=packages/fixture-apps HEARTH_AUTH=dev HEARTH_OWNER_EMAIL=you@example.com pnpm dev
 ```
 
+The sample headlines have a job, whose runs reach for
+`feeds.example.com`, which serves no feed, so they fail; add
+`HEARTH_FETCH_STANDINS` naming a file of stand-in answers to see them work
+(`packages/fixture-apps/headlines/README.md`).
+
 `src/apps/check-bundle.ts` is not part of the server. `hearth-apps check`
 runs it to put a generated list through `createRegistry`, so that an app
 which passes the check does not stop a server from starting.
 
 Nor is `src/apps/app-testing.ts`: the implementation of `testApp`, with
-which a mini-app's own tests call its routes (`@hearth/sdk/testing`). It
-puts the app in a space of an in-memory database, migrated like the real
-one, and answers each call with the functions the routes use (`callApp`,
-`readAppSettings`, `changeAppSettings`), the access check, store and
-transaction included. `hearth-apps test` runs an app's tests here, with
+which a mini-app's own tests call its routes and run its jobs
+(`@hearth/sdk/testing`). It puts the app in a space of an in-memory
+database, migrated like the real one, and answers each call with the
+functions the routes use (`callApp`, `readAppSettings`,
+`changeAppSettings`, `jobStatus`, `requestRun`), the access check, store
+and transaction included. `runJob` runs a job through `runOnce`, as the
+scheduler does but forced, with the rules of `ctx.fetch` in front of a
+function of the test that answers in place of the network, unpaced.
+`hearth-apps test` runs an app's tests here, with
 `vitest.apps.config.ts`, whose setup file (`src/apps/app-testing.setup.ts`)
 hands `testApp` this implementation. That configuration runs only the tests
 the command names in `HEARTH_APP_TESTS`; this package's own tests are
@@ -291,7 +311,7 @@ does. An owner can delete its data without removing it first.
   is kept as a whole or not at all.
 - `404` when `resolveInstall` gives `null`, when the app has no server file,
   and when it has no route of that name and kind: a mutation cannot be
-  reached under `/q/`, nor a query under `/m/`.
+  reached under `/q/`, nor a query under `/m/`, nor a job under either.
 - `403` `forbidden` for a mutation by someone who may only view, before
   anything is said about the input.
 - `400` `invalid_request` when `input` does not fit the route's schema, when
@@ -371,6 +391,164 @@ person in that space.
   when the person leaves the space.
 - There is no way to put a setting back to "not saved". A value equal to
   the default is stored like any other, and stays when the default changes.
+
+**`ctx.fetch`** (`src/apps/fetch.ts`) is how a job reaches the network.
+Every request meets the same rules, then waits for its host's turn, then
+goes out through one transport:
+
+- GET only, to `https` on the default port, without a user name or
+  password, to a host the app's manifest lists in `network`, exactly.
+  Anything else is refused before it is sent.
+- It sends `User-Agent: Hearth` and, of the job's own headers, only
+  `accept`, `accept-language`, `if-modified-since`, `if-none-match` and
+  names starting with `x-` other than `x-forwarded-*` and `x-real-ip`, with
+  plain ASCII values. A job has no person's request behind it: no cookie,
+  no `authorization`, nothing of anyone's goes out, and no cookie is kept.
+- Redirects are followed up to 3 times while they stay on https and the
+  same host; any other is refused.
+- An answer must be whole within 20 seconds, its body included, and its
+  body may hold 2 MiB, counted after decompression; past that the
+  download stops.
+- Requests to one host start at least 6.5 seconds apart across the whole
+  server, every app, space and job together, the next request of a
+  redirect too: at most 10 a minute, GitHub's limit for searches without
+  a token.
+- The answer comes whole: its address, status, headers (without
+  `set-cookie`), text and `json()`. A status that is not 2xx is an answer.
+  When there is none, `ctx.fetch` rejects with the SDK's `FetchError`:
+  `refused`, `timeout`, `too_large`, `network` or `stopped` (the run is
+  over).
+
+On a server the transport is Node's own `fetch`, which follows no redirect
+itself. With `HEARTH_FETCH_STANDINS` nothing leaves the server: the file
+it names is a JSON list of answers, read again at every request, so that a
+test changes them by writing the file (whole: rename a new file into
+place).
+
+```json
+[
+  { "url": "https://api.github.com/search/repositories", "query": { "q": "language:rust" },
+    "status": 403, "body": { "message": "API rate limit exceeded" } },
+  { "url": "https://api.github.com/search/repositories", "body": { "items": [] } },
+  { "url": "https://feeds.example.com/headlines.json", "error": "network" }
+]
+```
+
+The first entry whose `url` is the request's address without its query,
+and each of whose `query` texts is part of that parameter of the request,
+answers with its `status` (200 when left out), `headers` and `body` (sent
+as is when it is text, as JSON otherwise), or fails at once with its
+`error`, `network` or `timeout`. A request no entry answers fails as
+`network`, and so does every request while the file is missing or is not
+such a list, with a message that says which. Stand-ins answer at once and
+are not paced; the rules still come first, so a stand-in opens no host the
+manifest does not list. A run gives its job a `ctx.fetch` for the hosts of
+its app, which stops working when the run is over (see below).
+
+**Running a job** (`src/apps/jobs.ts`) goes through three functions, and
+nothing else runs one. `runOnce` does the three in order, for the
+scheduler (below) and for an app's own tests.
+
+- `claimRun`, one immediate transaction: the app's entry is in the space
+  and not removed, the build holds the app and the job, the job is due
+  (or the caller forces it) and no run holds it. It writes the run's ID
+  and `run_until` (the start, the 5 minutes a run may take and one more)
+  into the job's row in `app_jobs`, making the row if the job has not run
+  in this install before, and reads the space's kind, name and settings.
+  A claim whose `run_until` has passed was left by a server that died, and
+  is taken over; that run counts for nothing.
+- The run, outside any transaction: the job's function with its `ctx`.
+  `ctx.settings` holds the space's settings and nobody's own
+  (`spaceSettingsFor`), as they were at the claim. `ctx.read(work)` and
+  `ctx.write(work)` run `work` in one transaction each, deferred and
+  immediate, after checking inside it that the run's 5 minutes are not up
+  and that it still holds its install: the app's entry in the space the
+  run started in, not removed, and the job's row holding the run's ID.
+  `work` gets a store as a handler does, which writes in the name of
+  whoever added the app (`space_apps.created_by`) with the time of the
+  write, refuses `list({ mine: true })` (a job is no one), and is closed
+  when `work` returns. The run ends at once when its 5 minutes are up,
+  when the server stops it, when `ctx.read` or `ctx.write` is refused for
+  the install (the app was removed, moved or had its data deleted, or
+  another run took the job over), and when work hands back a promise;
+  from then on `ctx.fetch` rejects with `stopped` and `ctx.read` and
+  `ctx.write` throw.
+- `recordRun`, one immediate transaction, finds the job's row by the
+  run's ID, which follows a moved app, and lets the claim go. A run that
+  went well sets `last_succeeded_at`, clears `failures`, and is followed
+  by the next an interval to a tenth more after it started (the jitter).
+  One that went wrong (it threw or rejected, ran out of time, or handed
+  back a promise) sets `last_failed_at`, `last_error` (its message on one
+  line, at most 200 characters) and one more failure, and the next waits
+  5, 10, 20, 40 ... minutes, never more than the job's interval (the
+  backoff). A run the server stopped, and one refused for its install,
+  record nothing and leave the job due at once.
+
+**The scheduler** (`src/apps/scheduler.ts`) is what starts runs on a
+server. `startServer` (`src/serve.ts`, which `main.ts` runs through
+`serveHearth`) makes it when `HEARTH_JOBS` is `on` and starts it once
+the server listens; `createApp` starts none, so tests run no job unless
+one asks.
+
+- It runs one job at a time on the whole server: the one that falls due
+  first (`nextJob` in `jobs.ts`), ties going by space ID, app ID and job
+  name, through `runOnce`; then it looks again. A job that has not run in
+  an install is due at once; one that a run holds, in this process or
+  another sharing the database, when that claim runs out; any other at its
+  `next_run_at`. Only installs that are there count: the app's entry in
+  its space, not removed, and the app and the job in this build. It never
+  asks who may use the app.
+- With nothing due it sleeps until the next job is due, at most 30
+  seconds, so that a change made by another process sharing the database
+  is seen within that. Adding an app to a space or bringing one back, and
+  a run asked for, wake it at once (`wakeJobs`, which `startServer` hands
+  `createApp`).
+- Timing is the runs': at most 5 minutes each, the next an interval to a
+  tenth more after a run that went well, and 5, 10, 20 ... minutes after
+  failures in a row, never more than the interval.
+- All it knows is in `app_jobs`, so after a restart what is due runs, in
+  order, and a run cut off by a crash is taken over once its claim runs
+  out. The claim keeps a run single when two processes share a database
+  file, as the end-to-end tests' copies of the server do.
+- It logs one line for each run that went wrong, `App "...", job "...",
+  space <ID>: the run failed: <message>`, and nothing for the others. If
+  the database cannot be read it says so and looks again 30 seconds
+  later.
+- Stopping it (SIGTERM or SIGINT) starts no new run and ends the one going
+  on at once, recorded as nothing, its job due again at the next start;
+  then the database is closed, within 5 seconds whatever holds things up.
+- A job's function is not waited for once its run is over, and a request
+  it started then fails with `stopped`. The promise `ctx.fetch` gave counts
+  as handled, so a request nobody waited for any more is no fault; a
+  promise the job made itself that rejects with nothing to handle it is
+  logged on one line ("A job left behind ..." for one made of a request)
+  instead of ending the process, which serves everyone's apps.
+
+`requestRun` asks for a run now, for someone with edit access to the app:
+unless a run is going on, the job becomes due at once, or 5 minutes after
+the last run started if that is later, and never later than it already
+was. `jobStatus` says how its runs went, for anyone who may see the app:
+when the last run started, the last one went well and the last one went
+wrong, the last error, the next run, and `running`, `requested` or
+`idle`. Both answer `404` when the app is not there for the person, has no
+server file or has no job of that name (a query's or a mutation's name
+included), and `requestRun` then `403` for someone who may only view.
+The two routes of a job call them (`GET .../jobs/:job` and `POST
+.../jobs/:job/run`, which answers `202`); the second wakes the scheduler
+when a run was asked for, as adding an app does. With
+`HEARTH_FETCH_STANDINS` the gap after the last run's start is 5 seconds
+instead of 5 minutes (`requestGapFor`), so that an end-to-end test can
+ask for two runs in a row.
+
+**Outgoing connections.** The server reaches out to two kinds of host:
+Cloudflare Access, for the keys that sign its identity header
+(`https://<team domain>/cdn-cgi/access/certs`), and the hosts the mini-apps
+it holds name in `network`, from their jobs alone, through `ctx.fetch`
+(GET over https, `User-Agent: Hearth`, at most one request every 6.5
+seconds to each host). `HEARTH_JOBS=off` stops the second kind; with
+`HEARTH_FETCH_STANDINS` they are answered from a file instead and nothing
+leaves the machine. `docs/self-hosting.md` lists the connections of a
+whole server, the deploy's included.
 
 ## Groups and members
 
@@ -475,7 +653,9 @@ Tables so far, from migration 1: `users`, `spaces`, `space_members`,
 `invitations`. Migration 2 adds the tables of the mini-app contract:
 `space_apps` (an app added to a space), `app_rows` (every mini-app's data),
 `app_settings`, `app_access`, `app_prefs` and `space_invitations`, plus the
-column `space_members.can_add_apps`. The server writes `space_apps`; the
+column `space_members.can_add_apps`. Migration 3 adds `app_jobs`: for each
+job of an app in a space, when it runs next, the run that holds it and how
+its last runs went. The server writes `space_apps`; the
 access route, and adding or moving an app as a member, write `app_access`;
 an app's mutations write `app_rows` through the store, the settings route
 writes `app_settings` and the switch-and-pin route `app_prefs`; all of them
@@ -483,7 +663,8 @@ are deleted from when an app's data is deleted, and a move deletes from the
 last three what is about people who are not in the new space. The routes
 for groups write
 `spaces`, `space_members`, `invitations` and `space_invitations`. SQL for
-`app_rows` and `app_settings` lives in `src/apps/store.ts` only.
+`app_rows` and `app_settings` lives in `src/apps/store.ts` only, and for
+`app_jobs` in `src/apps/jobs.ts`.
 
 Rules the database keeps by itself, tested as SQL in
 `src/db/apps-schema.test.ts`:
@@ -495,7 +676,8 @@ Rules the database keeps by itself, tested as SQL in
   not in the new space; another test names the three there are and fails
   for a fourth.
 - `app_rows` and `app_settings` use `ON DELETE RESTRICT`: delete them first,
-  on purpose, then the `space_apps` row.
+  on purpose, then the `space_apps` row. `app_jobs` uses `ON DELETE
+  CASCADE`: a job's status is not data, and goes with the app's entry.
 - A space keeps at least one owner. Three triggers on `space_members` refuse
   a first member who is not an owner, and refuse to remove or demote the last
   owner. They fail with `SQLITE_CONSTRAINT_TRIGGER`.

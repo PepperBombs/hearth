@@ -5,7 +5,7 @@
   "type": "module",
   "license": "AGPL-3.0-only",
   "hearth": {
-    "sdk": "^0.1.0"
+    "sdk": "^0.1.1"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",

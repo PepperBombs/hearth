@@ -10,6 +10,7 @@ import {
   MINI_APPS_OWNER_URL,
   MINI_APPS_SHARED_DB,
   MINI_APPS_SHARED_DB_DIR,
+  MINI_APPS_STAND_INS,
   OWNER_EMAIL,
   realServerCommand,
 } from "./e2e/servers.ts";
@@ -25,6 +26,12 @@ import {
  * afresh: one treats every request as the owner, the other as Lin, a member
  * of the owner's family (e2e/servers.ts). So a test can be two people of a
  * family using an app on one server, each in a browser of their own.
+ *
+ * Both copies run the apps' jobs, and one file of stand-in answers beside
+ * their database (MINI_APPS_STAND_INS), which the tests write with
+ * `writeStandIns`, answers every request a job makes: no job reaches the
+ * host its manifest names. Until a test writes the file, every such
+ * request fails as the network would.
  *
  * Each file in e2e/mini-apps is named after the app it is about
  * (`grocery.spec.ts`) and runs only when the folders hold that app: the
@@ -81,8 +88,8 @@ export default defineConfig({
     {
       name: "server",
       // Builds Hearth with the mini-apps, then starts the owner's copy on a database file of its
-      // own making: what an earlier run left there is deleted.
-      command: `pnpm build && rm -rf ${JSON.stringify(MINI_APPS_SHARED_DB_DIR)} && ${realServerCommand(MINI_APPS_OWNER_PORT, OWNER_EMAIL, MINI_APPS_SHARED_DB)}`,
+      // own making: what an earlier run left there, the file of stand-ins with it, is deleted.
+      command: `pnpm build && rm -rf ${JSON.stringify(MINI_APPS_SHARED_DB_DIR)} && ${realServerCommand(MINI_APPS_OWNER_PORT, OWNER_EMAIL, MINI_APPS_SHARED_DB, MINI_APPS_STAND_INS)}`,
       env: { HEARTH_APPS_DIR: MINI_APPS_DIRS },
       url: `${MINI_APPS_OWNER_URL}/api/health`,
       reuseExistingServer,
@@ -93,7 +100,8 @@ export default defineConfig({
     {
       name: "server as a family member",
       // Started after the owner's copy, which created and migrated the database they share.
-      command: realServerCommand(MINI_APPS_MEMBER_PORT, MEMBER_EMAIL, MINI_APPS_SHARED_DB),
+      // Its jobs run too, over the same stand-ins: the claim in the database keeps each run single.
+      command: realServerCommand(MINI_APPS_MEMBER_PORT, MEMBER_EMAIL, MINI_APPS_SHARED_DB, MINI_APPS_STAND_INS),
       url: `${MINI_APPS_MEMBER_URL}/api/health`,
       reuseExistingServer,
       timeout: 120_000,

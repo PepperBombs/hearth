@@ -18,7 +18,8 @@
 #   server     applies numbered migrations to a real SQLite file exactly as
 #              the real server does (each in its own transaction, refusing a
 #              database with a migration it does not know), then answers
-#              /api/health
+#              /api/health; each start writes down, beside it, whether it
+#              is the trial start or the service and what HEARTH_JOBS it got
 #
 # So the handshake between the mini-apps and the SDK is the real one: the
 # version a made-up mini-apps commit declares against the SDK version in a
@@ -232,6 +233,11 @@ const Database = require("better-sqlite3");
 const root = path.join(__dirname, "..");
 const migrations = JSON.parse(fs.readFileSync(path.join(root, "migrations.json"), "utf8"));
 const behaviour = fs.readFileSync(path.join(root, "behaviour"), "utf8").trim();
+// Whether the mini-apps' jobs would run: "trial off" for the deploy's trial start, "live unset" for the service.
+fs.appendFileSync(
+  path.join(root, "started-with"),
+  `${process.env.FAKE_LIVE ? "live" : "trial"} ${process.env.HEARTH_JOBS ?? "unset"}\n`,
+);
 
 const db = new Database(process.env.HEARTH_DB);
 db.pragma("journal_mode = WAL");
@@ -448,6 +454,13 @@ release_a=$(current_release)
 # Real rows, which a later migration will trip over.
 sql "$DATABASE" "INSERT INTO users (name) VALUES ('Sam')"
 sql "$DATABASE" "INSERT INTO users (name) VALUES ('Sam')"
+end_test
+
+start_test "the trial start runs no job, and the service runs them"
+# The trial start, against a copy of the database, must fetch nothing; the
+# service gets no HEARTH_JOBS from the script, so its jobs run (the default).
+started=$(<"$BASE/releases/$release_a/hearth/packages/server/started-with")
+[[ $started == $'trial off\nlive unset' ]] || fail "the made-up server was started as: ${started//$'\n'/, }"
 end_test
 
 # ---------------------------------------------------------------------------

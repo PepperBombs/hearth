@@ -12,9 +12,10 @@
 #      mini-apps are first linked to the SDK of the framework beside them,
 #      offline, and the build refuses them if they were written for another
 #      version of the SDK;
-#   4. starts that build on a spare port, against a copy of the database, and
-#      checks that it answers. A migration that fails on the real data fails
-#      here, before anything live is touched;
+#   4. starts that build on a spare port, against a copy of the database and
+#      with the mini-apps' jobs switched off (HEARTH_JOBS=off), and checks
+#      that it answers. A migration that fails on the real data fails here,
+#      before anything live is touched;
 #   5. stops the service for a moment, copies the database as it then is,
 #      points the "current" link at the new release (one atomic rename) and
 #      starts the service, then checks the running service;
@@ -657,7 +658,8 @@ server_dir=$new_release/hearth/packages/server
 # It runs with made-up settings, so it does not touch the secrets file, and
 # against a fresh copy of the database, so its migrations meet the real rows
 # without changing them. Sign-in stays on, so it would let nobody in even if
-# something could reach it.
+# something could reach it. Its mini-apps' jobs are switched off
+# (HEARTH_JOBS=off), so a release on trial fetches nothing from outside.
 log "Checking the new build on port $HEALTH_PORT."
 if port_in_use "$HEALTH_PORT"; then
   die "Port $HEALTH_PORT is already in use, so the new build cannot be checked there. Free it or change HEALTH_PORT."
@@ -677,7 +679,7 @@ fi
   HOST=127.0.0.1 PORT="$HEALTH_PORT" HEARTH_DB="$trial_database" \
   HEARTH_AUTH=cloudflare-access HEARTH_CF_TEAM_DOMAIN=health-check.example.com \
   HEARTH_CF_AUDIENCE=health-check HEARTH_OWNER_EMAIL=health-check@example.com \
-  HEARTH_VERSION="$version" node dist/main.js) >>"$build_log" 2>&1 9>&- &
+  HEARTH_JOBS=off HEARTH_VERSION="$version" node dist/main.js) >>"$build_log" 2>&1 9>&- &
 health_pid=$!
 if ! wait_healthy "http://127.0.0.1:$HEALTH_PORT" "$version" page "$health_pid"; then
   if [[ -n $trial_db ]]; then

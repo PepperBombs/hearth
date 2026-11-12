@@ -58,3 +58,15 @@ export function createTranslator(locale: Locale): Translate {
 export function pickLocalized(text: Localized, locale: Locale): string {
   return text[locale] || text.en || text.zh;
 }
+
+/**
+ * What separates the names in a list, as each language writes it. Kept
+ * here rather than in the dictionaries: Chinese writes it as a punctuation
+ * mark alone, and every string there holds Chinese text.
+ */
+const LIST_SEPARATOR: Readonly<Record<Locale, string>> = { en: ", ", zh: "、" };
+
+/** Names that are the same in every language, such as host names, joined into one text: "a, b" and "a、b". */
+export function joinNames(names: readonly string[], locale: Locale): string {
+  return names.join(LIST_SEPARATOR[locale]);
+}

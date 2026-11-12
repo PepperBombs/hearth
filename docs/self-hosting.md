@@ -3,9 +3,10 @@
 This guide sets up one Linux server with no public ports. Cloudflare Tunnel
 carries traffic to it and Cloudflare Access decides who gets in.
 
-**Not yet tested on a real server.** The steps below were written alongside
-the code and the deploy script, but nobody has run them end to end. Treat the
-first installation as a test, and expect to correct details.
+**Tested on one real server so far.** The steps below have been run end to
+end once, with the releases up to the grocery list. Scheduled jobs and what
+they fetch from outside (GitHub Trending) came later and have not yet run
+on a real server. Expect details to differ on yours, and correct them here.
 
 Everything personal (your domain, email address, secrets) stays on the server
 and never goes into a repository.
@@ -62,6 +63,15 @@ Edit `/etc/hearth/hearth.env`: your email address as owner, and the two
 Cloudflare values from step 6. Leave `HEARTH_AUTH=cloudflare-access` as it
 is: `dev` signs nobody in and is for a developer's own machine only.
 
+The mini-apps' jobs run in the server (GitHub Trending's hourly searches of
+`api.github.com`), and they are what connects to outside hosts; see "What
+the server connects to" below. `HEARTH_JOBS=off` in
+`hearth.env` stops every job, and with it every such connection: the apps
+show what their last runs left.
+Never set `HEARTH_FETCH_STANDINS` on a server: it answers every job from a
+file of made-up answers, for end-to-end tests, and the server refuses it
+unless sign-in is switched off.
+
 `/etc/hearth/deploy.conf` works as it is for the layout in this guide. If you
 move the database (`HEARTH_DB` in `hearth.env`), give `DATABASE` in
 `deploy.conf` the same path: the deploy script copies that file before every
@@ -85,9 +95,22 @@ database or puts it back.
 
 The deploy script does not update itself. When a release brings a newer
 one, the journal says so after the switch ("deploy/hearth-deploy.sh in this
-release differs from the installed copy"): install it again with the same
-`install` line. A copy from before mini-apps were built in keeps building
-every release without them.
+release differs from the installed copy"). Install it from the release that
+is running, not from the checkout of step 3: the deploy only fetches into
+`/opt/hearth/repos/hearth`, so the files there stay as they were when you
+cloned it, and the `install` line above would put the old copy back. The
+same goes for the systemd units and the polkit rule, should a release
+change them.
+
+```sh
+sudo install -m 755 /opt/hearth/current/hearth/deploy/hearth-deploy.sh /usr/local/bin/hearth-deploy
+```
+
+A copy from before mini-apps were built in keeps building
+every release without them, and a copy from before jobs existed starts the
+trial of a new release with its jobs on, so that for the seconds the trial
+lasts they run against the copy of the database and may fetch from
+outside; install the new copy before mini-apps with jobs arrive.
 
 ## 6. Cloudflare Access, then the tunnel
 
@@ -184,3 +207,29 @@ point to settle first: whether the current Litestream release can encrypt
 replicas before upload. Older releases could (with `age` keys); that has not
 been confirmed for the current one. Until it is, do not rely on this section,
 and keep your own copy of the database file.
+
+## What the server connects to
+
+Nothing connects to the server from outside: the tunnel carries every
+request to it. It makes these connections itself:
+
+- **Cloudflare Access**, for the public keys that sign each request's
+  identity (`https://your-team.cloudflareaccess.com/cdn-cgi/access/certs`).
+- **The hosts the mini-apps name**, from their jobs alone. Each app lists in
+  its manifest the hosts its jobs fetch from, and the Apps page names them
+  when someone adds the app ("Fetches data from api.github.com on its
+  own."). GitHub Trending, in `hearth-stones`, uses `api.github.com`: once
+  an hour in each space it is in, three searches, and three more for each
+  language the space follows. Every request is
+  a GET over https that says it is from Hearth (`User-Agent: Hearth`) and
+  carries nothing of anyone's: no cookie, no sign-in. Requests to one host
+  start at least 6.5 seconds apart across the whole server, which keeps
+  every space's apps together within GitHub's limit of 10 searches a minute
+  for an address without a token. `HEARTH_JOBS=off` in `hearth.env` stops
+  them all; the deploy's trial start always runs with it, so a release on
+  trial fetches nothing.
+
+`cloudflared` connects to Cloudflare to carry the tunnel. The deploy script
+fetches the repositories from their remotes (GitHub) and, for each release
+it builds, installs the framework's packages from the npm registry; the
+mini-apps' install is offline.

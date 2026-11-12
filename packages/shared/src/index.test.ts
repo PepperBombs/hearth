@@ -14,6 +14,9 @@ import {
   appSummarySchema,
   createSpaceRequestSchema,
   deleteAppDataRequestSchema,
+  JOB_STATES,
+  jobStateOf,
+  jobStatusSchema,
   memberPatchSchema,
   moveAppRequestSchema,
   sessionSchema,
@@ -260,5 +263,80 @@ describe("what the owners of a space see", () => {
     expect(accepts(spaceAppsSchema, withApp({ rowCount: 1.5 }))).toBe(false);
     expect(accepts(spaceAppsSchema, withApp({ memberAccess: "all" }))).toBe(false);
     expect(accepts(spaceAppsSchema, withApp({ members: { "user-2": null } }))).toBe(false);
+  });
+});
+
+describe("a job's status", () => {
+  const status = {
+    lastStartedAt: "2026-03-01T13:05:00.000Z",
+    lastSucceededAt: "2026-03-01T13:05:21.000Z",
+    lastFailedAt: null,
+    lastError: null,
+    nextRunAt: "2026-03-01T14:05:00.000Z",
+    state: "idle",
+  };
+
+  it("says when the runs started, went well and went wrong, why, when the next is, and where the job stands", () => {
+    expect(jobStatusSchema.parse(status)).toEqual(status);
+    const failed = { ...status, lastFailedAt: "2026-03-01T14:05:09.000Z", lastError: "The feed answered 500." };
+    expect(jobStatusSchema.parse(failed)).toEqual(failed);
+  });
+
+  it("answers nulls for a job that has not run, and always when it runs next", () => {
+    const fresh = { lastStartedAt: null, lastSucceededAt: null, lastFailedAt: null, lastError: null, nextRunAt: status.nextRunAt, state: "idle" };
+    expect(accepts(jobStatusSchema, fresh)).toBe(true);
+    expect(accepts(jobStatusSchema, { ...fresh, nextRunAt: null })).toBe(false);
+    expect(accepts(jobStatusSchema, without(status, "lastError"))).toBe(false);
+  });
+
+  it("knows three states", () => {
+    expect(JOB_STATES).toEqual(["idle", "requested", "running"]);
+    for (const state of JOB_STATES) expect(accepts(jobStatusSchema, { ...status, state })).toBe(true);
+    expect(accepts(jobStatusSchema, { ...status, state: "failed" })).toBe(false);
+  });
+
+  it("drops what it does not name, as every answer does, so that an older web app survives a newer server", () => {
+    expect(jobStatusSchema.parse({ ...status, failures: 2 })).toEqual(status);
+  });
+});
+
+describe("what a job's status means to the people who see the app", () => {
+  const status = {
+    lastStartedAt: null,
+    lastSucceededAt: null,
+    lastFailedAt: null,
+    lastError: null,
+    nextRunAt: "2026-03-01T13:05:00.000Z",
+    state: "idle",
+  } as const;
+  const succeeded = "2026-03-01T13:05:21.000Z";
+  const failed = "2026-03-01T14:05:09.000Z";
+
+  it("is nothing before the first run", () => {
+    expect(jobStateOf(status)).toEqual({ succeededAt: null, failedAt: null, running: false });
+  });
+
+  it("gives when the data is from, and a failure only when the last run to end went wrong", () => {
+    expect(jobStateOf({ ...status, lastSucceededAt: succeeded })).toEqual({ succeededAt: succeeded, failedAt: null, running: false });
+    // Failed after the run that went well: the data is still from then.
+    expect(jobStateOf({ ...status, lastSucceededAt: succeeded, lastFailedAt: failed, lastError: "The feed answered 500." })).toEqual({
+      succeededAt: succeeded,
+      failedAt: failed,
+      running: false,
+    });
+    // A run went well after the one that failed: that failure is over.
+    expect(jobStateOf({ ...status, lastSucceededAt: failed, lastFailedAt: succeeded })).toEqual({
+      succeededAt: failed,
+      failedAt: null,
+      running: false,
+    });
+    // Failed before any run went well.
+    expect(jobStateOf({ ...status, lastFailedAt: failed })).toEqual({ succeededAt: null, failedAt: failed, running: false });
+  });
+
+  it("is running while a run holds the job and while one asked for has not started", () => {
+    expect(jobStateOf({ ...status, state: "running" }).running).toBe(true);
+    expect(jobStateOf({ ...status, state: "requested" }).running).toBe(true);
+    expect(jobStateOf({ ...status, state: "idle" }).running).toBe(false);
   });
 });

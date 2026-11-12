@@ -5,15 +5,19 @@
  * their names appear in any other source file), so that there is one place
  * to check that every statement names its space and its app.
  *
- * - `readOnlyStore` and `writableStore` are what a handler gets as `ctx.db`:
- *   the collections the app declared, each limited to one app in one space.
+ * - `readOnlyStore` and `writableStore` are what a handler gets as `ctx.db`,
+ *   and what a job's `ctx.read` and `ctx.write` give their work: the
+ *   collections the app declared, each limited to one app in one space.
  *   The space, the app and the person come from the caller of these
- *   functions, who has checked the person's access; nothing a mini-app or a
- *   request body says can change them. The caller closes the store when the
- *   handler has returned, and a closed store refuses everything.
+ *   functions, who has checked the person's access, or for a job that the
+ *   run still holds its install (jobs.ts); nothing a mini-app or a request
+ *   body says can change them. The caller closes the store when the
+ *   handler or the work has returned, and a closed store refuses
+ *   everything.
  * - `readSettingsData` and `writeSettingsData` read and replace what was
  *   saved for an app's settings in one space: one JSON object for the space
- *   and one for each person. What the values mean is settings.ts's business.
+ *   and one for each person. `readSpaceSettingsData` reads the space's
+ *   alone, for a job. What the values mean is settings.ts's business.
  * - `countRows` says how many rows an app holds in a space, for its owners.
  * - `deleteAllData` deletes everything an app has in a space.
  * - `deleteOwnSettingsOfOthers` deletes, before an app moves to another
@@ -31,8 +35,15 @@ import { PLAIN_NAME } from "./definition";
 export type StoreScope = {
   spaceId: string;
   appId: string;
-  /** The signed-in person: recorded on what is written, and whom `mine` means. */
+  /**
+   * Who is recorded on what is written. For a query or a mutation, the
+   * signed-in person, whom `list({ mine: true })` means. For a job, the
+   * person who added the app to the space (`space_apps.created_by`), on
+   * whose behalf it runs; a job is no one, so `mine` is refused there.
+   */
   userId: string;
+  /** The job whose `ctx.read` or `ctx.write` opened the store, or null for a handler's `ctx.db`. */
+  job: string | null;
   /** The time that rows written through this store carry. */
   now: Date;
 };
@@ -117,14 +128,18 @@ function openCollection(
     new StoreUsageError(`App "${appId}", collection "${collection}": ${message}`);
 
   /**
-   * Refuses a store that outlived its request: by then the transaction that
-   * held the access check is over, so nothing may be read or written on its
-   * strength. An `async` handler gets here after its first `await`.
+   * Refuses a store that outlived its request, or its job's work: by then
+   * the transaction that held the access check, or the check that the run
+   * still holds its install, is over, so nothing may be read or written on
+   * its strength. An `async` handler or work gets here after its first
+   * `await`.
    */
   function live(): void {
     if (lifetime.closed) {
       throw misuse(
-        "ctx.db was used after the handler returned. A handler cannot keep it for later, and cannot use it after an await.",
+        scope.job === null
+          ? "ctx.db was used after the handler returned. A handler cannot keep it for later, and cannot use it after an await."
+          : `the db that ctx.read or ctx.write gave the job "${scope.job}" was used after its work returned. Work cannot keep it for later, and cannot use it after an await.`,
       );
     }
   }
@@ -260,6 +275,12 @@ function openCollection(
       const bindings = scoped();
       let conditions = matching(options.where, bindings);
       if (options.mine) {
+        if (scope.job !== null) {
+          // What the job writes carries whoever added the app, and `mine` would find their rows as if they had asked.
+          throw misuse(
+            `list({ mine: true }) finds the rows of the person asking, and the job "${scope.job}" runs for no one in the space. Leave mine out.`,
+          );
+        }
         conditions += " AND created_by = @userId";
         bindings.userId = userId;
       }
@@ -447,6 +468,18 @@ export function readSettingsData(db: Db, owner: SettingsOwner): Record<SettingsS
   const saved: Record<SettingsScope, SettingsData> = { space: {}, user: {} };
   for (const row of rows) saved[row.userId === null ? "space" : "user"] = settingsObject(row.data);
   return saved;
+}
+
+/**
+ * What was saved for the settings an app shares with its whole space, and
+ * nobody's own: what a job, which runs for no one, reads. Empty when nothing
+ * was saved. The caller has checked that the app is in the space.
+ */
+export function readSpaceSettingsData(db: Db, install: { spaceId: string; appId: string }): SettingsData {
+  const row = db
+    .prepare("SELECT data FROM app_settings WHERE space_id = @spaceId AND app_id = @appId AND user_id IS NULL")
+    .get({ spaceId: install.spaceId, appId: install.appId }) as { data: string } | undefined;
+  return row ? settingsObject(row.data) : {};
 }
 
 /**

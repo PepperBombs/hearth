@@ -13,7 +13,8 @@
  * Design: docs/mini-app-contract.md, section A9.
  */
 import type { SpaceKind } from "./index";
-import type { TestAppOptions, TestPerson } from "./testing";
+import type { JobState } from "./routes";
+import type { JobRun, RunJobOptions, TestAppOptions, TestPerson } from "./testing";
 
 /** What `as(...)` gives, before the app's own types are laid over it. */
 export type TestCallerHandle = {
@@ -23,12 +24,16 @@ export type TestCallerHandle = {
   mutation(name: string, input?: unknown): unknown;
   settings(): Record<string, unknown>;
   saveSettings(values: Record<string, unknown>): Record<string, unknown>;
+  job(name: string): Omit<JobState, "run" | "pending">;
+  requestRun(name: string): Omit<JobState, "run" | "pending">;
 };
 
 /** What `testApp(server)` gives, before the app's own types are laid over it. */
 export type TestAppHandle = {
   readonly space: { readonly kind: SpaceKind; readonly name: string };
   as(person?: TestPerson): TestCallerHandle;
+  /** `options` is undefined when the test passed none. */
+  runJob(name: string, options?: RunJobOptions): Promise<JobRun>;
 };
 
 /**

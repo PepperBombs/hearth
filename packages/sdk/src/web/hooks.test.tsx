@@ -8,7 +8,7 @@ import { Component, type ReactNode } from "react";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { defineApp } from "../index";
 import { defineServer, z, type Row } from "../server";
-import { appHooks, type InputArgs, type MutationName, type Output, type QueryName } from "./index";
+import { appHooks, type InputArgs, type JobName, type JobState, type MutationName, type Output, type QueryName } from "./index";
 import { AppScopeContext, type AppScopeValue } from "./scope";
 
 const manifest = defineApp({
@@ -51,15 +51,19 @@ const server = app.routes({
     ctx.db.items.removeWhere({ done: true }),
   ),
   touch: app.mutation({ description: "Does nothing and answers nothing." }, () => {}),
+  tidy: app.job({ description: "Deletes every ticked item, once an hour.", everyMinutes: 60 }, (ctx) => {
+    ctx.write((db) => db.items.removeWhere({ done: true }));
+  }),
 });
 type Server = typeof server;
 
-const { useApp, useQuery, useMutation } = appHooks<Server>();
+const { useApp, useQuery, useMutation, useJob } = appHooks<Server>();
 
 describe("the types of an app's hooks", () => {
-  it("name the app's queries and mutations, each kind apart", () => {
+  it("name the app's queries, mutations and jobs, each kind apart", () => {
     expectTypeOf<QueryName<Server>>().toEqualTypeOf<"list" | "inAisle" | "recent">();
     expectTypeOf<MutationName<Server>>().toEqualTypeOf<"add" | "clearTicked" | "touch">();
+    expectTypeOf<JobName<Server>>().toEqualTypeOf<"tidy">();
   });
 
   it("take what the route takes: nothing, its input, or an input that may be left out", () => {
@@ -123,21 +127,51 @@ describe("the types of an app's hooks", () => {
       expectTypeOf(useMutation("touch").run()).toEqualTypeOf<Promise<void>>();
       // @ts-expect-error: a query is not called like a mutation
       useMutation("list");
+      // @ts-expect-error: a job is neither read like a query
+      useQuery("tidy");
+      // @ts-expect-error: nor called like a mutation
+      useMutation("tidy");
+
+      const tidy = useJob("tidy");
+      expectTypeOf(tidy).toEqualTypeOf<JobState>();
+      expectTypeOf(tidy.succeededAt).toEqualTypeOf<string | null>();
+      expectTypeOf(tidy.failedAt).toEqualTypeOf<string | null>();
+      expectTypeOf(tidy.running).toEqualTypeOf<boolean>();
+      expectTypeOf(tidy.canRun).toEqualTypeOf<boolean>();
+      expectTypeOf(tidy.pending).toEqualTypeOf<boolean>();
+      expectTypeOf(tidy.run()).toEqualTypeOf<Promise<void>>();
+      // @ts-expect-error: a run takes nothing: it is the job's, as the scheduler starts it
+      void tidy.run({ force: true });
+      // @ts-expect-error: a job takes no input
+      useJob("tidy", {});
+      // @ts-expect-error: a query is no job
+      useJob("list");
+      // @ts-expect-error: nor is a mutation
+      useJob("add");
+      // @ts-expect-error: no such job
+      useJob("nightly");
       return null;
     }
     expect(Widget).toBeTypeOf("function");
+  });
+
+  it("say nothing of why a run failed: what a person reads is the app's own, in their language", () => {
+    expectTypeOf<keyof JobState>().toEqualTypeOf<"succeededAt" | "failedAt" | "running" | "canRun" | "run" | "pending">();
   });
 
   it("of an app without a server file have its strings and settings, and no routes to name", () => {
     const hooks = appHooks<typeof manifest>();
     expectTypeOf<QueryName<typeof manifest>>().toEqualTypeOf<never>();
     expectTypeOf<MutationName<typeof manifest>>().toEqualTypeOf<never>();
+    expectTypeOf<JobName<typeof manifest>>().toEqualTypeOf<never>();
     function Widget() {
       const { t, settings } = hooks.useApp();
       // @ts-expect-error: an app without a server file has no query to read
       hooks.useQuery("list");
       // @ts-expect-error: and no mutation to call
       hooks.useMutation("add");
+      // @ts-expect-error: and no job
+      hooks.useJob("tidy");
       expectTypeOf(settings).toEqualTypeOf<{ aisles: string[]; hideDone: boolean }>();
       t("left", { count: 1 });
       // @ts-expect-error: not one of the app's strings
@@ -161,6 +195,15 @@ describe("the types of an app's hooks", () => {
 describe("an app's hooks at run time", () => {
   const items = [{ id: "1", name: "Milk" }];
   const run = vi.fn(async () => undefined);
+  const runJob = vi.fn(async () => {});
+  const job: JobState = {
+    succeededAt: "2026-03-01T13:05:21.000Z",
+    failedAt: null,
+    running: true,
+    canRun: false,
+    run: runJob,
+    pending: false,
+  };
   const scope: AppScopeValue = {
     app: {
       t: (key, values) => `${key}:${JSON.stringify(values ?? {})}`,
@@ -174,6 +217,7 @@ describe("an app's hooks at run time", () => {
     },
     useQuery: vi.fn((name: string, input: unknown) => (name === "list" && input === undefined ? items : [])),
     useMutation: vi.fn(() => ({ run, pending: false, error: { code: "forbidden" } })),
+    useJob: vi.fn(() => job),
   };
 
   function Widget() {
@@ -181,14 +225,19 @@ describe("an app's hooks at run time", () => {
     const list = useQuery("list");
     const dairy = useQuery("inAisle", { aisle: "Dairy" });
     const add = useMutation("add");
+    const tidy = useJob("tidy");
     return (
       <div>
         <p data-testid="app">
           {[t("left", { count: 2 }), locale, user.name, space.name, String(canEdit), settings.aisles.join(), pagePath].join(" | ")}
         </p>
         <p data-testid="data">{`${list.length} ${dairy.length} ${add.error?.code}`}</p>
+        <p data-testid="job">{[tidy.succeededAt, String(tidy.failedAt), String(tidy.running), String(tidy.canRun)].join(" | ")}</p>
         <button type="button" onClick={() => void add.run({ name: "Eggs" })}>
           add
+        </button>
+        <button type="button" onClick={() => void tidy.run()}>
+          tidy
         </button>
       </div>
     );
@@ -205,9 +254,13 @@ describe("an app's hooks at run time", () => {
     expect(scope.useQuery).toHaveBeenCalledWith("list", undefined);
     expect(scope.useQuery).toHaveBeenCalledWith("inAisle", { aisle: "Dairy" });
     expect(scope.useMutation).toHaveBeenCalledWith("add");
+    expect(screen.getByTestId("job").textContent).toBe("2026-03-01T13:05:21.000Z | null | true | false");
+    expect(scope.useJob).toHaveBeenCalledWith("tidy");
 
     screen.getByRole("button", { name: "add" }).click();
     expect(run).toHaveBeenCalledWith({ name: "Eggs" });
+    screen.getByRole("button", { name: "tidy" }).click();
+    expect(runJob).toHaveBeenCalledTimes(1);
   });
 
   it("say so when a widget is drawn where Hearth did not put it", () => {

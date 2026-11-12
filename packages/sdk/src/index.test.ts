@@ -15,6 +15,7 @@ import {
   type MessageKey,
   type PlaceholderArgs,
   type SettingsOf,
+  type SpaceSettingsOf,
   type Translate,
 } from "./index";
 
@@ -144,6 +145,29 @@ describe("defineApp", () => {
     defineApp({ ...rest, settings: { on: { type: "switch", scope: "group", default: true, label: { en: "On", zh: "开" } } } });
     // @ts-expect-error not a property of a manifest
     defineApp({ ...rest, colour: "blue" });
+    // @ts-expect-error the hosts are a list
+    defineApp({ ...rest, network: "api.github.com" });
+    // @ts-expect-error a host is a name
+    defineApp({ ...rest, network: [443] });
+  });
+
+  it("takes the hosts an app fetches from, written in place or declared as a constant", () => {
+    const rest = {
+      id: "x1",
+      name: { en: "X", zh: "某" },
+      description: { en: "X", zh: "某" },
+      icon: "box",
+      color: "blue",
+      widget: { size: "small" },
+    } as const;
+    const HOSTS = ["api.github.com", "feeds.example.com"] as const;
+    const inPlace = defineApp({ ...rest, network: ["api.github.com"] });
+    const constant = defineApp({ ...rest, network: HOSTS });
+    expect(inPlace.network).toEqual(["api.github.com"]);
+    expect(constant.network).toBe(HOSTS);
+    expectTypeOf(inPlace).toExtend<Manifest>();
+    expectTypeOf(constant).toExtend<Manifest>();
+    expectTypeOf<Manifest["network"]>().toEqualTypeOf<readonly string[] | undefined>();
   });
 });
 
@@ -273,5 +297,32 @@ describe("SettingsOf", () => {
 
   it("is a record of any setting value when the manifest is not known exactly", () => {
     expectTypeOf<SettingsOf<Manifest>>().toEqualTypeOf<{ [name: string]: string | number | boolean | string[] }>();
+  });
+});
+
+describe("SpaceSettingsOf, the settings a job sees", () => {
+  it("gives the settings of the space alone, each typed as in SettingsOf", () => {
+    expectTypeOf<SpaceSettingsOf<Grocery>>().toEqualTypeOf<{ aisles: string[]; shop: string; budget: number }>();
+    expectTypeOf<SpaceSettingsOf<Grocery>>().toEqualTypeOf<Pick<SettingsOf<Grocery>, "aisles" | "shop" | "budget">>();
+  });
+
+  it("is empty for an app without settings, and for one whose settings are each person's own", () => {
+    const own = defineApp({
+      id: "x1",
+      name: { en: "X", zh: "某" },
+      description: { en: "X", zh: "某" },
+      icon: "box",
+      color: "blue",
+      widget: { size: "small" },
+      settings: { hideDone: { type: "switch", scope: "user", default: false, label: { en: "Hide", zh: "隐藏" } } },
+    });
+    expect(own.settings?.hideDone.scope).toBe("user");
+    expectTypeOf<keyof SpaceSettingsOf<typeof bare>>().toBeNever();
+    expectTypeOf<keyof SpaceSettingsOf<typeof own>>().toBeNever();
+    expectTypeOf<keyof SettingsOf<typeof own>>().toEqualTypeOf<"hideDone">();
+  });
+
+  it("is a record of any setting value when the manifest is not known exactly", () => {
+    expectTypeOf<SpaceSettingsOf<Manifest>>().toEqualTypeOf<{ [name: string]: string | number | boolean | string[] }>();
   });
 });

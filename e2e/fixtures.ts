@@ -4,10 +4,12 @@
  * `api` stands in for the server: it answers GET /api/session and
  * PATCH /api/me from memory, checks both against the shared contract, and
  * remembers what was saved, so a reload sees it. It also answers for the
- * framework's two sample apps (packages/fixture-apps), which the tested
- * build holds: the checklist's routes, from a list kept here, both apps'
- * settings, adding either to a space, removing an app, moving one to
- * another space, and each person's switch and pin. And it keeps groups:
+ * framework's three sample apps (packages/fixture-apps), which the tested
+ * build holds: the checklist's routes, from a list kept here, the
+ * headlines' query and its job's two routes (its status, from `jobs`, and
+ * a run asked for), the apps' settings, adding any of them to a space,
+ * removing an app, moving one to another space, and each person's switch
+ * and pin. And it keeps groups:
  * creating one, renaming it, adding,
  * changing and removing people, invitations, the owners' list of a group
  * and who can use each app (`groups`, `people`). The owners' list of a
@@ -25,6 +27,7 @@ import {
   appSettingsPatchSchema,
   appSettingsSchema,
   createSpaceRequestSchema,
+  jobStatusSchema,
   memberPatchSchema,
   moveAppRequestSchema,
   preferencesPatchSchema,
@@ -35,6 +38,7 @@ import {
   type ApiErrorCode,
   type AppSettings,
   type AppSummary,
+  type JobStatus,
   type PreferencesPatch,
   type Session,
   type SpaceApps,
@@ -139,9 +143,11 @@ export function sessionWithApps(overrides: Partial<Session["user"]> = {}): Sessi
 }
 
 /**
- * A member whose spaces hold the two apps this build really carries: the
+ * A member whose spaces hold two of the apps this build really carries: the
  * checklist in the family space and the feed in their own. Their widgets
- * and the checklist's page are drawn from the apps' own code.
+ * and the checklist's page are drawn from the apps' own code. A test of the
+ * headlines, whose job the stand-in answers for too, adds them itself
+ * (`sampleApp("headlines", ...)`).
  */
 export function sessionWithSampleApps(overrides: Partial<Session["user"]> = {}, checklist: Partial<AppSummary> = {}): Session {
   const session = sessionWithApps(overrides);
@@ -151,19 +157,43 @@ export function sessionWithSampleApps(overrides: Partial<Session["user"]> = {}, 
   };
 }
 
-/** One of the two apps this build holds, in a space, as the session lists it. */
-export function sampleApp(id: "checklist" | "feed", spaceId: string, extra: Partial<AppSummary> = {}): AppSummary {
+/** The apps this build holds: the framework's sample apps. */
+export const SAMPLE_APPS = ["checklist", "feed", "headlines"] as const;
+export type SampleAppId = (typeof SAMPLE_APPS)[number];
+
+/** One of the apps this build holds, in a space, as the session lists it. */
+export function sampleApp(id: SampleAppId, spaceId: string, extra: Partial<AppSummary> = {}): AppSummary {
   if (id === "checklist") {
     return app("checklist", spaceId, "Checklist", "清单", "A list of things to do, ticked off as you go.", "一份待办清单，完成一项勾选一项。", "list-checks", "teal", {
       widgetSize: "tall",
       ...extra,
     });
   }
+  if (id === "headlines") {
+    return app(
+      "headlines",
+      spaceId,
+      "Headlines",
+      "头条",
+      "The latest headlines of a sample news feed, fetched every hour.",
+      "示例新闻源的最新头条，每小时获取一次。",
+      "file-text",
+      "orange",
+      { widgetSize: "tall", hasPage: false, ...extra },
+    );
+  }
   return app("feed", spaceId, "Feed", "动态", "A sample card that each person filters for themselves.", "每个人可以自行筛选的示例卡片。", "trending-up", "purple", {
     widgetSize: "wide",
     hasPage: false,
     ...extra,
   });
+}
+
+/** The status of a job that ran once and went well, the run starting at `startedAt` and ending two seconds later. */
+export function jobThatRan(startedAt: string): JobStatus {
+  const ended = new Date(Date.parse(startedAt) + 2_000).toISOString();
+  const next = new Date(Date.parse(startedAt) + 60 * 60_000).toISOString();
+  return { lastStartedAt: startedAt, lastSucceededAt: ended, lastFailedAt: null, lastError: null, nextRunAt: next, state: "idle" };
 }
 
 /** One item of the sample checklist, as its `list` query answers. */
@@ -200,11 +230,20 @@ export class FakeApi {
 
   /** What the sample checklist holds, wherever it is. Change it to stand in for someone else's change. */
   items: ChecklistItem[] = [item("item-1", "Water the plants"), item("item-2", "Book the dentist"), item("item-3", "Return the library books", true)];
-  /** The sample apps' settings, by app ID. */
+  /** The sample apps' settings, by app ID. The headlines have none, so nothing asks for theirs. */
   appSettings: Record<string, AppSettings> = {
     checklist: { space: { sections: [] }, user: { hideDone: false } },
     feed: { space: {}, user: { topics: [], period: "day" } },
   };
+  /** What the sample headlines' job kept, wherever the app is: the titles its `latest` query answers, in order. */
+  headlines: string[] = ["Rain expected in the hills tonight", "The library opens a new reading room", "Market prices hold steady"];
+  /**
+   * How the sample apps' jobs are doing, by "app/job": what GET
+   * .../jobs/:job answers. A run asked for (POST .../run) turns an idle job
+   * into "requested", as the server does; a test then plays the run by
+   * setting the status it ended with.
+   */
+  jobs: Record<string, JobStatus> = { "headlines/refresh": jobThatRan("2026-11-10T08:00:00.000Z") };
   /** Make every route of every app fail, for example `{ status: 500, code: "internal", message: "Sample failure" }`. */
   appFailure: Failure | null = null;
   /** Every request made for an app, as "METHOD path", in order. */
@@ -298,9 +337,9 @@ export class FakeApi {
       if (method === "PUT") {
         const parsed = addAppRequestSchema.safeParse(body);
         if (!parsed.success) return fail({ status: 400, code: "invalid_request", message: "Sample failure" });
-        if (!space || (appId !== "checklist" && appId !== "feed")) return fail({ status: 404, code: "not_found", message: "No such app" });
+        if (!space || !SAMPLE_APPS.some((id) => id === appId)) return fail({ status: 404, code: "not_found", message: "No such app" });
         if (!space.canAddApps) return fail({ status: 403, code: "forbidden", message: "Sample failure" });
-        if (!listed) this.setSession({ ...this.current, apps: [...this.current.apps, sampleApp(appId, spaceId)] });
+        if (!listed) this.setSession({ ...this.current, apps: [...this.current.apps, sampleApp(appId as SampleAppId, spaceId)] });
         const entry = owners?.apps.find((candidate) => candidate.id === appId);
         if (owners && !entry) {
           owners.apps.push({ id: appId, hasCode: true, removedAt: null, rowCount: 0, memberAccess: parsed.data.memberAccess ?? "none", members: {} });
@@ -343,10 +382,14 @@ export class FakeApi {
       if (listed?.access === "view" && rest === "settings" && request.method() === "PATCH" && (body as { space?: unknown } | null)?.space) {
         return fail({ status: 403, code: "forbidden", message: "Sample failure" });
       }
+      // A run asked for needs edit access too, once the job is known to be there.
+      if (listed?.access === "view" && request.method() === "POST" && /^jobs\/[^/]+\/run$/.test(rest) && this.jobs[`${appId}/${rest.split("/")[1]}`]) {
+        return fail({ status: 403, code: "forbidden", message: "Sample failure" });
+      }
       const answer = listed ? this.answerForApp(appId, rest, request.method(), body) : undefined;
       if (answer === undefined) return fail({ status: 404, code: "not_found", message: "No such app or route" });
-      if ("status" in answer) return fail(answer);
-      return route.fulfill({ json: answer.json });
+      if ("code" in answer) return fail(answer);
+      return route.fulfill({ status: answer.status ?? 200, json: answer.json });
     }
 
     return fail({ status: 404, code: "not_found", message: "No such route" });
@@ -533,7 +576,21 @@ export class FakeApi {
   }
 
   /** What the sample apps answer, checked against the shared contract. Undefined: nothing at this address. */
-  private answerForApp(appId: string, rest: string, method: string, body: unknown): { json: unknown } | Failure | undefined {
+  private answerForApp(appId: string, rest: string, method: string, body: unknown): { json: unknown; status?: number } | Failure | undefined {
+    // A job's status, and a run asked for, which the server answers with 202 and the status.
+    const job = /^jobs\/([^/]+)(\/run)?$/.exec(rest);
+    if (job) {
+      const key = `${appId}/${job[1]}`;
+      const status = this.jobs[key];
+      if (!status) return undefined;
+      if (!job[2] && method === "GET") return { json: jobStatusSchema.parse(status) };
+      if (job[2] && method === "POST") {
+        // During a run, asking changes nothing.
+        if (status.state === "idle") this.jobs[key] = { ...status, state: "requested" };
+        return { json: jobStatusSchema.parse(this.jobs[key]), status: 202 };
+      }
+      return undefined;
+    }
     const settings = this.appSettings[appId];
     if (rest === "settings" && method === "GET" && settings) return { json: appSettingsSchema.parse(settings) };
     if (rest === "settings" && method === "PATCH" && settings) {
@@ -544,12 +601,21 @@ export class FakeApi {
       this.appSettings[appId] = updated;
       return { json: appSettingsSchema.parse(updated) };
     }
-    if (appId !== "checklist" || method !== "POST") return undefined;
+    if ((appId !== "checklist" && appId !== "headlines") || method !== "POST") return undefined;
 
     const envelope = appCallRequestSchema.safeParse(body);
     if (!envelope.success) return { status: 400, code: "invalid_request", message: "Sample failure" };
     const input = (envelope.data.input ?? {}) as { id?: string; name?: string; section?: string; done?: boolean };
     const output = (value: unknown) => ({ json: appCallResponseSchema.parse({ output: value }) });
+
+    if (appId === "headlines") {
+      if (rest !== "q/latest") return undefined;
+      // Written by the job, in the name of whoever added the app, when its last run went well.
+      const at = this.jobs["headlines/refresh"]?.lastSucceededAt ?? "2026-11-10T08:00:00.000Z";
+      return output(
+        this.headlines.map((title, index) => ({ id: `headline-${index + 1}`, title, createdBy: "user-1", updatedBy: "user-1", createdAt: at, updatedAt: at })),
+      );
+    }
 
     if (rest === "q/list") return output(this.items);
     if (rest === "m/tick") {

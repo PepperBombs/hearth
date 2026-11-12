@@ -2,11 +2,12 @@
  * The routes for apps in a space (docs/mini-app-contract.md, section A8):
  * the owners' list of a space's apps and who can use them, and for one app
  * add or bring back, remove, move to another space, delete the data, who
- * can use it, each person's own switch and pin, the app's settings, and the
- * app's own queries and mutations. The request shapes are in
- * `@hearth/shared`. The owners' list, the settings routes and a query or
- * mutation answer with a body; after the others the web app reloads the
- * session to see what changed.
+ * can use it, each person's own switch and pin, the app's settings, the
+ * app's own queries and mutations, and the status of its jobs and a run
+ * asked for now (section C, "Routes"). The request and answer shapes are in
+ * `@hearth/shared`. The owners' list, the settings routes, a query or
+ * mutation and the two job routes answer with a body; after the others the
+ * web app reloads the session to see what changed.
  */
 import {
   addAppRequestSchema,
@@ -17,6 +18,7 @@ import {
   deleteAppDataRequestSchema,
   moveAppRequestSchema,
   type AppSettings,
+  type JobStatus,
   type SpaceApps,
 } from "@hearth/shared";
 import type { Hono } from "hono";
@@ -25,14 +27,27 @@ import { readBody } from "../http/body";
 import type { Env, RequireMember } from "../http/env";
 import { callApp } from "./calls";
 import { addApp, deleteAppData, listSpaceApps, moveApp, removeApp, setAppAccess, setAppPrefs } from "./installs";
+import { jobStatus, requestRun } from "./jobs";
 import type { Registry } from "./registry";
 import { changeAppSettings, readAppSettings } from "./settings";
 
-export type AppRoutesOptions = { db: Db; registry: Registry; requireMember: RequireMember };
+export type AppRoutesOptions = {
+  db: Db;
+  registry: Registry;
+  requireMember: RequireMember;
+  /** Tells the scheduler that a job may have fallen due at once (see `AppOptions.wakeJobs`). */
+  wakeJobs: () => void;
+  /**
+   * The least time between the start of a job's run and that of a run
+   * asked for: five minutes, or five seconds where stand-ins answer every
+   * fetch (`requestGapFor` in jobs.ts).
+   */
+  requestGapMs: number;
+};
 
 /** Adds the routes to the application. Call it before the catch-all for unknown `/api` paths. */
 export function registerAppRoutes(app: Hono<Env>, options: AppRoutesOptions): void {
-  const { db, registry, requireMember } = options;
+  const { db, registry, requireMember, wakeJobs, requestGapMs } = options;
 
   // Every app the space has, removed ones and those without code included, with who can use
   // each, and everyone in the space: what its owners manage access with.
@@ -45,7 +60,9 @@ export function registerAppRoutes(app: Hono<Env>, options: AppRoutesOptions): vo
   app.put("/api/spaces/:spaceId/apps/:appId", requireMember, async (c) => {
     const { memberAccess } = await readBody(c, addAppRequestSchema);
     const { spaceId, appId } = c.req.param();
-    addApp(db, registry, { userId: c.get("user").id, spaceId, appId, memberAccess });
+    const done = addApp(db, registry, { userId: c.get("user").id, spaceId, appId, memberAccess });
+    // A job that has not run in this space is due at once, and one brought back may be overdue.
+    if (done !== "unchanged") wakeJobs();
     return c.body(null, 204);
   });
 
@@ -115,4 +132,26 @@ export function registerAppRoutes(app: Hono<Env>, options: AppRoutesOptions): vo
       return c.body(answer, 200, { "content-type": "application/json" });
     });
   }
+
+  // How one of the app's jobs went here: when its runs started, went well
+  // and went wrong, and whether one is going on or was asked for. View
+  // access is enough. A job is no route (its name is no query's or
+  // mutation's, see callApp), and nothing here runs one: the scheduler does.
+  app.get("/api/spaces/:spaceId/apps/:appId/jobs/:job", requireMember, (c) => {
+    const { spaceId, appId, job } = c.req.param();
+    const status: JobStatus = jobStatus(db, registry, { userId: c.get("user").id, spaceId, appId, job });
+    return c.json(status);
+  });
+
+  // Ask the scheduler for a run now, as "Refresh now" does: edit access, no
+  // body. It starts at once, or once the gap after the last run's start is
+  // over, never sooner, so that asking again and again cannot hammer a
+  // host. Answers 202: the run is to come, and the status says where it stands.
+  app.post("/api/spaces/:spaceId/apps/:appId/jobs/:job/run", requireMember, (c) => {
+    const { spaceId, appId, job } = c.req.param();
+    const status: JobStatus = requestRun(db, registry, { userId: c.get("user").id, spaceId, appId, job }, new Date(), requestGapMs);
+    // A run asked for may be due at once. During a run nothing was asked: the scheduler looks again after it anyway.
+    if (status.state === "requested") wakeJobs();
+    return c.json(status, 202);
+  });
 }
