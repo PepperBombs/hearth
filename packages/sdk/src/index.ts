@@ -13,7 +13,8 @@
  * import it.
  *
  * The design is docs/mini-app-contract.md, sections A1 and A2, and for the
- * hosts in `network` section C.
+ * hosts in `network` and the settings a job sees (`SpaceSettingsOf`)
+ * section C.
  */
 
 /**
@@ -135,7 +136,9 @@ export type Manifest<S = Record<string, Setting>, M = Record<string, string>> = 
    * ("api.github.com"): one to ten, each written once, exactly as the
    * requests name it. Whoever adds the app is shown them. Left out, the app
    * fetches nothing. A name of the local network (`localhost`, or one ending
-   * in `.localhost`, `.local`, `.internal` or `.home.arpa`) is refused.
+   * in `.localhost`, `.local`, `.internal` or `.home.arpa`) is refused, and
+   * so are hosts in an app whose server file defines no job (`app.job` in
+   * `@hearth/sdk/server`), since only a job fetches.
    */
   network?: readonly string[];
   /** Keyed by the name code reads the value under. */
@@ -197,6 +200,20 @@ type SettingValue<F> = F extends { type: "text" }
  */
 export type SettingsOf<A> =
   ManifestOf<A> extends { settings?: infer S } ? { -readonly [K in keyof S]: SettingValue<S[K]> } : never;
+
+/** The scope a setting declares: both, when it is not known exactly. */
+type ScopeOf<F> = F extends { scope: infer Scope } ? Scope : never;
+
+/**
+ * The settings a job receives (`@hearth/sdk/server`): those of scope
+ * "space", typed as in `SettingsOf`. A job runs for the app in a space and
+ * for no one in it, so no person's own settings are among them. When the
+ * manifest is not known exactly, any setting may be one of the space's.
+ */
+export type SpaceSettingsOf<A> =
+  ManifestOf<A> extends { settings?: infer S }
+    ? { -readonly [K in keyof S as "space" extends ScopeOf<S[K]> ? K : never]: SettingValue<S[K]> }
+    : never;
 
 /** The English strings of `A`, which define its message keys. */
 type MessagesOf<A> = ManifestOf<A> extends { messages?: { en: infer M } } ? M : never;

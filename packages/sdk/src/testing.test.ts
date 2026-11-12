@@ -46,6 +46,9 @@ const server = app.routes({
   clear: app.mutation({ description: "Deletes every item." }, (ctx) => {
     ctx.db.items.removeWhere({});
   }),
+  tidy: app.job({ description: "Deletes every ticked item, once an hour.", everyMinutes: 60 }, (ctx) => {
+    ctx.write((db) => db.items.removeWhere({ done: true }));
+  }),
 });
 
 type Server = typeof server;
@@ -73,6 +76,10 @@ describe("testApp's types", () => {
       caller.query("find");
       // @ts-expect-error the route takes no input
       caller.query("list", {});
+      // @ts-expect-error a job is not called like a query
+      caller.query("tidy");
+      // @ts-expect-error nor like a mutation
+      caller.mutation("tidy");
     };
     expectTypeOf(calls).toBeFunction();
   });

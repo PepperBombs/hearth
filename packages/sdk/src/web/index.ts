@@ -21,6 +21,7 @@ export {
   type AppHooks,
   type AppLike,
   type InputArgs,
+  type JobName,
   type MutationName,
   type MutationResult,
   type Output,

@@ -8,7 +8,7 @@ import { Component, type ReactNode } from "react";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { defineApp } from "../index";
 import { defineServer, z, type Row } from "../server";
-import { appHooks, type InputArgs, type MutationName, type Output, type QueryName } from "./index";
+import { appHooks, type InputArgs, type JobName, type MutationName, type Output, type QueryName } from "./index";
 import { AppScopeContext, type AppScopeValue } from "./scope";
 
 const manifest = defineApp({
@@ -51,15 +51,19 @@ const server = app.routes({
     ctx.db.items.removeWhere({ done: true }),
   ),
   touch: app.mutation({ description: "Does nothing and answers nothing." }, () => {}),
+  tidy: app.job({ description: "Deletes every ticked item, once an hour.", everyMinutes: 60 }, (ctx) => {
+    ctx.write((db) => db.items.removeWhere({ done: true }));
+  }),
 });
 type Server = typeof server;
 
 const { useApp, useQuery, useMutation } = appHooks<Server>();
 
 describe("the types of an app's hooks", () => {
-  it("name the app's queries and mutations, each kind apart", () => {
+  it("name the app's queries, mutations and jobs, each kind apart", () => {
     expectTypeOf<QueryName<Server>>().toEqualTypeOf<"list" | "inAisle" | "recent">();
     expectTypeOf<MutationName<Server>>().toEqualTypeOf<"add" | "clearTicked" | "touch">();
+    expectTypeOf<JobName<Server>>().toEqualTypeOf<"tidy">();
   });
 
   it("take what the route takes: nothing, its input, or an input that may be left out", () => {
@@ -123,6 +127,10 @@ describe("the types of an app's hooks", () => {
       expectTypeOf(useMutation("touch").run()).toEqualTypeOf<Promise<void>>();
       // @ts-expect-error: a query is not called like a mutation
       useMutation("list");
+      // @ts-expect-error: a job is neither read like a query
+      useQuery("tidy");
+      // @ts-expect-error: nor called like a mutation
+      useMutation("tidy");
       return null;
     }
     expect(Widget).toBeTypeOf("function");
@@ -132,6 +140,7 @@ describe("the types of an app's hooks", () => {
     const hooks = appHooks<typeof manifest>();
     expectTypeOf<QueryName<typeof manifest>>().toEqualTypeOf<never>();
     expectTypeOf<MutationName<typeof manifest>>().toEqualTypeOf<never>();
+    expectTypeOf<JobName<typeof manifest>>().toEqualTypeOf<never>();
     function Widget() {
       const { t, settings } = hooks.useApp();
       // @ts-expect-error: an app without a server file has no query to read

@@ -15,6 +15,7 @@ import {
   type MessageKey,
   type PlaceholderArgs,
   type SettingsOf,
+  type SpaceSettingsOf,
   type Translate,
 } from "./index";
 
@@ -296,5 +297,31 @@ describe("SettingsOf", () => {
 
   it("is a record of any setting value when the manifest is not known exactly", () => {
     expectTypeOf<SettingsOf<Manifest>>().toEqualTypeOf<{ [name: string]: string | number | boolean | string[] }>();
+  });
+});
+
+describe("SpaceSettingsOf, the settings a job sees", () => {
+  it("gives the settings of the space alone, each typed as in SettingsOf", () => {
+    expectTypeOf<SpaceSettingsOf<Grocery>>().toEqualTypeOf<{ aisles: string[]; shop: string; budget: number }>();
+    expectTypeOf<SpaceSettingsOf<Grocery>>().toEqualTypeOf<Pick<SettingsOf<Grocery>, "aisles" | "shop" | "budget">>();
+  });
+
+  it("is empty for an app without settings, and for one whose settings are each person's own", () => {
+    const own = defineApp({
+      id: "x1",
+      name: { en: "X", zh: "某" },
+      description: { en: "X", zh: "某" },
+      icon: "box",
+      color: "blue",
+      widget: { size: "small" },
+      settings: { hideDone: { type: "switch", scope: "user", default: false, label: { en: "Hide", zh: "隐藏" } } },
+    });
+    expectTypeOf<keyof SpaceSettingsOf<typeof bare>>().toBeNever();
+    expectTypeOf<keyof SpaceSettingsOf<typeof own>>().toBeNever();
+    expectTypeOf<keyof SettingsOf<typeof own>>().toEqualTypeOf<"hideDone">();
+  });
+
+  it("is a record of any setting value when the manifest is not known exactly", () => {
+    expectTypeOf<SpaceSettingsOf<Manifest>>().toEqualTypeOf<{ [name: string]: string | number | boolean | string[] }>();
   });
 });

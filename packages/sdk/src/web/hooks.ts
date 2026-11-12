@@ -30,11 +30,11 @@
  */
 import { useContext } from "react";
 import type { Locale, SettingsOf, SpaceKind, Translate } from "../index";
-import type { AppLike, InputArgs, MutationName, Output, QueryName } from "../routes";
+import type { AppLike, InputArgs, JobName, MutationName, Output, QueryName } from "../routes";
 import { AppScopeContext, type AppScopeValue } from "./scope";
 
 // The route types are shared with @hearth/sdk/testing, which cannot load React.
-export type { AppLike, InputArgs, MutationName, Output, QueryName };
+export type { AppLike, InputArgs, JobName, MutationName, Output, QueryName };
 
 /** What `useApp()` gives a widget or page. */
 export type AppContext<S> = {

@@ -1,5 +1,6 @@
 /**
- * The names, inputs and outputs of an app's routes, read off its types.
+ * The names, inputs and outputs of an app's routes, and the names of its
+ * jobs, read off its types.
  *
  * `S` stands for an app: what its `server.ts` default-exports, or its
  * manifest for an app without a server file (which has no routes). The
@@ -28,6 +29,12 @@ type NamesOfKind<S, Kind extends string> = {
 export type QueryName<S> = NamesOfKind<S, "query">;
 /** The names of an app's mutations. */
 export type MutationName<S> = NamesOfKind<S, "mutation">;
+/**
+ * The names of an app's jobs. They share one set of names with the queries
+ * and mutations, but a job is never called like one: `QueryName` and
+ * `MutationName` leave it out.
+ */
+export type JobName<S> = NamesOfKind<S, "job">;
 
 type RouteOf<S, K> = K extends keyof RoutesOf<S> ? RoutesOf<S>[K] : never;
 
