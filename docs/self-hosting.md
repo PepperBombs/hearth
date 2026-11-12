@@ -3,9 +3,10 @@
 This guide sets up one Linux server with no public ports. Cloudflare Tunnel
 carries traffic to it and Cloudflare Access decides who gets in.
 
-**Not yet tested on a real server.** The steps below were written alongside
-the code and the deploy script, but nobody has run them end to end. Treat the
-first installation as a test, and expect to correct details.
+**Tested on one real server so far.** The steps below have been run end to
+end once, with the releases up to the grocery list. Scheduled jobs and what
+they fetch from outside (GitHub Trending) came later and have not yet run
+on a real server. Expect details to differ on yours, and correct them here.
 
 Everything personal (your domain, email address, secrets) stays on the server
 and never goes into a repository.
@@ -94,8 +95,18 @@ database or puts it back.
 
 The deploy script does not update itself. When a release brings a newer
 one, the journal says so after the switch ("deploy/hearth-deploy.sh in this
-release differs from the installed copy"): install it again with the same
-`install` line. A copy from before mini-apps were built in keeps building
+release differs from the installed copy"). Install it from the release that
+is running, not from the checkout of step 3: the deploy only fetches into
+`/opt/hearth/repos/hearth`, so the files there stay as they were when you
+cloned it, and the `install` line above would put the old copy back. The
+same goes for the systemd units and the polkit rule, should a release
+change them.
+
+```sh
+sudo install -m 755 /opt/hearth/current/hearth/deploy/hearth-deploy.sh /usr/local/bin/hearth-deploy
+```
+
+A copy from before mini-apps were built in keeps building
 every release without them, and a copy from before jobs existed starts the
 trial of a new release with its jobs on, so that for the seconds the trial
 lasts they run against the copy of the database and may fetch from
