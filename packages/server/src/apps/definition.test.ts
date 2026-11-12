@@ -1,10 +1,10 @@
 /**
  * The check of what an app's `server.ts` exports, and that a server with a
  * bad one does not start (docs/mini-app-contract.md, sections A3 and A7,
- * and the owner's decision 7).
+ * the owner's decision 7, and for jobs section C).
  */
 import { defineApp } from "@hearth/sdk";
-import { defineServer, z } from "@hearth/sdk/server";
+import { defineServer, z, type Job } from "@hearth/sdk/server";
 import { describe, expect, it } from "vitest";
 import checklist from "../../../fixture-apps/checklist/manifest";
 import checklistServer from "../../../fixture-apps/checklist/server";
@@ -25,6 +25,9 @@ const notes = defineApp({
 const app = defineServer(notes, { notes: z.object({ text: z.string() }) });
 const all = app.query({ description: "Lists every note, oldest first." }, (ctx) => ctx.db.notes.list());
 const good = app.routes({ all });
+const tidy = app.job({ description: "Deletes every note, once a day.", everyMinutes: 1440 }, (ctx) => {
+  ctx.write((db) => db.notes.removeWhere({}));
+});
 
 /** A server file like `good`, with one thing replaced. */
 const withRoutes = (routes: Record<string, unknown>) => ({ ...good, routes });
@@ -35,6 +38,7 @@ describe("checkServer", () => {
     expect(checkServer(good, notes)).toEqual([]);
     expect(checkServer(checklistServer, checklist)).toEqual([]);
     expect(checkServer(defineServer(notes, {}).routes({}), notes)).toEqual([]);
+    expect(checkServer(app.routes({ all, tidy }), notes)).toEqual([]);
   });
 
   it.each([
@@ -92,8 +96,17 @@ describe("checkServer", () => {
     ["a route without a handler", { kind: "query", description: "Lists notes." }],
   ])("refuses %s in the place of a route", (_what, route) => {
     const problems = checkServer(withRoutes({ all: route }), notes);
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain('server route "all": Must be made with app.query(...) or app.mutation(...)');
+    expect(problems).toEqual(['server route "all": Must be made with app.query(...), app.mutation(...) or app.job(...).']);
+  });
+
+  it("refuses a job without its function, and what a job says about itself in the place of one", () => {
+    const withoutRun = { kind: tidy.kind, description: tidy.description, everyMinutes: tidy.everyMinutes };
+    expect(checkServer(withRoutes({ tidy: withoutRun }), notes)).toEqual([
+      'server job "tidy": Must be made with app.query(...), app.mutation(...) or app.job(...).',
+    ]);
+    expect(checkServer(withRoutes({ tidy: { description: tidy.description, everyMinutes: 60 } }), notes)).toEqual([
+      'server route "tidy": Must be made with app.query(...), app.mutation(...) or app.job(...).',
+    ]);
   });
 
   it("refuses an input that is not a zod schema", () => {
@@ -143,6 +156,62 @@ describe("checkServer", () => {
     expect(problems[0]).toContain('server collection "my-notes": Its name must be letters');
   });
 
+  describe("every job", () => {
+    it("runs from every quarter of an hour to once a week, in whole minutes", () => {
+      for (const everyMinutes of [15, 16, 60, 1440, 10080]) {
+        expect(checkServer(withRoutes({ all, tidy: { ...tidy, everyMinutes } }), notes), String(everyMinutes)).toEqual([]);
+      }
+    });
+
+    it.each([
+      [14, "14"],
+      [10081, "10081"],
+      [60.5, "60.5"],
+      [0, "0"],
+      [-60, "-60"],
+      [Number.NaN, "NaN"],
+      [Number.POSITIVE_INFINITY, "Infinity"],
+      ["60", '"60"'],
+      [60n, "60"],
+      [null, "null"],
+      [undefined, "missing"],
+    ])("is refused when it runs every %s minutes", (everyMinutes, shown) => {
+      expect(checkServer(withRoutes({ all, tidy: { ...tidy, everyMinutes } }), notes)).toEqual([
+        `server job "tidy": everyMinutes, how often it runs, must be a whole number of minutes from 15 to 10080 (a week); it is ${shown}.`,
+      ]);
+    });
+
+    it.each([
+      ["no description", undefined],
+      ["an empty description", ""],
+      ["a description of spaces only", "  "],
+      ["a description that is not text", { en: "Deletes notes." }],
+    ])("is refused with %s", (_what, description) => {
+      expect(checkServer(withRoutes({ tidy: { ...tidy, description } }), notes)).toEqual([
+        'server job "tidy": Needs a description, one English sentence saying what the job does, for a reader who has not seen the app.',
+      ]);
+    });
+
+    it("is refused with an input, which it could never be given", () => {
+      const input = z.object({ id: z.string() });
+      const expected = ['server job "tidy": A job takes no input: it runs by itself, for no one. Leave input out.'];
+      expect(checkServer(withRoutes({ tidy: { ...tidy, input } }), notes)).toEqual(expected);
+      // Given to app.job past the types, as plain JavaScript could.
+      const sloppy = (app.job as (about: object, run: () => void) => Job)(
+        { description: "Deletes every note, once a day.", everyMinutes: 1440, input },
+        () => {},
+      );
+      expect(checkServer(withRoutes({ tidy: sloppy }), notes)).toEqual(expected);
+    });
+
+    it("has a name like any route's, and is told apart in what is wrong with it", () => {
+      expect(checkServer(withRoutes({ "tidy-up": tidy }), notes)).toEqual([
+        'server job "tidy-up": Its name must be letters, digits and underscores, starting with a letter.',
+      ]);
+      expect(checkServer(withRoutes({ tidy: { ...tidy, description: "", everyMinutes: 5, input: z.string() } }), notes)).toHaveLength(3);
+    });
+  });
+
   it("reports everything that is wrong at once", () => {
     const problems = checkServer(
       {
@@ -187,6 +256,15 @@ describe("the registry", () => {
     expect(() =>
       createApp({ config: testConfig(), db: testDatabase(), apps: [bundled({ routes: {} })] }),
     ).toThrow(AppRegistryError);
+  });
+
+  it("holds an app's jobs beside its queries, and stops the server for a job that runs too often", () => {
+    const server = app.routes({ all, tidy });
+    expect(createRegistry([bundled(server)]).get("notes")?.server?.routes.tidy).toBe(tidy);
+    const build = () =>
+      createApp({ config: testConfig(), db: testDatabase(), apps: [...FIXTURE_APPS, bundled(withRoutes({ all, tidy: { ...tidy, everyMinutes: 14 } }))] });
+    expect(build).toThrow(AppRegistryError);
+    expect(build).toThrow(/App "notes": server job "tidy": everyMinutes, how often it runs, must be a whole number of minutes from 15 to 10080/);
   });
 });
 

@@ -96,9 +96,9 @@ writes nothing then:
 
 The same scan is an ESLint rule (`hearth/mini-app-imports`, from
 `@hearth/sdk/eslint`), together with a ban on `fetch`, `process`,
-`localStorage`, `eval` and `Function`, so an editor shows a problem before
-the build refuses it. The scan is the gate; lint is the early warning.
-Neither is a sandbox.
+`localStorage`, `eval` and `Function` (an app fetches only in a job, with
+`ctx.fetch`), so an editor shows a problem before the build refuses it.
+The scan is the gate; lint is the early warning. Neither is a sandbox.
 
 `hearth-apps check` is what a mini-apps repository runs before a merge:
 sync, then that every app has its `README.md` and `package.json`, that every
@@ -238,6 +238,22 @@ the collection and the row in the server's log.
 A handler turns a request down by throwing `AppError` (`invalid_request`,
 `not_found` or `conflict`). Anything else that goes wrong in a handler is
 logged and answered with `500`, and whatever the mutation wrote is undone.
+
+A server file may also define **jobs** (`app.job`): what the app does by
+itself, every 15 minutes to once a week, once for each space it is in and
+for no one in it, such as fetching the latest headlines of a feed. A job
+sits in `app.routes` beside the queries and mutations, with a one-sentence
+description of its own and how often it runs, so that one list says
+everything an app does. It is never a route: `/q/` and `/m/` answer `404`
+for its name. Its function may wait, because it fetches, but it reads and
+writes rows only inside `ctx.read` and `ctx.write`, each one transaction
+whose work may not wait, so that no transaction is held open across the
+network. Only a job fetches, with `ctx.fetch`, and only from the hosts the
+manifest lists in `network`; an app that names hosts without a job does not
+start. The start-up check holds every job to its description, its interval
+and taking no input. Running jobs (`ctx.fetch` itself, the run and its
+transactions, the scheduler) is designed in section C of
+`docs/mini-app-contract.md` and not built yet: nothing runs a job today.
 
 ## An app's settings
 

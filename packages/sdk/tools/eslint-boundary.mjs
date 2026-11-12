@@ -10,7 +10,8 @@
  *    warning.
  *  - `no-restricted-globals`: an app does not reach outside by a global
  *    either. `fetch`, `process`, `localStorage`, `eval` and `Function` are
- *    refused.
+ *    refused. An app fetches only in a job, with `ctx.fetch`, from the
+ *    hosts its manifest lists (docs/mini-app-contract.md, section C).
  *  - comments cannot switch a rule off (`noInlineConfig`).
  *
  * This file needs only ESLint itself and the TypeScript parser the scan
@@ -83,7 +84,7 @@ const miniAppImportsRule = {
 const hearthPlugin = { rules: { "mini-app-imports": miniAppImportsRule } };
 
 const RESTRICTED_GLOBALS = [
-  { name: "fetch", message: "A mini-app does not fetch: its data comes from its own queries and mutations." },
+  { name: "fetch", message: "A mini-app fetches in a job, with ctx.fetch, from the hosts its manifest lists." },
   {
     name: "process",
     message: "A mini-app does not read the server's process or environment. What it needs to know is a setting in its manifest.",

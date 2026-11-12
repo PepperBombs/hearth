@@ -133,6 +133,26 @@ describe("hearth-apps check", () => {
     expect(generated(run, "web")).toContain(`${path.basename(repo)}/checklist/widget.tsx`);
   });
 
+  it("passes an app whose job fetches from the hosts its manifest names, and fails a job that runs too often and hosts without a job", { timeout: SLOW }, () => {
+    const repo = makeRepo({ files: { ...appFiles("headlines"), ...HEADLINES } });
+    const passed = hearthApps(["check"], { cwd: repo });
+    expect(passed.output).toContain("1 mini-app passed (headlines)");
+    expect(passed.status).toBe(0);
+
+    const server = path.join(repo, "headlines/server.ts");
+    fs.writeFileSync(server, fs.readFileSync(server, "utf8").replace("everyMinutes: 60", "everyMinutes: 14"));
+    const quiet = appFiles("quiet");
+    const manifest = "quiet/manifest.ts";
+    write(repo, { ...quiet, [manifest]: quiet[manifest]!.replace('widget: { size: "small" },', 'widget: { size: "small" },\n  network: ["feeds.example.com"],') });
+    const failed = hearthApps(["check"], { cwd: repo });
+    expect(failed.output).toContain(
+      'App "headlines": server job "refresh": everyMinutes, how often it runs, must be a whole number of minutes from 15 to 10080 (a week); it is 14.',
+    );
+    expect(failed.output).toContain('App "quiet": manifest network: Names hosts to fetch from, but the app has no job, and only a job fetches.');
+    expect(failed.output).toContain("failed (manifests and server files)");
+    expect(failed.status).toBe(1);
+  });
+
   it("has nothing to say about a folder without apps", () => {
     const run = hearthApps(["check"], { cwd: tempDir() });
     expect(run).toMatchObject({ status: 0, output: expect.stringContaining("no mini-apps to check") });
@@ -232,6 +252,51 @@ describe("hearth-apps check", () => {
     expect(failed.status).toBe(1);
   });
 });
+
+/**
+ * An app with a job, which nothing runs yet: a manifest naming the host it
+ * fetches from, and a server file with a query and the job, which fetches
+ * and then writes in a work of its own.
+ */
+const HEADLINES: Record<string, string> = {
+  "headlines/manifest.ts": `import { defineApp } from "@hearth/sdk";
+
+export default defineApp({
+  id: "headlines",
+  name: { en: "Headlines", zh: "头条" },
+  description: { en: "The latest headlines of a news feed.", zh: "新闻源的最新头条。" },
+  icon: "file-text",
+  color: "teal",
+  widget: { size: "small" },
+  network: ["feeds.example.com"],
+});
+`,
+  "headlines/server.ts": `import { defineServer, z } from "@hearth/sdk/server";
+import manifest from "./manifest";
+
+const app = defineServer(manifest, {
+  headlines: z.object({ title: z.string().max(200) }),
+});
+
+const feed = z.object({ items: z.array(z.object({ title: z.string() })) });
+
+export default app.routes({
+  latest: app.query({ description: "Lists the headlines kept, in the feed's order." }, (ctx) => ctx.db.headlines.list()),
+  refresh: app.job(
+    { description: "Fetches the latest headlines from the feed and keeps the first ten in place of the old ones.", everyMinutes: 60 },
+    async (ctx) => {
+      const answer = await ctx.fetch("https://feeds.example.com/headlines.json", { headers: { accept: "application/json" } });
+      if (!answer.ok) throw new Error(\`The feed answered \${answer.status}.\`);
+      const { items } = feed.parse(answer.json());
+      ctx.write((db) => {
+        db.headlines.removeWhere({});
+        for (const item of items.slice(0, 10)) db.headlines.insert({ title: item.title.slice(0, 200) });
+      });
+    },
+  ),
+});
+`,
+};
 
 /** A test that fails, in an app's folder. */
 const FAILING_TEST = 'import { expect, it } from "vitest";\n\nit("counts wrongly", () => {\n  expect(1 + 1).toBe(3);\n});\n';

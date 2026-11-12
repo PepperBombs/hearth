@@ -14,9 +14,9 @@ them, runs their tests, runs Hearth with them and starts new ones.
 
 | Import | Holds | For |
 |---|---|---|
-| `@hearth/sdk` | `defineApp`, the manifest types (`Manifest`, `Setting`, `Localized`), `SettingsOf`, the message types (`MessageKey`, `PlaceholderArgs`, `Translate`), the lists `APP_ICONS` and `APP_COLORS`, `APP_ID_PATTERN`, `SDK_VERSION`. Imports nothing. | Mini-apps and the framework. |
-| `@hearth/sdk/web` | `appHooks`, which gives a widget or page `useApp`, `useQuery` and `useMutation`, and their types (`AppHooks`, `AppContext`, `MutationResult`, `QueryName`, `MutationName`, `InputArgs`, `Output`, `AppLike`). The UI kit: `Button`, `IconButton`, `Input`, `Field`, `Switch`, `Checkbox`, `Chip`, `Tag`, `Segmented`, `Rows`, `Row`, `EmptyState`, `Dialog`, `DialogBody`, `Icon`, and the class helpers `buttonClass` and `chipClass`. | A mini-app's widget and page; the kit also the shell. |
-| `@hearth/sdk/server` | `defineServer`, `AppError`, `z` (the one zod that mini-apps use), and the types of a handler's context and of rows and collections (`QueryCtx`, `MutationCtx`, `Row`, `ReadCollection`, `Collection`, `Json`, `InputOf`, `OutputOf`). | A mini-app's `server.ts`. |
+| `@hearth/sdk` | `defineApp`, the manifest types (`Manifest`, `Setting`, `Localized`), `SettingsOf` and `SpaceSettingsOf`, the message types (`MessageKey`, `PlaceholderArgs`, `Translate`), the lists `APP_ICONS` and `APP_COLORS`, `APP_ID_PATTERN`, `SDK_VERSION`. Imports nothing. | Mini-apps and the framework. |
+| `@hearth/sdk/web` | `appHooks`, which gives a widget or page `useApp`, `useQuery` and `useMutation`, and their types (`AppHooks`, `AppContext`, `MutationResult`, `QueryName`, `MutationName`, `JobName`, `InputArgs`, `Output`, `AppLike`). The UI kit: `Button`, `IconButton`, `Input`, `Field`, `Switch`, `Checkbox`, `Chip`, `Tag`, `Segmented`, `Rows`, `Row`, `EmptyState`, `Dialog`, `DialogBody`, `Icon`, and the class helpers `buttonClass` and `chipClass`. | A mini-app's widget and page; the kit also the shell. |
+| `@hearth/sdk/server` | `defineServer`, `AppError`, `FetchError`, `z` (the one zod that mini-apps use), the types of a handler's context and of rows and collections (`QueryCtx`, `MutationCtx`, `Row`, `ReadCollection`, `Collection`, `Json`, `InputOf`, `OutputOf`), and those of a job (`JobAbout`, `Job`, `JobCtx`, `FetchInit`, `FetchResponse`, `FetchErrorCode`). | A mini-app's `server.ts`. |
 | `@hearth/sdk/testing` | `testApp`, which puts an app in a space of a database of its own and calls its routes as people in it, `AppCallError`, and their types (`TestApp`, `TestCaller`, `TestPerson`, `TestAppOptions`). | A mini-app's tests (`*.test.ts`). |
 | `@hearth/sdk/testing/host` | `provideTestApp`: how the framework hands `testApp` its implementation. | The framework only. |
 | `@hearth/sdk/manifest-schema` | `manifestSchema`, a zod schema that checks a manifest at run time, and `settingValueProblems`, which says whether a value fits a setting. | The framework only. |
@@ -69,9 +69,9 @@ export default defineApp({
   anything ending in `.localhost`, `.local`, `.internal` or `.home.arpa`).
   Whoever adds the app is told, in the dialog that adds it: "Fetches data
   from api.github.com on its own." Leave it out for an app that fetches
-  nothing. It came with SDK 0.1.1, so a repository whose apps use it
-  declares `"hearth": { "sdk": "^0.1.1" }`. Jobs themselves, which do the
-  fetching, are not built yet (docs/mini-app-contract.md, section C).
+  nothing. Only a job fetches (see "Jobs" below), so an app that names
+  hosts and defines no job does not start. It came with SDK 0.1.1, so a
+  repository whose apps use it declares `"hearth": { "sdk": "^0.1.1" }`.
 
 ### Settings
 
@@ -177,6 +177,72 @@ export default app.routes({
 - `typeof server` (the default export) stands for the app in `SettingsOf`,
   `MessageKey` and `Translate`, and carries each route's input and output
   types (`InputOf`, `OutputOf`) for the hooks that call them.
+
+### Jobs
+
+A job is something the app does by itself, every so often, once for each
+space it is in: fetching the latest headlines of a feed, say. It sits in
+`app.routes` beside the queries and mutations, so the three share one set
+of names, and every description is in one place.
+
+```ts
+const app = defineServer(manifest, {
+  headlines: z.object({ title: z.string().max(200) }),
+});
+
+const feed = z.object({ items: z.array(z.object({ title: z.string() })) });
+
+export default app.routes({
+  latest: app.query({ description: "Lists the headlines kept, in the feed's order." }, (ctx) => ctx.db.headlines.list()),
+  refresh: app.job(
+    {
+      description: "Fetches the latest headlines from the feed and keeps the first ten in place of the old ones.",
+      everyMinutes: 60,
+    },
+    async (ctx) => {
+      const answer = await ctx.fetch("https://feeds.example.com/headlines.json");
+      if (!answer.ok) throw new Error(`The feed answered ${answer.status}.`);
+      const { items } = feed.parse(answer.json());
+      ctx.write((db) => {
+        db.headlines.removeWhere({});
+        for (const item of items.slice(0, 10)) db.headlines.insert({ title: item.title.slice(0, 200) });
+      });
+    },
+  ),
+});
+```
+
+The manifest of this app lists `network: ["feeds.example.com"]`.
+
+- **Every job has a `description`**, one English sentence, as a route
+  has, and **`everyMinutes`**, how often it runs: a whole number from 15
+  to 10080 (a week). It takes no input. The server does not start with a
+  job that breaks one of these, and `hearth-apps check` says so first.
+- **A job runs for the app in a space, for no one in it.** Its `ctx` has
+  `space` (`kind`, `name`), `settings` (the space's settings, typed by
+  `SpaceSettingsOf`: nobody's own), `now`, `fetch`, `read` and `write`,
+  and no person, access level or language.
+- **Its function may be `async`**, because it fetches. It reads and
+  writes the app's rows only in `ctx.read((db) => ...)` and
+  `ctx.write((db) => ...)`, each one transaction; `read` gives a `db` that
+  cannot write, and `write` keeps all of its changes or none. Their `work`
+  is not `async` and hands back no promise (a type error says so), so that
+  no transaction waits on the network: fetch first, then write.
+- **`ctx.fetch(url, { headers })`** GETs from a host the manifest lists in
+  `network`, and gives the answer whole: `url`, `status`, `ok`, `headers`,
+  `text` and `json()`. A status that is not 2xx is an answer, not an
+  error. When there is no answer it rejects with a `FetchError`, whose
+  `code` says why: `refused`, `timeout`, `too_large`, `network` or
+  `stopped`.
+- A run went well when the function returned or its promise resolved;
+  whatever it throws or rejects with makes it fail.
+- **A job is not a route.** `useQuery`, `useMutation` and a test's `query`
+  and `mutation` cannot name it (`JobName<typeof server>` names an app's
+  jobs), and the server answers 404 when one is asked for as a query or a
+  mutation.
+- **Nothing runs a job yet.** The SDK has its types and the server checks
+  every job when it starts; `ctx.fetch`, the run and the scheduler come in
+  the next steps of docs/mini-app-contract.md, section C.
 
 ## A widget and a page
 
@@ -346,7 +412,7 @@ grocery/
   manifest.ts      required: what makes the folder an app
   widget.tsx       required: the body of the app's card on the dashboard
   page.tsx         optional: the app's own page
-  server.ts        optional: collections, queries and mutations
+  server.ts        optional: collections, queries, mutations and jobs
   *.test.ts        optional: the app's tests
   package.json     required: the app's name; no dependencies
   README.md        required
@@ -380,7 +446,8 @@ both sides import may use neither side's part of the SDK. Write
 first is removed entirely when the file is compiled.
 
 A mini-app also leaves `fetch`, `process`, `localStorage`, `eval` and
-`Function` alone, and cannot switch a lint rule off with a comment.
+`Function` alone, and cannot switch a lint rule off with a comment. It
+fetches only in a job, with `ctx.fetch`, from the hosts its manifest lists.
 
 ### The command
 

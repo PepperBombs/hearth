@@ -316,6 +316,7 @@ describe("SpaceSettingsOf, the settings a job sees", () => {
       widget: { size: "small" },
       settings: { hideDone: { type: "switch", scope: "user", default: false, label: { en: "Hide", zh: "隐藏" } } },
     });
+    expect(own.settings?.hideDone.scope).toBe("user");
     expectTypeOf<keyof SpaceSettingsOf<typeof bare>>().toBeNever();
     expectTypeOf<keyof SpaceSettingsOf<typeof own>>().toBeNever();
     expectTypeOf<keyof SettingsOf<typeof own>>().toEqualTypeOf<"hideDone">();

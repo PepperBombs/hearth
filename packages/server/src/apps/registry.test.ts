@@ -1,4 +1,5 @@
 import { defineApp, type Manifest } from "@hearth/sdk";
+import { defineServer, z } from "@hearth/sdk/server";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { FIXTURE_APPS, testConfig, testDatabase } from "../testing";
@@ -72,6 +73,41 @@ describe("createRegistry", () => {
   ])("refuses a manifest with %s", (_label, change, where) => {
     const problems = problemsOf([bundled({ ...notes, ...change } as unknown as Manifest)]);
     expect(problems.join("\n")).toContain(where);
+  });
+
+  describe("hosts in network", () => {
+    const headlines = defineApp({ ...notes, id: "headlines", network: ["feeds.example.com"] });
+    const app = defineServer(headlines, { headlines: z.object({ title: z.string() }) });
+    const latest = app.query({ description: "Lists the headlines kept, newest first." }, (ctx) =>
+      ctx.db.headlines.list({ desc: true }),
+    );
+    const keep = app.job({ description: "Fetches the latest headlines and keeps them.", everyMinutes: 60 }, async (ctx) => {
+      const answer = await ctx.fetch("https://feeds.example.com/headlines.json");
+      ctx.write((db) => db.headlines.insert({ title: answer.text }));
+    });
+    const NO_JOB = 'App "headlines": manifest network: Names hosts to fetch from, but the app has no job, and only a job fetches. Define one in server.ts with app.job(...), or leave network out.';
+
+    it("are taken from an app with a job, which fetches from them", () => {
+      const registry = createRegistry([...FIXTURE_APPS, { ...bundled(headlines), server: app.routes({ latest, keep }) }]);
+      expect(registry.get("headlines")?.manifest.network).toEqual(["feeds.example.com"]);
+    });
+
+    it("are refused from an app without a server file, whose add dialog would announce what never happens", () => {
+      expect(problemsOf([...FIXTURE_APPS, bundled(headlines)])).toEqual([NO_JOB]);
+    });
+
+    it("are refused from an app whose server file has queries and mutations but no job", () => {
+      expect(problemsOf([{ ...bundled(headlines), server: app.routes({ latest }) }])).toEqual([NO_JOB]);
+    });
+
+    it("are not held against an app that leaves them out, with a job or without", () => {
+      const quiet = defineApp({ ...notes, id: "quiet" });
+      const job = defineServer(quiet, {}).job({ description: "Does nothing, once a week.", everyMinutes: 10080 }, () => {});
+      expect(() =>
+        createRegistry([bundled(quiet), { ...bundled(notes), server: defineServer(notes, {}).routes({}) }]),
+      ).not.toThrow();
+      expect(() => createRegistry([{ ...bundled(quiet), server: defineServer(quiet, {}).routes({ job }) }])).not.toThrow();
+    });
   });
 
   it("refuses a server file without a default export instead of taking the app for one without a server file", () => {

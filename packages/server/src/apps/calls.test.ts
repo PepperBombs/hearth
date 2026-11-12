@@ -173,10 +173,17 @@ const probeServer = probe.routes({
     },
     () => null,
   ),
+  // A job is never a route, whichever way it is asked for.
+  tidy: probe.job({ description: "Deletes every note, once an hour.", everyMinutes: 60 }, (ctx) => {
+    jobRuns += 1;
+    ctx.write((db) => db.notes.removeWhere({}));
+  }),
 });
 
 /** What the two async handlers did after the request was answered. */
 let late: { attempts: number; error: unknown };
+/** How often the probe's job ran. */
+let jobRuns = 0;
 
 const PROBE: BundledApp = { id: "probe", manifest: probeManifest, hasPage: false, server: probeServer };
 const ALL_APPS: readonly BundledApp[] = [...APPS, PROBE];
@@ -190,6 +197,7 @@ beforeEach(() => {
   world = family();
   ({ app, errors } = serverWith(ALL_APPS));
   late = { attempts: 0, error: undefined };
+  jobRuns = 0;
 });
 
 function post(who: string | null, path: string, body: unknown, on = app) {
@@ -532,6 +540,18 @@ describe("the address of a route", () => {
     await expectError(await query(SAM, world.samsSpace, "checklist", "add", { name: "Eggs" }), 404, "not_found");
     await expectError(await mutate(SAM, world.samsSpace, "checklist", "list"), 404, "not_found");
     expect(await listed(SAM, world.samsSpace)).toEqual(["Milk"]);
+  });
+
+  it("does not run a job asked for as a query or a mutation, whatever access the caller has", async () => {
+    install(world.db, world.family, "probe", world.sam.id, { memberAccess: "view" });
+    await outputOf(await mutate(SAM, world.family, "probe", "write", { text: "kept" }));
+    for (const who of [SAM, LIN]) {
+      await expectError(await query(who, world.family, "probe", "tidy"), 404, "not_found");
+      await expectError(await mutate(who, world.family, "probe", "tidy"), 404, "not_found");
+    }
+    expect(jobRuns).toBe(0);
+    expect(rows().map((row) => JSON.parse(row.data).text)).toEqual(["kept"]);
+    expect(errors).toEqual([]);
   });
 
   it("answers only POST", async () => {

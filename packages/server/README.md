@@ -195,11 +195,14 @@ this build holds, each as `{ id, manifest, hasPage, server? }`. It checks
 every manifest against the SDK's schema, that `id` equals the manifest's
 `id`, and that no ID comes twice. It also checks what an app's `server.ts`
 exports (`src/apps/definition.ts`): that it was made with `defineServer` and
-this app's manifest, that every query and mutation has a description, and
-that the names of routes, collections and fields are plain and no field is
-called like one of the fields every row has. If anything is wrong the server
-prints every problem and exits with status 1, before it opens the database
-or listens.
+this app's manifest, that every query, mutation and job has a description,
+that every job runs every 15 to 10080 minutes in whole minutes and takes no
+input, and that the names of routes, jobs, collections and fields are plain
+and no field is called like one of the fields every row has. An app whose
+manifest names hosts in `network` must define a job, since only a job
+fetches. If anything is wrong the server prints every problem and exits
+with status 1, before it opens the database or listens. Nothing runs a job
+yet (`docs/mini-app-contract.md`, section C).
 
 `main.ts` takes the list from `src/apps/registry.generated.js`, which
 `hearth-apps sync` writes before every build and before `pnpm dev` from the
@@ -291,7 +294,7 @@ does. An owner can delete its data without removing it first.
   is kept as a whole or not at all.
 - `404` when `resolveInstall` gives `null`, when the app has no server file,
   and when it has no route of that name and kind: a mutation cannot be
-  reached under `/q/`, nor a query under `/m/`.
+  reached under `/q/`, nor a query under `/m/`, nor a job under either.
 - `403` `forbidden` for a mutation by someone who may only view, before
   anything is said about the input.
 - `400` `invalid_request` when `input` does not fit the route's schema, when
