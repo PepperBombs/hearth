@@ -2,7 +2,8 @@
 
 This is the design the framework is being built to. It was agreed with the
 owner before any of it was written, and it changes only by agreement. Parts
-that are not built yet are marked in section B.
+that are not built yet are marked in section B. Section C, the design of
+build-order item 5, is not built yet.
 
 ## Owner's decisions (these override anything below that disagrees)
 
@@ -43,6 +44,8 @@ that are not built yet are marked in section B.
    on desktop and the Search tab on phones; the model is Claude by default,
    behind one interface so that another provider can replace it; it is off
    until a space's owner switches it on, and an owner can exclude apps.
+
+Decisions 8 to 15, for build-order item 5, are at the top of section C.
 
 ## A. The contract
 
@@ -642,7 +645,7 @@ Each step is one pull request; `pnpm check` passes at the end of each. A step th
    - **The fixtures.** `packages/fixture-apps` declares `hearth.sdk`, and its `tsconfig.json` extends the SDK's. `checklist` gained `package.json`, `README.md` and `widget.tsx`; `feed` has a manifest with two settings of each person's own, a widget and no server file. Both widgets are placeholders that draw the app's icon: a widget has no way to get strings, settings or data until step 8.
    - **The end-to-end tests build with the fixtures** (A7 lists that under CI): `playwright.config.ts` runs `pnpm apps:sync` with `HEARTH_APPS_DIR=packages/fixture-apps` before each build, so the workflow file did not change. After `pnpm e2e` both `dist` folders hold the sample apps until the next `pnpm build`.
    - **The deploy script is unchanged** (step 12). It does not pass `HEARTH_APPS_DIR`, so a deployed release still holds no mini-apps. The line is gone from `deploy/hearth.env.example`.
-   - **Proven here, as section D asked:** an apps folder outside the checkout, linked to the SDK, passes `check` (a unit test) and builds (`link:`-style symlink, `dedupe`, `@source`, `noExternal`; tried by hand with `pnpm build`, the built server and `pnpm dev`, and the same mechanics are under test with `packages/fixture-apps`, which has no React of its own either). The build fails without `resolve.dedupe`. `pnpm install` in such a folder and the deploy's `--offline` install were not tried: `hearth-stones` has no `package.json` until step 13.
+   - **Proven here, as section E asked:** an apps folder outside the checkout, linked to the SDK, passes `check` (a unit test) and builds (`link:`-style symlink, `dedupe`, `@source`, `noExternal`; tried by hand with `pnpm build`, the built server and `pnpm dev`, and the same mechanics are under test with `packages/fixture-apps`, which has no React of its own either). The build fails without `resolve.dedupe`. `pnpm install` in such a folder and the deploy's `--offline` install were not tried: `hearth-stones` has no `package.json` until step 13.
 8. **Widgets and pages in the shell.** *Built.* *Reviewed.* Add `AppScope`, `appHooks`, lazy widgets on the dashboard with skeleton and error states, the app page route, polling, session reload on `not_found` and the "Reload to update" card.
    *Testable:* e2e with fixtures: tick an item in the widget, see it on the page; the Content-Security-Policy still holds.
    *As built, where it differs from A1, A4 and A8:*
@@ -695,7 +698,7 @@ Each step is one pull request; `pnpm check` passes at the end of each. A step th
     *Testable:* rows and space settings arrive; access rows are gone; the mover's pin and own settings survive; the target having the app gives 409; the `sqlite_master` guard test.
     *As built, where it differs from A6 and A8:*
     - **The route** (`POST .../move`, `moveApp` in `packages/server/src/apps/installs.ts`) answers 204 with no body, and turns a request down in this order: 400 for a body that is not `{ toSpaceId, memberAccess? }`; 404 when `resolveInstall` gives `null` for the app where it is (a removed app and one whose code is gone included, also for an owner); 403 for anyone who does not own that space, whatever they may do with the app; 404 when the caller is not in the space `toSpaceId` names or it does not exist, one answer for both, so that a space's existence is not revealed; 403 for a plain member there without the right to add apps; 409 when the app's manifest leaves out that kind of space; 409 when that space has an entry for the app, removed or not, hidden from the caller or not, the space the app is in included. A refusal changes nothing.
-    - **A mover who is not an owner of the target gets an `edit` exception there**, as when they add an app (A6 "Access"). A6's step 1 deletes every exception, so without this a member who may add apps would move her own app into a group and lose it; section C3 says it arrives "visible only to the mover and the owner until access is chosen". The exception is written after the `UPDATE`, and is the one access row a move leaves.
+    - **A mover who is not an owner of the target gets an `edit` exception there**, as when they add an app (A6 "Access"). A6's step 1 deletes every exception, so without this a member who may add apps would move her own app into a group and lose it; section D3 says it arrives "visible only to the mover and the owner until access is chosen". The exception is written after the `UPDATE`, and is the one access row a move leaves.
     - **Any space the caller owns or may add apps to**, as A6 says. Decision 3 names the case of a group's owner moving an app into their own personal space; the same rule also lets them move it into another group, and anyone move an app out of their own personal space into a group where they may add apps.
     - **What goes and what stays.** The rows with their authors and times, the settings the space shares, and the own settings, switch and pin of everyone who is in both spaces go along. Those of everyone else are deleted first (A6 step 2); the SQL for their settings is `deleteOwnSettingsOfOthers` in `store.ts`, the one file for `app_settings`. `space_apps.created_by` and `created_at` stay, so the app keeps its place among the apps of its new space by when it was first added. `memberAccess` is stored as given for a personal space too, as adding does; nobody else is in one.
     - **The guard.** The `sqlite_master` test that step 3 put in `packages/server/src/db/apps-schema.test.ts` still checks the cascading key, and gained a second check: the tables with `space_id`, `app_id` and `user_id` are exactly the three `moveApp` clears of people who are not in the target, so a new one fails a test until the move deals with it (the database would refuse every move of that app out of a group).
@@ -713,7 +716,7 @@ Each step is one pull request; `pnpm check` passes at the end of each. A step th
     - **The deploy tests** (`deploy/tests/deploy.test.sh`: seven new cases, sixteen in all) run the real `hearth-apps sync`. Each made-up framework commit carries a copy of the SDK's `bin` and `tools/*.mjs` with an SDK version of its own, and the pnpm stand-in's `build` runs it, as the real build does first. In the mini-apps folder the stand-in does what pnpm does with a lockfile that holds only a `link:`: a relative link from `node_modules/@hearth/sdk`, and `ERR_PNPM_NO_LOCKFILE` when the lockfile is missing. The cases: a `HEARTH_BASE` with a colon, refused before anything is touched; mini-apps without apps (copied in, nothing installed, built with `HEARTH_APPS_DIR`); mini-apps that cannot be linked (stopped before the build, the old release running); mini-apps linked offline and built in (the link leads to the release's own SDK, the server's list holds the app); a new SDK version the mini-apps were not written for, which is the Testable line (no stop, no restart, `current` unchanged, the release that failed deleted, stage `sdk`); the same commits not built again even after the waiting time; and the matching mini-apps commit built at once. Each case was shown to fail when the behaviour it tests was taken out of the script.
     - **Tried by hand, not in the tests:** the real `pnpm install --frozen-lockfile --offline` in a folder shaped like `hearth-stones` beside a `hearth` checkout, with an empty store and the deploy's clean environment, which step 7 left untried. It makes `node_modules/@hearth/sdk` the relative link `../../../hearth/packages/sdk`, and the lockfile pnpm 10.28 writes for it is the one the deploy tests use. Then the CI job's steps, read from `ci.yml` and run in that layout with a copy of the sample `checklist`: the check passed, `pnpm build` built the app in, and the built server started with the trial start's settings. Today's `hearth-stones`, checked out beside this repository, passes the job with no apps.
     - **For step 13:** pnpm 10 switches to the pnpm version a `packageManager` field names before it installs, and fetches it when it is not the one running, `--offline` or not; without a network that waits until something stops it (tried). The made-up mini-apps of the deploy tests name none. `hearth-stones` should leave the field out, or name exactly the version `hearth` names.
-    - **The CI job** (`mini-apps` in `.github/workflows/ci.yml`) checks out this commit as `hearth` and `main` of `hearth-stones` beside it, from the same owner (`github.repository_owner`, so that no account name is written down). It installs, links the mini-apps offline when `hearth-stones` has a `package.json`, runs `hearth-apps check` on them (`HEARTH_APPS_DIR=../hearth-stones`) and then `pnpm build`. A7 says "builds"; the check comes first because a build does not check types, and a break of the SDK is most often one of its types. Status 3 passes with a notice and skips the build; any other failure fails the job. It runs on every pull request and every push to `main`, like the other jobs, so a break shows on its pull request before it lands, earlier than section D expected. It has not run on GitHub yet: a push to this branch starts no workflow.
+    - **The CI job** (`mini-apps` in `.github/workflows/ci.yml`) checks out this commit as `hearth` and `main` of `hearth-stones` beside it, from the same owner (`github.repository_owner`, so that no account name is written down). It installs, links the mini-apps offline when `hearth-stones` has a `package.json`, runs `hearth-apps check` on them (`HEARTH_APPS_DIR=../hearth-stones`) and then `pnpm build`. A7 says "builds"; the check comes first because a build does not check types, and a break of the SDK is most often one of its types. Status 3 passes with a notice and skips the build; any other failure fails the job. It runs on every pull request and every push to `main`, like the other jobs, so a break shows on its pull request before it lands, earlier than section E expected. It has not run on GitHub yet: a push to this branch starts no workflow.
 13. **`hearth-stones` bootstrap.** *Built.* *Reviewed.* Add the root `package.json`, tsconfig, ESLint config and CI; add `@hearth/sdk/testing` and `hearth-apps dev` and `test`; fill in the AGENTS.md "Layout and commands" section.
     *Testable:* `pnpm check` passes there with zero apps; CI is green.
     *As built, where it differs from A1, A7 and A9:*
@@ -757,7 +760,527 @@ Each step is one pull request; `pnpm check` passes at the end of each. A step th
 
 ---
 
-## C. Decisions for the owner
+## C. Scheduled jobs and outbound fetch
+
+Build-order item 5, designed before any of it is built. The owner's decisions 8 to 15 are agreed; the rest of this section follows from them and is for the owner to agree to before step C1 starts. Where section A differs (A3 reserved the builder name `job` without designing it, A4 sketched the trending app with each person's languages), this section wins. None of its steps is built.
+
+### Owner's decisions for section C (these override anything below that disagrees)
+
+8. **Scheduled jobs, then GitHub Trending.** Build-order item 5 is jobs in
+   the framework, then a "GitHub Trending" mini-app in `hearth-stones`, to
+   "let me know the latest popular projects".
+9. **"Popular" means new and rising:** repositories created in the last
+   day, week or month with the most stars, overall and per language, from
+   GitHub's official REST search API (`GET
+   https://api.github.com/search/repositories` with `q=created:>=DATE ...`,
+   `sort=stars`, `order=desc`). GitHub has no trending API. Its Trending web
+   page is never scraped, and no third-party trending service is used.
+10. **Spam is filtered three ways.** The query asks for `fork:false
+    archived:false` and a minimum number of forks for each range
+    (`forks:>=10` was measured to remove most spam for a week; day and month
+    are scaled from it). A small deny-list of names and descriptions drops
+    the known patterns ("XYZ 2026: Full-Feature Desktop Installer", crypto
+    mint bots, "Fake-Balance" wallet tools). Each space keeps a Hide list
+    that people with edit access add to and undo, and the app always
+    applies it.
+11. **A widget and a full page with filters, refreshed every hour.** No push
+    notifications and no email.
+12. **GitHub's limit is shared, and kept to.** Unauthenticated search allows
+    10 requests a minute for the server's IP address, shared by every space.
+    Requests are paced to stay within it; a run stops at a 403 or 429
+    rate-limit answer and the previous results stay. No GitHub token for now.
+13. **The approved look** is the mockup's GitHub Trending page: a range
+    control (Today / This week / This month), language chips, and rows with
+    rank, owner/name linked to GitHub (in a new tab), a one-line description
+    (a person may hide descriptions), language, stars, forks and how old the
+    repository is; "Updated 12 min ago"; when the last refresh failed, a
+    banner ("Couldn't reach GitHub at 14:05. Showing results from 13:05.")
+    with a retry for people with edit access; an empty state before the
+    first results. English and Simplified Chinese.
+14. **What a job is.** An app declares the exact hosts its jobs may contact,
+    and the add dialog shows them. Jobs sit beside the queries and
+    mutations, each with a one-sentence description and how often it runs.
+    A job may be asynchronous because it fetches; handlers stay synchronous.
+    A job never holds a transaction across an `await`: it fetches with
+    `ctx.fetch`, then writes through a synchronous callback that runs in one
+    immediate transaction with a store scoped to its space and app, checks
+    again that the app is still there (not removed, not moved away, its code
+    in the build), and is closed when the callback returns. A job runs once
+    per install, not per person, and sees the space's settings, nobody's
+    own. `ctx.fetch` allows https and the declared hosts only, no redirect
+    to another host, has a timeout and a cap on an answer's size, passes on
+    no cookies and no identity headers, and sends a fixed User-Agent naming
+    Hearth. A mini-app still may not use the global `fetch`.
+15. **The scheduler** runs in the server process: due jobs one at a time
+    across the whole server, with jitter, a time limit for each run and
+    backoff after failures, and each install's job status in the database,
+    surviving restarts. A setting turns it off: the deploy script passes it
+    to its trial start against the copied database (with a deploy test), and
+    tests run no job unless one asks. It runs under `pnpm dev`; stand-in
+    answers for end-to-end tests can be switched on only with
+    `HEARTH_AUTH=dev`. View access reads a job's status; edit access asks for
+    a run now, debounced. The hooks give what "Updated N min ago", the
+    failed-refresh banner and "Refresh now" need, and an app's own tests run
+    a job with stand-in answers through the scheduler's own code. The SDK
+    becomes 0.1.1 (an additive change is a patch); `hearth` is merged first,
+    then `hearth-stones`.
+
+### The manifest's hosts
+
+```ts
+// @hearth/sdk: added to Manifest
+/** The hosts the app's jobs may fetch from, as lower-case DNS names ("api.github.com"). Shown to whoever adds the app. */
+network?: readonly string[];
+```
+
+- **The schema** takes 1 to 10 different names, each a lower-case DNS name of two or more labels (letters, digits and hyphens; at most 63 characters a label and 253 in all; the last label letters only). So there is no scheme, port, path, wildcard or IP address; `localhost` and names ending in `.localhost`, `.local`, `.internal` or `.home.arpa` are refused too. `createRegistry` refuses hosts in an app that defines no job: the dialog would announce a connection that never happens.
+- **The add dialog** shows them under the app's description, for a new app and for one brought back: "Fetches data from api.github.com on its own." / "会自行从 api.github.com 获取数据。" (`apps.addNetwork`; hosts joined with ", " and "、"). It asks nothing more: the app is trusted code that the server's owner checked out (section E).
+
+### Jobs in the server file
+
+```ts
+// @hearth/sdk/server: added
+export type JobAbout = {
+  /** One English sentence saying what the job does, for a reader who has not seen the app. */
+  description: string;
+  /** How often it runs, in minutes: a whole number from 15 to 10080 (a week). */
+  everyMinutes: number;
+};
+
+/** A job as the framework reads it: made with `app.job`, listed in `app.routes`. */
+export type Job = {
+  readonly kind: "job";
+  readonly description: string;
+  readonly everyMinutes: number;
+  readonly run: (ctx: never) => unknown;
+};
+
+/** What a job's function gets. A job runs for the app in one space, for no one in it. */
+export type JobCtx<M, C extends Collections> = {
+  /** The space the app is in. A personal space has an empty name. There is no ID. */
+  readonly space: { readonly kind: SpaceKind; readonly name: string };
+  /** The space's settings, defaults filled in, as they were when the run started. Nobody's own. */
+  readonly settings: SpaceSettingsOf<M>;
+  /** When the run started. */
+  readonly now: Date;
+  /** GET from a host the manifest lists in `network`. */
+  fetch(url: string, init?: FetchInit): Promise<FetchResponse>;
+  /** Reads the app's rows in this space in one transaction. `work` must not be async. */
+  read<T>(work: (db: { readonly [K in keyof C]: ReadCollection<z.output<C[K]>> }) => T): T;
+  /** Changes them in one immediate transaction, all of it or none. `work` must not be async. */
+  write<T>(work: (db: { readonly [K in keyof C]: Collection<z.output<C[K]>> }) => T): T;
+};
+
+export interface ServerBuilder<M, C extends Collections> {
+  // query and mutation as built in step 5
+  /** Something the app does by itself, every `everyMinutes`, once for each space it is in. */
+  job(about: JobAbout, run: (ctx: JobCtx<M, C>) => Promise<void> | void): Job;
+  /** The app's queries, mutations and jobs by name: one set of names for the three. */
+  routes<R extends Record<string, Query<any, any> | Mutation<any, any> | Job>>(routes: R): AppServer<M, C, R>;
+}
+
+// @hearth/sdk: added
+export type SpaceSettingsOf<A>;   // the settings of scope "space" only, typed as in SettingsOf
+// @hearth/sdk/web, from src/routes.ts: added
+export type JobName<S>;           // the names of an app's jobs; QueryName and MutationName leave them out
+```
+
+- **One set of names.** A job is listed in `app.routes(...)` beside the queries and mutations, so no name is used twice, and the future assistant (decision 7) reads every description in one place. A job is never callable as a route: `/q/` and `/m/` answer 404 for its name, as for a query asked for as a mutation.
+- **`checkServer`** checks every job, at start-up and in `hearth-apps check`: made with `app.job`, a description that is not empty, `everyMinutes` a whole number from 15 to 10080, no `input`.
+- **How a run ends.** It went well when the function returned or its promise resolved. Whatever it throws or rejects with makes it fail, recorded with the first 200 characters of its message and logged with the app, the job and the space's ID. `AppError` means nothing special to a job.
+- **`ctx.read` and `ctx.write`** run `work` in one transaction, deferred for `read` and immediate for `write`. First, inside it, they check that the run may still touch the install: the app's entry is in the space the run started in and not removed, the build holds the app and the job, the run still holds its claim (see "Running a job") and its time limit has not passed. Otherwise they throw and nothing is read or written. `work` gets a store built as a handler's is (`readOnlyStore`, `writableStore`), closed when `work` returns; a `work` that returns a promise is a fault, its transaction undone and the run failed. So no transaction waits on the network, and nothing is written after a removal, a move or a deletion. Once the run is over, `ctx.fetch` rejects with `stopped`, and `read` and `write` throw.
+- **A job's rows** carry the ID of the person who added the app to the space (`space_apps.created_by`), on whose behalf the job runs, and the time of the write: every row keeps a space and an author, and no made-up person goes into `users`. In a job's store `list({ mine: true })` is a `StoreUsageError`: a job is no one.
+- **`ctx.settings`** is read when the run is claimed, by a new `spaceSettingsFor` in `settings.ts` (the space's object only, through a new `readSpaceSettingsData` in `store.ts`) with the routes' own `fill`. A change during a run counts from the next run.
+
+### `ctx.fetch`
+
+```ts
+// @hearth/sdk/server: added
+export type FetchInit = {
+  /** Extra headers: accept, accept-language, if-modified-since, if-none-match, and names starting with "x-" but for x-forwarded-* and x-real-ip. */
+  readonly headers?: Readonly<Record<string, string>>;
+};
+/** An answer, read whole. A status that is not 2xx is an answer like any other, not an error. */
+export type FetchResponse = {
+  /** Where the answer came from, after redirects on the same host. */
+  readonly url: string;
+  readonly status: number;
+  /** The status is 200 to 299. */
+  readonly ok: boolean;
+  /** Header names in lower case; set-cookie is left out. */
+  readonly headers: Readonly<Record<string, string>>;
+  /** The body, as UTF-8 text. */
+  readonly text: string;
+  /** The body parsed as JSON; throws when it is not JSON. */
+  json(): unknown;
+};
+export const FETCH_ERROR_CODES = ["refused", "timeout", "too_large", "network", "stopped"] as const;
+export class FetchError extends Error {
+  readonly code: (typeof FETCH_ERROR_CODES)[number];
+}
+```
+
+The rules, all in `packages/server/src/apps/fetch.ts`:
+
+- **GET only**, to `https:` on the default port, without a user name or password, to a host the manifest lists, exactly. Anything else is `refused` before it is sent.
+- **Headers.** `User-Agent: Hearth` and the headers `FetchInit` allows, nothing else; any other header from the app (`Authorization`, `Cookie`, `Host`, `Origin`, `Referer` ...) is `refused`. A job has no person's request behind it, so there is nothing of a person's to pass on, and no cookies are kept between requests.
+- **Redirects** are followed up to 3 times while they stay on `https:` and the same host; any other is `refused`.
+- **Limits.** 20 seconds for a whole answer (`timeout`); 2 MiB of body, counted after decompression, beyond which the download stops (`too_large`). DNS, connection and TLS failures are `network`.
+- **Pacing.** Requests to one host start at least 6.5 seconds apart, across every app, install and job of the server: at most 10 a minute, GitHub's unauthenticated search limit (decision 12). The wait counts against the run's time limit. A host therefore takes about 550 requests an hour, enough for 16 installs of the trending app that each follow 10 languages; more installs push their runs further apart than an hour.
+- **One transport**, a function from a checked request to an answer, so that the rules are tested without a network: Node's `fetch` with `redirect: "manual"` on a server, the stand-in file in end-to-end tests (see "Switches"), a test's own function in `testApp`. Stand-ins answer at once and are not paced.
+- **The global `fetch` stays refused** by `no-restricted-globals`, whose message becomes "A mini-app fetches in a job, with ctx.fetch, from the hosts its manifest lists."; the import scan still refuses `node:http` and every package. It is not a sandbox (section E).
+
+### Running a job
+
+`packages/server/src/apps/jobs.ts`. The scheduler and `testApp` run a job through the same three functions, and nothing else runs one.
+
+1. **`claimRun`**, one immediate transaction: the app's entry is in the space and not removed, the build holds the app and the job, the job is due (or the caller forces it, as `testApp` does), and no run holds it whose `run_until` is still ahead. It sets `run_id` (a new ID), `run_until` (now + the time limit + 1 minute) and `last_started_at`, clears `requested_at`, and reads the space's kind, name and settings. A claim left by a server that died is taken over once its `run_until` has passed, and counts for nothing.
+2. **The run**, outside any transaction: the job's function with its `ctx`. After 5 minutes it is aborted: `ctx.fetch` rejects with `stopped`, `read` and `write` throw.
+3. **`recordRun`**, one immediate transaction, which finds the row by `run_id` (the row follows the app if it moved):
+   - went well: `last_succeeded_at` = now, `failures` = 0, `next_run_at` = the run's start + `everyMinutes` × (1 + r/10), r random from 0 to 1 (the jitter), or now + 1 minute when that has passed;
+   - went wrong: `last_failed_at` = now, `last_error` = the message cut to 200 characters, `failures` + 1, `next_run_at` = now + min(`everyMinutes`, 5 × 2^(`failures` − 1)) minutes with this failure counted (the backoff: 5, 10, 20, 40, 60, 60 ... for an hourly job);
+   - the server stopped it, or meanwhile the app was removed, left the space or had its data deleted (its `write` was refused, so nothing of the run was kept): nothing is recorded, and wherever the app now is, if anywhere, the job is due at once;
+   - in every case `run_id` and `run_until` are cleared.
+
+**Asking for a run** (`requestRun`, one immediate transaction, after `resolveInstall` gives edit): unless a run is going on, `requested_at` = now and `next_run_at` = the earlier of itself and max(now, `last_started_at` + 5 minutes). A run asked for starts at once, or 5 minutes after the last one started, never sooner, so "Refresh now" cannot hammer a host; a request is never refused for being early, and during a run it changes nothing.
+
+**The status** (`jobStatus`) is the row as the route answers it: `state` is `running` while a run holds the job and its `run_until` is ahead, `requested` while `requested_at` is set, else `idle`. A job that has not run in an install has no row there, and answers nulls, `nextRunAt` = now and `idle`.
+
+The scheduler asks whether an install is there (its entry, not removed, its code in the build), never who may use it: `resolveInstall` stays the one answer to what a person may do. Its one query across spaces reads `space_apps` and `app_jobs` and nothing else; an app's rows and settings are read and written one install at a time, through `store.ts`.
+
+### The scheduler
+
+`packages/server/src/apps/scheduler.ts`, started by `main.ts` once the server listens, when `HEARTH_JOBS` is `on`.
+
+- **One run at a time on the whole server.** It takes the job with the earliest `next_run_at` among installs whose entry is there and not removed and whose app and job the build holds; ties go by space ID, app ID and job name. A job that has never run in an install is due at once (its row is made then).
+- **Idle**, it sleeps until the earliest `next_run_at`, at most 30 seconds, and wakes at once when this process is asked for a run or an app is added or brought back.
+- **Timing** is `recordRun`'s: at most 5 minutes a run, a regular run up to a tenth of its interval late (jitter), and after failures in a row 5, 10, 20 ... minutes, never more than the interval (backoff).
+- **The claim is in the database**, so a run stays single when two server processes share one database file, as the owner's and Lin's copies do in the end-to-end tests.
+- **Restarts.** All it knows is in `app_jobs`: after a restart what is due runs, in order, and a run cut off by a crash is taken over once its `run_until` has passed.
+- **Stopping.** On SIGTERM or SIGINT `main.ts` stops it before closing the database: no new run starts, the current one is aborted and its job left due at once, and the database is closed within 5 seconds whatever the job does.
+- **Logs.** One line for each run that went wrong (app, job, space ID, message); none for runs that went well.
+- It is given its clock, its randomness and its transport, so that its tests run without waiting and without a network.
+
+### Switches
+
+- **`HEARTH_JOBS`**: `on` (the default) or `off`. Off, no job runs; the status still answers, and a run asked for waits until jobs run again.
+- **The trial start** gets `HEARTH_JOBS=off` from `deploy/hearth-deploy.sh`, so a release on trial against a copy of the database fetches nothing. The made-up server of `deploy/tests/deploy.test.sh` records the value it was started with, and a case checks it: `off` for the trial, unset for the live service.
+- **Tests.** `createApp` starts no scheduler; only `main.ts` does. Every command in `e2e` that starts a real server sets `HEARTH_JOBS=off` unless it gives stand-ins, as must anything else automated that starts one. `pnpm dev` runs jobs against the real hosts (decision 15).
+- **`HEARTH_FETCH_STANDINS`**: the path of a JSON file whose stand-ins answer every `ctx.fetch`, so that nothing reaches the network. `loadConfig` refuses it unless `HEARTH_AUTH=dev`, which itself needs a loopback `HOST`, so a real server cannot have it, and `main.ts` warns at start-up that it is on. With it, requests are not paced and a run asked for may start 5 seconds after the last one started, so that an end-to-end test can refresh twice. The file is read again at every request, so a test changes the answers by writing it:
+
+  ```json
+  [
+    { "url": "https://api.github.com/search/repositories", "query": { "q": "language:rust" },
+      "status": 403, "body": { "message": "API rate limit exceeded" } },
+    { "url": "https://api.github.com/search/repositories", "body": { "items": [] } },
+    { "url": "https://feeds.example.com/headlines.json", "error": "network" }
+  ]
+  ```
+
+  The first entry whose `url` is the request's address without its query, and each of whose `query` texts is part of that parameter of the request, answers: `status` (200 when left out), `headers`, and `body`, sent as is when it is text and as JSON otherwise; or `error`, `network` or `timeout`. A request no entry answers fails as `network`. `ctx.fetch`'s rules come first, so a stand-in cannot open a host the manifest does not list.
+
+### Table (migration 3, `app-jobs`)
+
+```sql
+-- One app's job in one space: when it runs next and how its runs went. No row: it has not
+-- run there yet. Status, not data: it follows the app to another space and goes with its entry.
+CREATE TABLE app_jobs (
+  space_id          TEXT NOT NULL,
+  app_id            TEXT NOT NULL,
+  job               TEXT NOT NULL,     -- its name in the app's server.ts
+  next_run_at       TEXT NOT NULL,
+  requested_at      TEXT,              -- someone asked for a run that has not started
+  run_id            TEXT,              -- the run that holds the job now
+  run_until         TEXT,              -- when that run counts as lost: its start + the time limit + 1 minute
+  last_started_at   TEXT,
+  last_succeeded_at TEXT,              -- when the last run that went well ended
+  last_failed_at    TEXT,              -- when the last run that went wrong ended
+  last_error        TEXT CHECK (last_error IS NULL OR length(last_error) <= 200),
+  failures          INTEGER NOT NULL DEFAULT 0 CHECK (failures >= 0),   -- in a row, for the backoff
+  PRIMARY KEY (space_id, app_id, job),
+  CHECK ((run_id IS NULL) = (run_until IS NULL)),
+  FOREIGN KEY (space_id, app_id) REFERENCES space_apps (space_id, app_id)
+    ON UPDATE CASCADE ON DELETE CASCADE
+) STRICT;
+```
+
+- A move carries it along and deleting an app's data takes it away; the guards of `apps-schema.test.ts` hold it to both. Removing the app keeps it, the scheduler passes the app by, and bringing it back resumes it. It has no `user_id`, so `moveApp` has nothing to clear in it.
+- Its SQL is in `jobs.ts`; the app's rows are still written by `store.ts` alone.
+
+### Routes
+
+```
+GET  /api/spaces/:spaceId/apps/:appId/jobs/:job        view: the job's status
+POST /api/spaces/:spaceId/apps/:appId/jobs/:job/run    edit: ask for a run; 202 with the status
+```
+
+- 404 when `resolveInstall` gives `null`, the app has no server file, or it has no job of that name (a query's name included); then 403 `forbidden` for a run asked for with view. The POST takes no body.
+
+```ts
+// @hearth/shared: the answer of both
+export const jobStatusSchema = z.object({
+  lastStartedAt: z.string().nullable(),
+  /** When the last run that went well ended: the app's data is from then. */
+  lastSucceededAt: z.string().nullable(),
+  /** When the last run that went wrong ended. */
+  lastFailedAt: z.string().nullable(),
+  /** Why, in English, for owners and logs; never interface text. */
+  lastError: z.string().nullable(),
+  nextRunAt: z.string(),
+  state: z.enum(["idle", "requested", "running"]),
+});
+```
+
+### Hooks
+
+```ts
+// @hearth/sdk/web: added to AppHooks<S>
+useJob<K extends JobName<S>>(name: K): JobState;
+
+// src/routes.ts, so that the tests' types share it
+export type JobState = {
+  /** When the last run that went well ended: the data is from then. Null before the first. */
+  succeededAt: string | null;
+  /** When the last run ended, if it went wrong; null when it went well or none has ended. */
+  failedAt: string | null;
+  /** A run is going on, or was asked for and has not started: show "Refreshing…". */
+  running: boolean;
+  /** Whether this person may ask for a run: edit access. */
+  canRun: boolean;
+  /** Asks for a run. Resolves once the server has the request, not when the run is done; a refusal is reported as a mutation's is. */
+  run(): Promise<void>;
+  /** From run() until the server answered. */
+  pending: boolean;
+};
+```
+
+- `useJob` suspends until the first status is there, like `useQuery`; the shell draws the skeleton and the failed state.
+- `<AppScope>` reads the status with the app's queries (every 15 seconds while visible, and on focus), every 3 seconds while `running`, and at once after `run()`. When `succeededAt` changes, every query of the app here is read again, so new data shows without a reload. The status is cached under `installQueryKey`.
+- `failedAt` is `lastFailedAt` when that is later than `lastSucceededAt`, or there is none. `lastError` is not handed to the app: what a person reads comes from the app's own strings, in both languages.
+- `AppScopeValue` (`@hearth/sdk/web/scope`) gains `useJob(name)`; the hook holds no logic, like the others.
+
+### Testing
+
+```ts
+// @hearth/sdk/testing: added
+/** A request a job made, as a stand-in sees it: the headers are those sent, User-Agent included. */
+export type StandInRequest = { readonly url: string; readonly headers: Readonly<Record<string, string>> };
+/** Its answer: status 200 unless given; a body that is not text is sent as JSON. Throwing fails it as the network would. */
+export type StandInAnswer = { status?: number; headers?: Record<string, string>; body?: unknown };
+export type StandInFetch = (request: StandInRequest) => StandInAnswer | Promise<StandInAnswer>;
+export type JobRun = { ok: true; error: null } | { ok: false; error: string };
+
+// TestApp<S>: added
+/** Runs a job now, as the scheduler does, with `fetch` answering its requests. `now` is when it starts and ends. */
+runJob<K extends JobName<S>>(name: K, options: { fetch: StandInFetch; now?: Date }): Promise<JobRun>;
+// TestCaller<S>: added
+/** The job's status as useJob shows it to this person. */
+job<K extends JobName<S>>(name: K): Omit<JobState, "run" | "pending">;
+/** Asks for a run, as "Refresh now" does: needs edit. Gives the status afterwards. */
+requestRun<K extends JobName<S>>(name: K): Omit<JobState, "run" | "pending">;
+```
+
+- `runJob` goes through `claimRun`, the run and `recordRun`, forced (due or not, but never beside another run of the job), with `ctx.fetch`'s rules in front of the stand-in, no pacing, and the 5-minute limit. `job` and `requestRun` go through the routes' functions. A job that would fail on the server fails its test.
+
+### What is enforced where
+
+| What | Where |
+|---|---|
+| Hosts are plain DNS names, at most 10 | `manifestSchema`: at start-up and in `hearth-apps check` |
+| Hosts come with a job; a job has a description and runs every 15 minutes to a week | `createRegistry` and `checkServer`, in the same two places; the types |
+| A job reaches only its manifest's hosts, over https, as Hearth, with nothing of a person's | `ctx.fetch` (`fetch.ts`), at every request |
+| A mini-app has no other way out | ESLint's `no-restricted-globals` (`fetch`) and the import scan (`node:*`, packages); not a sandbox |
+| A job reads and writes its install's rows only, and only while the install is there | `ctx.read` and `ctx.write` (`jobs.ts`), through `store.ts` as handlers do |
+| No transaction waits on the network | `work` is synchronous: a promise is refused and undone, and the store is closed when `work` returns |
+| One run at a time, and once per install | the scheduler, within its process; the claim in `app_jobs`, across processes |
+| GitHub's 10 requests a minute | the pace in `fetch.ts`, server-wide |
+| No job runs in the trial start | `HEARTH_JOBS=off` from `deploy/hearth-deploy.sh`; a deploy test |
+| Stand-in answers never on a real server | `loadConfig` refuses `HEARTH_FETCH_STANDINS` without `HEARTH_AUTH=dev` |
+| Status with view, a run with edit, at most one asked-for run every 5 minutes | the two routes, through `resolveInstall`; `requestRun` |
+
+### GitHub Trending (`hearth-stones/trending`)
+
+`manifest.ts`, `server.ts`, `spam.ts` (the deny-list, imported by `server.ts` only), `widget.tsx`, `page.tsx`, `trending.test.ts`, `README.md`, `package.json`. It replaces the sketch in A4: the languages are the space's, because the job that fetches them sees the space's settings only, and each person keeps their own first range and whether to see descriptions.
+
+```ts
+// trending/manifest.ts
+import { defineApp } from "@hearth/sdk";
+
+export default defineApp({
+  id: "trending",
+  name: { en: "GitHub Trending", zh: "GitHub 热门" },
+  description: {
+    en: "New repositories on GitHub with the most stars, by day, week and month.",
+    zh: "GitHub 上按天、周、月统计星标最多的新仓库。",
+  },
+  icon: "trending-up",
+  color: "purple",
+  widget: { size: "tall" },
+  network: ["api.github.com"],
+  settings: {
+    languages: {
+      type: "multi-select", scope: "space", default: [],
+      label: { en: "Languages to follow", zh: "关注的语言" },
+      help: { en: "Each language adds three searches to every hourly refresh.", zh: "每关注一种语言，每小时的刷新就多三次搜索。" },
+      // Each key is GitHub's own name for the language in a `language:` qualifier.
+      options: {
+        typescript: { en: "TypeScript", zh: "TypeScript" }, javascript: { en: "JavaScript", zh: "JavaScript" },
+        python: { en: "Python", zh: "Python" }, go: { en: "Go", zh: "Go" }, rust: { en: "Rust", zh: "Rust" },
+        java: { en: "Java", zh: "Java" }, cpp: { en: "C++", zh: "C++" }, csharp: { en: "C#", zh: "C#" },
+        swift: { en: "Swift", zh: "Swift" }, kotlin: { en: "Kotlin", zh: "Kotlin" },
+      },
+    },
+    range: {
+      type: "select", scope: "user", default: "week",
+      label: { en: "Show first", zh: "默认显示" },
+      options: { day: { en: "Today", zh: "今天" }, week: { en: "This week", zh: "本周" }, month: { en: "This month", zh: "本月" } },
+    },
+    hideDescriptions: {
+      type: "switch", scope: "user", default: false,
+      label: { en: "Hide descriptions", zh: "隐藏描述" },
+    },
+  },
+  messages: { en: { /* the table below */ }, zh: { /* the table below */ } },
+});
+```
+
+The widget and the page take the names of ranges and languages from the manifest's options, so each is written once, in both languages.
+
+| Key | English | Chinese |
+|---|---|---|
+| `all` | All | 全部 |
+| `range` | Range | 时间范围 |
+| `language` | Language | 语言 |
+| `updatedNow` | Updated just now | 刚刚更新 |
+| `updatedMinutes` | Updated {minutes} min ago | {minutes} 分钟前更新 |
+| `updatedAt` | Updated at {time} | 更新于 {time} |
+| `refresh` | Refresh now | 立即刷新 |
+| `refreshing` | Refreshing… | 正在刷新… |
+| `failed` | Couldn't reach GitHub at {time}. | {time} 时无法连接 GitHub。 |
+| `failedShowing` | Couldn't reach GitHub at {time}. Showing results from {previous}. | {time} 时无法连接 GitHub。现在显示的是 {previous} 的结果。 |
+| `retry` | Try again | 重试 |
+| `emptyFirst` | No results yet. The first refresh is on its way. | 还没有结果，第一次刷新马上就到。 |
+| `emptySet` | No new repositories here yet. | 这里还没有新仓库。 |
+| `stars` | {count} stars | {count} 星 |
+| `forks` | {count} forks | {count} 个分叉 |
+| `ageHours` | {count} h old | {count} 小时前创建 |
+| `ageDays` | {count} d old | {count} 天前创建 |
+| `newTab` | opens in a new tab | 在新标签页中打开 |
+| `hide` | Hide | 隐藏 |
+| `hid` | Hid {name}. | 已隐藏 {name}。 |
+| `undo` | Undo | 撤销 |
+| `hidden` | Hidden ({count}) | 已隐藏（{count}） |
+| `show` | Show again | 重新显示 |
+
+```ts
+// trending/server.ts: the collections and the job
+const RANGES = ["day", "week", "month"] as const;
+type Range = (typeof RANGES)[number];
+/** owner/name as GitHub allows them, so that a link built from one can only lead into github.com. */
+const fullName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/);
+
+const app = defineServer(manifest, {
+  repos: z.object({
+    range: z.enum(RANGES),
+    set: z.string().max(20),            // "" for every language, else the key of a language the space follows
+    position: z.number().int().min(0),  // GitHub's order within its set
+    githubId: z.number().int(),
+    fullName,
+    description: z.string().max(350).default(""),
+    language: z.string().max(60).default(""),   // as GitHub names it; "" when it names none
+    stars: z.number().int().min(0),
+    forks: z.number().int().min(0),
+    repoCreatedAt: z.string().max(30),          // "createdAt" is a Row field's name
+  }),
+  hidden: z.object({ githubId: z.number().int(), fullName }),
+});
+
+// in app.routes({ ... }), beside the routes in the table below
+refresh: app.job(
+  {
+    description:
+      "Fetches from GitHub's search API the most-starred repositories created in the last day, week and month, for every language and each language the space follows, and replaces the stored lists with them.",
+    everyMinutes: 60,
+  },
+  async (ctx) => {
+    const sets: { range: Range; set: string; items: Repo[] }[] = [];
+    for (const range of RANGES) {
+      for (const set of ["", ...ctx.settings.languages]) {
+        const answer = await ctx.fetch(searchUrl(range, set, ctx.now), { headers: GITHUB_HEADERS });
+        if (answer.status === 403 || answer.status === 429) {
+          throw new Error(`GitHub turned the search down (${answer.status}), most likely for its rate limit.`);
+        }
+        if (!answer.ok) throw new Error(`GitHub's search answered ${answer.status}.`);
+        sets.push({ range, set, items: searchAnswer.parse(answer.json()).items.filter(keep) });
+      }
+    }
+    // All or nothing, so that every list shown is from the time the job's status gives.
+    ctx.write((db) => {
+      db.repos.removeWhere({});
+      for (const { range, set, items } of sets) {
+        items.forEach((item, position) => db.repos.insert({ range, set, position, ...fromGitHub(item) }));
+      }
+    });
+  },
+),
+```
+
+| Route | Input | Does (each with its one-sentence `description`) |
+|---|---|---|
+| query `list` | `{ range, language? }`; `language` is "", every language, when left out | The rows of that range and set in GitHub's order (`orderBy: "position"`), without the hidden ones. |
+| query `hidden` | none | The hidden repositories, the last hidden first. |
+| mutation `hide` | `{ githubId, fullName }` | Puts the repository on the space's Hide list, once. |
+| mutation `show` | `{ githubId }` | Takes it off the list. |
+
+- **The searches.** A run asks 3 × (1 + the languages followed) of them, at most 33: for each range (day, week, month) every language first, then each language followed, in the options' order. `searchUrl` gives `https://api.github.com/search/repositories?q=...&sort=stars&order=desc&per_page=25` with `q` = `created:>=` (the run's start less 1, 7 or 30 days, in UTC to the second: `2026-11-04T14:05:07+00:00`) `fork:false archived:false forks:>=` (3, 10 or 25: a day gives a real project less time to be forked, and a month asks for less than four weeks' worth so that a late riser stays) and, for a language, `language:<key>`. `GITHUB_HEADERS` are `accept: application/vnd.github+json` and `x-github-api-version: 2022-11-28`.
+- **Pacing** is `ctx.fetch`'s, 6.5 seconds a request across the server: 33 searches take under 4 of the run's 5 minutes. The app uses search alone; GitHub's other endpoints allow 60 unauthenticated requests an hour, which this pace would not keep to.
+- **Rate limits.** A 403 or 429 stops the run at once (decision 12), and the backoff tries again 5 minutes later. Nothing is written before the end, so the lists stay as the last good run left them, and "Showing results from 13:05" is exact.
+- **What is kept.** `searchAnswer` is a zod schema of the fields used (`id`, `full_name`, `description`, `language`, `stargazers_count`, `forks_count`, `created_at`), and `Repo` one of its items, so an answer of another shape fails the run. `keep` leaves out spam and a name GitHub could not have given (`fullName`); `fromGitHub` maps an item to a row's fields and cuts a description to 350 characters. Up to 25 a set, 825 rows at most.
+- **Spam** (decision 10). After the query's `fork:false archived:false` and forks minimum, `isSpam` drops a repository whose name and description, with `-`, `_`, `.` and `/` read as spaces, match one of three patterns, one for each kind the owner named: a year and "installer" (`/\b(?:19|20)\d\d\b.*\binstaller\b/i`), crypto bots (`/\b(?:mint|sniper|drainer|volume) ?bot\b/i`) and fake balances (`/\b(?:fake ?balance|flash ?usdt)\b/i`). The README lists them; the tests hold each to a sample it catches and a near miss it keeps ("nix-installer", "mint-theme"). Last, the space's Hide list: `hide` and `show` need edit, `list` always leaves hidden repositories out, and a run never touches the list.
+- **The widget** (tall): the reader's own range, every language, the first five: rank, owner/name as a link, stars. Under them "Updated N min ago", "Refreshing…", or `failed` in the colour of a problem; `emptyFirst` before the first results.
+- **The page**, as decision 13: at the top "Updated N min ago" and, for edit, "Refresh now" (disabled, "Refreshing…", while `running`); when `failedAt` is set, the banner `failedShowing` (`failed` before any results) with "Try again" for edit; a `Segmented` control for the range, starting at the reader's own; `Chip`s for "All" and each language the space follows; then the rows: rank, owner/name, the description on one line unless the reader hides descriptions, language, stars, forks and age. For edit each row has "Hide", followed by "Hid owner/name. Undo", and "Hidden (n)" lists the hidden ones with "Show again". `emptySet` for a set with no rows. On a phone the rows wrap and nothing reaches past the screen's edge.
+- **Links and pictures.** A link is `https://github.com/` and the stored name, with `target="_blank"`, `rel="noopener noreferrer"` and `newTab` for screen readers. There are no avatars: the Content-Security-Policy allows images from this server only, and stays so.
+- **Times** are read against the browser's clock, in the reader's time zone and language (`Intl.DateTimeFormat`): "Updated just now" under a minute, minutes under 90, then "Updated at 13:05"; an age in hours under 48, then in days.
+- **The `package.json` of `hearth-stones`** declares `"hearth": { "sdk": "^0.1.1" }` with this app, once C1 to C8 are on `main` of `hearth`.
+
+### Left out on purpose
+
+- A request rate declared for each host: every host gets GitHub's pace.
+- Tokens and secrets (no `Authorization` header can be sent), methods other than GET, an HTTP proxy for outgoing requests, pinning the address a host resolves to.
+- One cache for the spaces that have the same app: each install fetches for itself (decision 14).
+- Jobs in parallel, a history beyond the last run of each outcome, and a list of every job's status for the server's owner.
+- Push notifications and email (decision 11).
+
+### Build plan for section C
+
+Each step is one pull request into `main` of the repository it names; `pnpm check` passes at the end of each, and each updates `AGENTS.md` where a fact there changes. The SDK becomes 0.1.1 in C1; C2, C6 and C7 add to it without raising it again, since no repository declares 0.1.1 before C9, which needs all of them. None of these steps is built.
+
+- **C1. The manifest's hosts** (`hearth`). `network` in `Manifest` and in `manifestSchema`; the add dialog's line (`apps.addNetwork` in `en.ts` and `zh.ts`); the SDK's version 0.1.1.
+  *Testable:* the schema takes `["api.github.com"]` and refuses a scheme, a port, a path, upper case, a wildcard, an IP address, `localhost`, `printer.local`, a name twice, an empty list and eleven names; the dialog names the hosts of a new app and of one brought back, in both languages (`manage.test.tsx`, with a made-up manifest).
+- **C2. Jobs in the SDK, checked at start-up** (`hearth`). `app.job`, `Job`, `JobAbout`, `JobCtx`, `FetchInit`, `FetchResponse`, `FetchError`, `SpaceSettingsOf` and `JobName`; `routes` takes jobs; `checkServer` and `createRegistry` check them; the new lint message for `fetch`. Nothing runs a job yet.
+  *Testable:* type tests (a job's settings are the space's only, `read` gives no way to write, `JobName` lists jobs and `QueryName` and `MutationName` do not, a job without a description or an interval does not compile); the start-up check refuses an empty description, 14, 10081 and 60.5 minutes, an input, and hosts without a job; `/q/` and `/m/` answer 404 for a job's name.
+- **C3. `ctx.fetch`** (`hearth`). `fetch.ts`: the rules, the pace, Node's transport and the stand-in file; `HEARTH_FETCH_STANDINS` in `config.ts`.
+  *Testable:* through a stand-in transport, and through Node's transport given a made-up `fetch` that returns real `Response` objects: every refusal; the headers sent (the User-Agent, the allowed ones, each refused name); redirects on and off the host; the timeout; the size cap stopping a download; the pace with a fake clock (6.5 seconds for one host, other hosts not held up); stand-ins matched, failing with `error`, and rewritten between two requests; `loadConfig` refusing the file without `HEARTH_AUTH=dev`.
+- **C4. Running a job** (`hearth`). Migration 3; `jobs.ts` (`claimRun`, the run with its `ctx` and time limit, `recordRun`, `requestRun`, `jobStatus`); `spaceSettingsFor`; a job's author and `mine` in `store.ts`.
+  *Testable:* the migration on a version-2 database with data, and the guards of `apps-schema.test.ts`; a job writes in its own space and app only (A6's two-space test, for a job); after a removal, a move, a deletion or a claim taken over, `write` throws and nothing is kept; a `work` that returns a promise is undone and fails the run; `ctx` stops working when the run ends; a run that never ends is stopped at 5 minutes; the times, the error cut to 200 characters, the backoff and the jitter's bounds; one claim at a time, and a stale one taken over; `requestRun`'s 5 minutes, and nothing changed during a run.
+- **C5. The scheduler and its switches** (`hearth`). `scheduler.ts`; `HEARTH_JOBS`; `main.ts` starts it once listening and stops it before closing the database; `HEARTH_JOBS=off` for the trial start, with its deploy test; every e2e command that starts a server sets `HEARTH_JOBS=off`. The server's README and `docs/self-hosting.md` name the two settings and the outgoing connections.
+  *Testable:* with a fake clock and a stand-in transport: one run at a time, the earliest due first, a new install at once, the idle wait and the wake, a second scheduler on the same database (a restart) going on where the first stopped, a stop that aborts a run and leaves the job due, two schedulers on one database file running each job once; the settings; the deploy case.
+- **C6. Routes, `useJob` and the shell** (`hearth`). The two routes and `jobStatusSchema`; `useJob` in `appHooks`, `AppScopeValue` and `<AppScope>`; `api.ts`.
+  *Testable:* the routes' answers in their order (404 for an app hidden from the caller, a job that is not there and a query's name; 403 for a run with view; 202 with the status), and the debounce through the route; the hooks' types and hand-over (`hooks.test.tsx`); `<AppScope>` against a stand-in server (`app-view.test.tsx`): it suspends, reads the status every 3 seconds while `running`, reads the queries again when `succeededAt` changes, and reports a refused `run()`.
+- **C7. Jobs in an app's own tests** (`hearth`). `runJob` on `TestApp`, `job` and `requestRun` on a caller, and their types in `@hearth/sdk/testing`.
+  *Testable:* `app-testing.test.ts`: a run through the scheduler's functions (the stand-in sees the User-Agent; an undeclared host, a refused header or a promise from `write` fails the run, as on the server), the status a viewer sees after a run that went well and after one that did not, and `requestRun` forbidden with view and debounced with edit; `testing.test.ts` for the types.
+- **C8. A sample app with a job, end to end** (`hearth`). `packages/fixture-apps/headlines`: a manifest naming `feeds.example.com`, a job that keeps the latest headlines, a widget with "Updated N min ago", "Refresh now" and the failed state, and tests of its own; `FIXTURE_APPS`; in `pnpm e2e` the owner's and Lin's copies share one stand-in file; the stand-in of `e2e/fixtures.ts` answers the job routes; `docs/architecture.md` and the SDK's README describe jobs.
+  *Testable:* its own tests; on the built server, the add dialog names the host, the first run happens at once and the widget shows the headlines and "Updated just now"; with the stand-in failing, "Refresh now" keeps the old headlines and shows the failure; Lin, who may only view, has no button; Chinese and a phone; no script error and nothing the Content-Security-Policy refused.
+- **C9. GitHub Trending: data, job and widget** (`hearth-stones`, once C1 to C8 are on `main` of `hearth`). The manifest, `server.ts`, `spam.ts`, the widget, the README and the tests; `"hearth": { "sdk": "^0.1.1" }`.
+  *Testable:* `trending.test.ts`, with stand-ins: the searches a run asks for, in order, with their query and headers; what is stored, in GitHub's order and without the deny-list's matches (each pattern, and its near miss kept); a 403, a 429, a 500 and an answer of another shape each fail the run and keep the lists and `succeededAt`; the Hide list for edit and not view, applied by `list` and kept over a run; the space's languages decide the next run; a personal space. `pnpm check` there; Hearth built with it and run by hand against stand-ins.
+- **C10. GitHub Trending: the page** (`hearth-stones`). The approved look (decision 13).
+  *Testable:* `pnpm check`; looked at by hand against stand-ins on a desktop and a phone, light and dark, in both languages.
+- **C11. GitHub Trending end to end** (`hearth`, once C10 is on `main` of `hearth-stones`, as for any app's end-to-end file). `e2e/mini-apps/trending.spec.ts`; one stand-in file for both copies in `playwright.mini-apps.config.ts`.
+  *Testable:* the owner creates a group, adds the app for everyone to view (the dialog names api.github.com) and follows Rust. With no stand-in yet the first run fails: the empty state and `failed`. With stand-ins, "Try again" brings the lists: ranks, links that open github.com in a new tab, the three ranges, the Rust chip, no spam; with the browser's clock 12 minutes on, "Updated 12 min ago". The owner hides a repository, undoes it and hides it again. Lin, on a phone in Chinese, sees the same lists without it and without buttons, and hides descriptions for herself alone. The stand-in answers 403, the owner asks for a refresh, and both see the banner with both times, only the owner with "Try again".
+
+---
+
+## D. Decisions for the owner
 
 1. **When an app is added to the family space, who gets it?**
    Recommendation: the add dialog asks "only me for now / everyone can view / everyone can edit", with "only me" preselected. Everyone who has access sees it switched on straight away and can switch it off for themselves. New family members get whatever level was chosen for each app.
@@ -781,7 +1304,7 @@ Each step is one pull request; `pnpm check` passes at the end of each. A step th
 
 ---
 
-## D. Risks, and what was left out on purpose
+## E. Risks, and what was left out on purpose
 
 **Risks**
 - **I did not run the build mechanics.** The registry files, `link:`, `dedupe`, `@source` and `noExternal` behaviour rest on Design 3's scratch replica. Step 7 is where they are proven in this repository.
@@ -793,15 +1316,16 @@ Each step is one pull request; `pnpm check` passes at the end of each. A step th
 - **The `link:` handshake hard-codes the sibling folder name `hearth`.** Git worktrees and other layouts break it.
 - **Polling, last write wins.** Changes appear within 15 seconds; two edits to the same field of one item resolve to the later one, silently.
 - **Stale browser shell.** The service worker can serve an older web app against a newer server; the "Reload to update" card covers an unknown app but not an SDK behaviour change.
-- **GitHub trending is blocked on the scheduler.** Where fetched public data lives is that step's decision: once per space fits the "every row has a space" rule as written, while one shared cache per server avoids duplicate fetches but needs that rule clarified.
+- **GitHub trending is blocked on the scheduler.** Where fetched public data lives is that step's decision: once per space fits the "every row has a space" rule as written, while one shared cache per server avoids duplicate fetches but needs that rule clarified. Section C decides: each install's own rows, written by its own job (owner's decision 14).
+- **A job reaches the internet.** It can send what it likes, its app's rows included, to the hosts its manifest lists. The add dialog names those hosts; mini-apps are trusted code, and review before merging is the guard.
 - **"Deleting the folder removes the app" is true for code only.** Data stays hidden until the owner deletes it; the `hearth-stones` AGENTS.md wording should say so.
 - **The deploy script is still untested on a real server**, and now also installs in a second folder.
 
 **Left out on purpose**
-- The scheduler, cached fetches and an outbound host list.
-- Global search contributions, several pages per app, file storage and Markdown export. Reserved: the builder names `job`, `search`, `files`, `exporter`, `upgrades`, and the `/*` page route.
+- The scheduler, cached fetches and an outbound host list. Section C designs the scheduler and the host list; a cache shared by spaces stays out.
+- Global search contributions, several pages per app, file storage and Markdown export. Reserved: the builder names `search`, `files`, `exporter` and `upgrades` (`job` is designed in section C), and the `/*` page route.
 - A JSON export before deleting data.
-- Asynchronous request handlers ("refresh now").
+- Asynchronous request handlers ("refresh now"). Section C's "Refresh now" asks the scheduler for a run instead.
 - Push updates, optimistic updates and offline use.
 - Per-row permissions and private rows inside a group space.
 - Row revisions, tombstones and conflict detection; pagination and full-text queries in the store.

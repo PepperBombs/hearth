@@ -96,7 +96,11 @@ which passes `check` untouched; and step 15, the grocery list, the first
 mini-app of `hearth-stones` (`grocery/` there), which the people of a space
 share, with tests of its own and an end-to-end test here of two family
 members sharing one list (`e2e/mini-apps`, `pnpm e2e:mini-apps`). Items 2
-to 4 are built; item 5 is next.
+to 4 are built; item 5 is next. It follows section C of the same document:
+the owner's decisions 8 to 15 at its top, the design of jobs, `ctx.fetch`
+and the scheduler, the GitHub Trending app, and eleven build steps, C1 to
+C11, none of them built yet. The document's last two sections, the
+questions behind decisions 1 to 5 and the risks, are D and E.
 
 ## Layout and commands
 
