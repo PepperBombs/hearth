@@ -230,11 +230,15 @@ runs it to put a generated list through `createRegistry`, so that an app
 which passes the check does not stop a server from starting.
 
 Nor is `src/apps/app-testing.ts`: the implementation of `testApp`, with
-which a mini-app's own tests call its routes (`@hearth/sdk/testing`). It
-puts the app in a space of an in-memory database, migrated like the real
-one, and answers each call with the functions the routes use (`callApp`,
-`readAppSettings`, `changeAppSettings`), the access check, store and
-transaction included. `hearth-apps test` runs an app's tests here, with
+which a mini-app's own tests call its routes and run its jobs
+(`@hearth/sdk/testing`). It puts the app in a space of an in-memory
+database, migrated like the real one, and answers each call with the
+functions the routes use (`callApp`, `readAppSettings`,
+`changeAppSettings`, `jobStatus`, `requestRun`), the access check, store
+and transaction included. `runJob` runs a job through `runOnce`, as the
+scheduler does but forced, with the rules of `ctx.fetch` in front of a
+function of the test that answers in place of the network, unpaced.
+`hearth-apps test` runs an app's tests here, with
 `vitest.apps.config.ts`, whose setup file (`src/apps/app-testing.setup.ts`)
 hands `testApp` this implementation. That configuration runs only the tests
 the command names in `HEARTH_APP_TESTS`; this package's own tests are

@@ -17,7 +17,7 @@ them, runs their tests, runs Hearth with them and starts new ones.
 | `@hearth/sdk` | `defineApp`, the manifest types (`Manifest`, `Setting`, `Localized`), `SettingsOf` and `SpaceSettingsOf`, the message types (`MessageKey`, `PlaceholderArgs`, `Translate`), the lists `APP_ICONS` and `APP_COLORS`, `APP_ID_PATTERN`, `SDK_VERSION`. Imports nothing. | Mini-apps and the framework. |
 | `@hearth/sdk/web` | `appHooks`, which gives a widget or page `useApp`, `useQuery`, `useMutation` and `useJob`, and their types (`AppHooks`, `AppContext`, `MutationResult`, `JobState`, `QueryName`, `MutationName`, `JobName`, `InputArgs`, `Output`, `AppLike`). The UI kit: `Button`, `IconButton`, `Input`, `Field`, `Switch`, `Checkbox`, `Chip`, `Tag`, `Segmented`, `Rows`, `Row`, `EmptyState`, `Dialog`, `DialogBody`, `Icon`, and the class helpers `buttonClass` and `chipClass`. | A mini-app's widget and page; the kit also the shell. |
 | `@hearth/sdk/server` | `defineServer`, `AppError`, `FetchError`, `z` (the one zod that mini-apps use), the types of a handler's context and of rows and collections (`QueryCtx`, `MutationCtx`, `Row`, `ReadCollection`, `Collection`, `Json`, `InputOf`, `OutputOf`), and those of a job (`JobAbout`, `Job`, `JobCtx`, `FetchInit`, `FetchResponse`, `FetchErrorCode`). | A mini-app's `server.ts`. |
-| `@hearth/sdk/testing` | `testApp`, which puts an app in a space of a database of its own and calls its routes as people in it, `AppCallError`, and their types (`TestApp`, `TestCaller`, `TestPerson`, `TestAppOptions`). | A mini-app's tests (`*.test.ts`). |
+| `@hearth/sdk/testing` | `testApp`, which puts an app in a space of a database of its own, calls its routes as people in it and runs its jobs with stand-ins for what they fetch, `AppCallError`, and their types (`TestApp`, `TestCaller`, `TestPerson`, `TestAppOptions`, `RunJobOptions`, `JobRun`, `StandInFetch`, `StandInRequest`, `StandInAnswer`). | A mini-app's tests (`*.test.ts`). |
 | `@hearth/sdk/testing/host` | `provideTestApp`: how the framework hands `testApp` its implementation. | The framework only. |
 | `@hearth/sdk/manifest-schema` | `manifestSchema`, a zod schema that checks a manifest at run time, and `settingValueProblems`, which says whether a value fits a setting. | The framework only. |
 | `@hearth/sdk/eslint` | The ESLint configuration of a mini-apps repository, and `miniAppBoundary`, the part of it that holds an app to the SDK. | A mini-apps repository's `eslint.config.js`. |
@@ -272,9 +272,9 @@ The manifest of this app lists `network: ["feeds.example.com"]`.
   fail, and what it did is undone. Work cannot call `ctx.read` or
   `ctx.write` itself: do it all in one.
 - **A job is not a route.** `useQuery`, `useMutation` and a test's `query`
-  and `mutation` cannot name it, only `useJob` can (`JobName<typeof
-  server>` names an app's jobs), and the server answers 404 when one is
-  asked for as a query or a mutation.
+  and `mutation` cannot name it, only `useJob` can, and in a test `runJob`,
+  `job` and `requestRun` (`JobName<typeof server>` names an app's jobs);
+  the server answers 404 when one is asked for as a query or a mutation.
 - **When it runs.** The server's scheduler runs a job in each space the
   app is in: the first time as soon as the app is added there, then about
   every `everyMinutes`, as above. It runs one job at a time on the whole
@@ -439,6 +439,68 @@ describe("grocery", () => {
   app's other files may. Run the tests with `hearth-apps test` (`pnpm test`
   in a mini-apps repository): they run inside the framework, which supplies
   the store. `vitest` started by hand has none, and `testApp` says so.
+
+### A job in a test
+
+```ts
+// headlines/headlines.test.ts
+import { testApp, type StandInRequest } from "@hearth/sdk/testing";
+
+it("keeps the feed's headlines, and keeps them when the feed fails", async () => {
+  const app = testApp(server);
+  const lin = app.as({ name: "Lin", access: "view" });
+  const now = new Date("2026-03-01T08:00:00Z");
+  const asked: StandInRequest[] = [];
+
+  const run = await app.runJob("refresh", {
+    now,
+    fetch: (request) => {
+      asked.push(request);
+      return { body: { items: [{ title: "Rain tomorrow" }] } };
+    },
+  });
+  expect(run).toEqual({ ok: true, error: null });
+  expect(asked.map((request) => request.url)).toEqual(["https://feeds.example.com/headlines.json"]);
+  expect(lin.query("latest")).toMatchObject([{ title: "Rain tomorrow" }]);
+  expect(lin.job("refresh")).toEqual({ succeededAt: now.toISOString(), failedAt: null, running: false, canRun: false });
+
+  expect(await app.runJob("refresh", { fetch: () => ({ status: 503 }) })).toEqual({ ok: false, error: "The feed answered 503." });
+  expect(lin.query("latest")).toMatchObject([{ title: "Rain tomorrow" }]);
+  expect(() => lin.requestRun("refresh")).toThrow("forbidden");
+});
+```
+
+- **`app.runJob(name, { fetch, now })`** runs one of the app's jobs now, in
+  the app's space, as the server's scheduler runs it: the same code claims,
+  runs and records it, with the space's settings, the rules of
+  `ctx.fetch` and the run's 5 minutes, whether the job is due or not. It
+  resolves once the run is recorded, with `{ ok: true, error: null }` or
+  `{ ok: false, error }`, the message of what made it fail. So a job that
+  would fail on a server fails here: a host the manifest does not list, a
+  header a job may not send, work that hands `ctx.write` a promise.
+- **`fetch`** answers each request that passes the rules, in place of the
+  network, at once and without the server's pace. It is given the address
+  with its query and the headers sent (`user-agent: Hearth` among them),
+  and answers `{ status, headers, body }`: status 200 unless given, a body
+  sent as is when it is text and as JSON otherwise. Throwing fails the
+  request as the network would (a `FetchError` of code `timeout` or
+  `network` as itself), so keep what it is asked and check it after the
+  run, as above, rather than calling `expect` inside it. Left out, every
+  request fails as the network would. An answer that HTTP could not carry
+  (a status outside 200 to 599, a body with 204, a header name with a
+  space, a key other than the three) fails the test.
+- **`now`** is when the run starts and ends: the job's `ctx.now`, the time
+  its rows are written and the times its status keeps. Left out, it is the
+  time of day.
+- **A caller's `job(name)`** is the job's status as `useJob` shows it to
+  that person: `succeededAt`, `failedAt`, `running` and `canRun`. Its
+  **`requestRun(name)`** asks for a run as "Refresh now" does, which needs
+  edit (`forbidden` otherwise), and gives the status afterwards, `running`
+  then true. Nothing here starts the run asked for by itself: the test
+  runs it with `runJob`, and `running` is false again once that run ends.
+- A job never runs beside itself: `runJob` rejects while a run of the same
+  job is going on, so await one before the next. In a personal space, name
+  its person with `as(...)` before the first run: that adds the app there.
 
 ## The UI kit
 

@@ -528,6 +528,33 @@ function isStandInAddress(value: string): boolean {
   }
 }
 
+/** The fields of a stand-in's answer, in the stand-in file and from a test's own function. */
+const answerFields = {
+  status: z.number().int().min(200).max(599).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+  body: z.unknown().optional(),
+};
+
+/** What else an answer must be for a Response to carry it: each problem, with the field it is about. */
+function answerProblems(answer: StandInAnswer): { field: string; message: string }[] {
+  const problems: { field: string; message: string }[] = [];
+  if (answer.status !== undefined && NULL_BODY_STATUSES.has(answer.status) && answer.body !== undefined) {
+    problems.push({ field: "body", message: `An answer with status ${answer.status} has no body.` });
+  }
+  if (answer.headers !== undefined) {
+    try {
+      new Headers(answer.headers);
+    } catch {
+      problems.push({ field: "headers", message: "Holds a name or a value that HTTP does not allow." });
+    }
+  }
+  // A body read from the file always is; one a test's function gives may not be.
+  if (answer.body !== undefined && typeof answer.body !== "string" && jsonText(answer.body) === undefined) {
+    problems.push({ field: "body", message: "Is neither text nor a value JSON can hold." });
+  }
+  return problems;
+}
+
 /** One entry of the stand-in file: an answer, or a failure, for the requests it matches. */
 const standInSchema = z
   .strictObject({
@@ -537,9 +564,7 @@ const standInSchema = z
     }),
     /** Texts that the request's parameters of these names must hold, each somewhere in it. */
     query: z.record(z.string(), z.string()).optional(),
-    status: z.number().int().min(200).max(599).optional(),
-    headers: z.record(z.string(), z.string()).optional(),
-    body: z.unknown().optional(),
+    ...answerFields,
     /** Fails the request as the network would. */
     error: z.enum(["network", "timeout"]).optional(),
   })
@@ -551,19 +576,33 @@ const standInSchema = z
         message: "An entry either fails with error or answers with status, headers and body.",
       });
     }
-    if (entry.status !== undefined && NULL_BODY_STATUSES.has(entry.status) && entry.body !== undefined) {
-      ctx.addIssue({ code: "custom", path: ["body"], message: `An answer with status ${entry.status} has no body.` });
-    }
-    if (entry.headers !== undefined) {
-      try {
-        new Headers(entry.headers);
-      } catch {
-        ctx.addIssue({ code: "custom", path: ["headers"], message: "Holds a name or a value that HTTP does not allow." });
-      }
-    }
+    for (const { field, message } of answerProblems(entry)) ctx.addIssue({ code: "custom", path: [field], message });
   });
 const standInsSchema = z.array(standInSchema);
 type StandIn = z.output<typeof standInSchema>;
+
+/** A stand-in's answer from a test's own function: the answer of an entry of the file, and nothing else. */
+const standInAnswerSchema = z.strictObject(answerFields).superRefine((answer, ctx) => {
+  for (const { field, message } of answerProblems(answer)) ctx.addIssue({ code: "custom", path: [field], message });
+});
+
+/**
+ * Why what a test's own stand-in answered (`runJob` of `testApp`) cannot
+ * be an HTTP answer, or null when it can: an object of `status`, `headers`
+ * and `body` alone, held to the rules of an entry of the stand-in file. What
+ * passes, `standInResponse` makes into a Response.
+ */
+export function standInAnswerProblem(answer: unknown): string | null {
+  if (!isPlainObject(answer)) return `An answer is an object of status, headers and body, not ${kindOf(answer)}.`;
+  const parsed = standInAnswerSchema.safeParse(answer);
+  if (parsed.success) return null;
+  const issue = parsed.error.issues[0];
+  if (issue?.code === "unrecognized_keys") {
+    return `An answer has status, headers and body alone, not ${issue.keys.map((key) => JSON.stringify(key)).join(", ")}.`;
+  }
+  const where = issue !== undefined && issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
+  return `${where}${issue?.message ?? "It is not an answer."}`;
+}
 
 /**
  * The stand-ins named by HEARTH_FETCH_STANDINS: a JSON list, read again at
@@ -658,6 +697,15 @@ function because(error: unknown): string {
 
 function cut(text: string, length: number): string {
   return text.length <= length ? text : `${text.slice(0, length - 1)}…`;
+}
+
+/** A value as JSON text, or undefined when JSON cannot hold it (a function, a BigInt, a cycle). */
+function jsonText(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value) as string | undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function kindOf(value: unknown): string {

@@ -127,7 +127,11 @@ the app in a space of a database of its own, and people in it who call its
 queries and mutations, each with view or edit access. The SDK only hands the
 call over. The framework answers it (`packages/server/src/apps/app-testing.ts`)
 with the functions the routes use, the access check, the store and the
-transaction included, so a test sees what a browser would. That is why the
+transaction included, so a test sees what a browser would. A test runs a
+job with `runJob`, through the code the scheduler runs it with, while a
+function of the test answers what passes the rules of `ctx.fetch` in place
+of the network; a person's `job` and `requestRun` read its status and ask
+for a run through the functions of the job's two routes. That is why the
 tests run inside this repository: `hearth-apps test` starts the server
 package's vitest with `packages/server/vitest.apps.config.ts`, whose setup
 file installs the implementation.

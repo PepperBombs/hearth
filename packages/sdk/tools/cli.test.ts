@@ -136,6 +136,8 @@ describe("hearth-apps check", () => {
   it("passes an app whose job fetches from the hosts its manifest names, and fails a job that runs too often and hosts without a job", { timeout: SLOW }, () => {
     const repo = makeRepo({ files: { ...appFiles("headlines"), ...HEADLINES } });
     const passed = hearthApps(["check"], { cwd: repo });
+    // Its own test runs the job with a stand-in, as the scheduler would, and reads its status.
+    expect(passed.output).toContain("running the tests of 1 mini-app (headlines)");
     expect(passed.output).toContain("1 mini-app passed (headlines)");
     expect(passed.status).toBe(0);
 
@@ -149,7 +151,9 @@ describe("hearth-apps check", () => {
       'App "headlines": server job "refresh": everyMinutes, how often it runs, must be a whole number of minutes from 15 to 10080 (a week); it is 14.',
     );
     expect(failed.output).toContain('App "quiet": manifest network: Names hosts to fetch from, but the app has no job, and only a job fetches.');
-    expect(failed.output).toContain("failed (manifests and server files)");
+    // Its own test cannot start it either.
+    expect(failed.output).toContain("testApp: the server would not start with this app:");
+    expect(failed.output).toContain("failed (manifests and server files, tests)");
     expect(failed.status).toBe(1);
   });
 
@@ -254,9 +258,10 @@ describe("hearth-apps check", () => {
 });
 
 /**
- * An app with a job, which `check` takes but does not run: a manifest
- * naming the host it fetches from, and a server file with a query and the
- * job, which fetches and then writes in a work of its own.
+ * An app with a job, which `check` takes: a manifest naming the host it
+ * fetches from, a server file with a query and the job, which fetches and
+ * then writes in a work of its own, and a test of its own that runs the job
+ * with a stand-in for the feed, as an app's tests do.
  */
 const HEADLINES: Record<string, string> = {
   "headlines/manifest.ts": `import { defineApp } from "@hearth/sdk";
@@ -294,6 +299,44 @@ export default app.routes({
       });
     },
   ),
+});
+`,
+  "headlines/headlines.test.ts": `import { testApp, type StandInRequest } from "@hearth/sdk/testing";
+import { describe, expect, it } from "vitest";
+import server from "./server";
+
+describe("headlines", () => {
+  it("keeps the first ten headlines of the feed, and keeps them when the feed fails", async () => {
+    const app = testApp(server);
+    const sam = app.as({ name: "Sam" });
+    const lin = app.as({ name: "Lin", access: "view" });
+    const seen: StandInRequest[] = [];
+    const now = new Date("2026-03-01T08:00:00.000Z");
+
+    const run = await app.runJob("refresh", {
+      now,
+      fetch: (request) => {
+        seen.push(request);
+        return { body: { items: Array.from({ length: 12 }, (_, index) => ({ title: \`Story \${index + 1}\` })) } };
+      },
+    });
+    expect(run).toEqual({ ok: true, error: null });
+    expect(seen).toEqual([
+      { url: "https://feeds.example.com/headlines.json", headers: { "user-agent": "Hearth", accept: "application/json" } },
+    ]);
+    expect(lin.query("latest").map((headline) => headline.title)).toEqual(
+      Array.from({ length: 10 }, (_, index) => \`Story \${index + 1}\`),
+    );
+    expect(lin.job("refresh")).toEqual({ succeededAt: now.toISOString(), failedAt: null, running: false, canRun: false });
+
+    expect(() => lin.requestRun("refresh")).toThrow("forbidden");
+    expect(sam.requestRun("refresh")).toMatchObject({ running: true, canRun: true });
+
+    const failed = await app.runJob("refresh", { fetch: () => ({ status: 503 }) });
+    expect(failed).toEqual({ ok: false, error: "The feed answered 503." });
+    expect(lin.query("latest")).toHaveLength(10);
+    expect(lin.job("refresh")).toMatchObject({ succeededAt: now.toISOString(), failedAt: expect.any(String), running: false });
+  });
 });
 `,
 };
