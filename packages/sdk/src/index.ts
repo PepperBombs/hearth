@@ -12,7 +12,8 @@
  * `@hearth/sdk/manifest-schema`, which the framework uses; mini-apps do not
  * import it.
  *
- * The design is docs/mini-app-contract.md, sections A1 and A2.
+ * The design is docs/mini-app-contract.md, sections A1 and A2, and for the
+ * hosts in `network` section C.
  */
 
 /**
@@ -20,9 +21,11 @@
  * "handshake"). It is the `version` in this package's package.json; a unit
  * test fails when the two differ. While below 1.0, any breaking change to SDK
  * types, component props, token class names or the manifest schema raises the
- * minor version.
+ * minor version, and an addition (such as `network` in 0.1.1) the patch
+ * version: a repository whose apps use the addition declares at least that
+ * version, which an older SDK refuses.
  */
-export const SDK_VERSION: string = "0.1.0";
+export const SDK_VERSION: string = "0.1.1";
 
 /** Text in every supported language. Content typed by users is never one of these. */
 export type Localized = { en: string; zh: string };
@@ -127,6 +130,14 @@ export type Manifest<S = Record<string, Setting>, M = Record<string, string>> = 
   /** Where the app may be added. Left out, it may be added to both kinds of space. */
   spaces?: readonly SpaceKind[];
   widget: { size: WidgetSize };
+  /**
+   * The hosts the app's jobs may fetch from, as lower-case DNS names
+   * ("api.github.com"): one to ten, each written once, exactly as the
+   * requests name it. Whoever adds the app is shown them. Left out, the app
+   * fetches nothing. A name of the local network (`localhost`, or one ending
+   * in `.localhost`, `.local`, `.internal` or `.home.arpa`) is refused.
+   */
+  network?: readonly string[];
   /** Keyed by the name code reads the value under. */
   settings?: S;
   /**

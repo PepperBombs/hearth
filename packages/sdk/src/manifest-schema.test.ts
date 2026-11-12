@@ -13,6 +13,7 @@ function valid() {
     color: "green",
     spaces: ["personal", "group"],
     widget: { size: "tall" },
+    network: ["api.github.com"],
     settings: {
       aisles: {
         type: "list",
@@ -196,6 +197,124 @@ describe("manifestSchema", () => {
       expect(after((draft) => set(draft, "spaces", ["group"]))).toEqual([]);
       expect(after((draft) => set(draft, "spaces", []))).toEqual(["spaces"]);
       expect(after((draft) => set(draft, "spaces", ["personal", "team"]))).toEqual(["spaces.1"]);
+    });
+  });
+
+  describe("network", () => {
+    /** Where the schema faults the manifest when its hosts are these. */
+    const withHosts = (network: unknown) => after((draft) => set(draft, "network", network));
+    /** What the schema says of the manifest's first host when its hosts are these. */
+    const sayOfHosts = (network: unknown) => {
+      const result = manifestSchema.safeParse({ ...valid(), network });
+      return result.success ? [] : result.error.issues.map((issue) => issue.message);
+    };
+
+    it("accepts lower-case DNS names, from one to ten, each once", () => {
+      for (const network of [
+        ["api.github.com"],
+        ["api.github.com", "feeds.example.com"],
+        Array.from({ length: 10 }, (_, n) => `feed${n}.example.com`),
+        ["example.com", "a.b.c.example.org", "my-feeds.example.net", "1st.example.com", "xn--bcher-kva.example.com"],
+        [`${"a".repeat(63)}.example.com`, `${Array.from({ length: 3 }, () => "a".repeat(63)).join(".")}.${"b".repeat(61)}`],
+        // A name that merely starts like one of the local network leads out to the internet.
+        ["localhost.example.com", "local.example.com", "printer.local.example.com", "home.arpa.example.com"],
+      ]) {
+        expect(withHosts(network), JSON.stringify(network)).toEqual([]);
+      }
+      expect(manifestSchema.parse({ ...valid(), network: ["api.github.com", "feeds.example.com"] }).network).toEqual([
+        "api.github.com",
+        "feeds.example.com",
+      ]);
+    });
+
+    it("refuses a scheme, a port, a path, upper case, a wildcard and an IP address", () => {
+      for (const host of [
+        "https://api.github.com",
+        "//api.github.com",
+        "api.github.com:443",
+        "api.github.com/search/repositories",
+        "api.github.com?q=stars",
+        "someone@api.github.com",
+        "API.github.com",
+        "Api.GitHub.com",
+        "*.github.com",
+        "192.0.2.1",
+        "2001:db8::1",
+        "[2001:db8::1]",
+      ]) {
+        expect(withHosts([host]), host).toEqual(["network.0"]);
+      }
+      expect(sayOfHosts(["https://api.github.com"])).toEqual([
+        '"https://api.github.com" is not a host name. Write a lower-case DNS name such as api.github.com: no scheme, port, path, wildcard or IP address.',
+      ]);
+    });
+
+    it("refuses what is not a DNS name of two or more labels", () => {
+      for (const host of [
+        "",
+        "github",
+        "api.github.com.",
+        ".github.com",
+        "api..github.com",
+        " api.github.com",
+        "api.github.com ",
+        "-api.github.com",
+        "api-.github.com",
+        "api_v3.github.com",
+        "api.github.c0m",
+        "例子.example.com",
+        // A label of 64 characters, and a name of 254.
+        `${"a".repeat(64)}.example.com`,
+        `${Array.from({ length: 3 }, () => "a".repeat(63)).join(".")}.${"b".repeat(62)}`,
+      ]) {
+        expect(withHosts([host]), JSON.stringify(host)).toEqual(["network.0"]);
+      }
+    });
+
+    it("refuses a name of the local network", () => {
+      for (const host of ["localhost", "printer.local", "app.localhost", "db.internal", "nas.home.arpa", "home.arpa"]) {
+        expect(withHosts([host]), host).toEqual(["network.0"]);
+      }
+      expect(sayOfHosts(["printer.local"])).toEqual([
+        '"printer.local" is a name of the local network. A job fetches from hosts on the internet only.',
+      ]);
+      expect(sayOfHosts(["localhost"])).toEqual(['"localhost" is a name of the local network. A job fetches from hosts on the internet only.']);
+    });
+
+    it("refuses a name twice, naming the second", () => {
+      expect(withHosts(["api.github.com", "feeds.example.com", "api.github.com"])).toEqual(["network.2"]);
+      expect(sayOfHosts(["api.github.com", "api.github.com"])).toEqual(['"api.github.com" is listed twice.']);
+    });
+
+    it("refuses an empty list and eleven names", () => {
+      expect(withHosts([])).toEqual(["network"]);
+      expect(sayOfHosts([])).toEqual(["List at least one host, or leave network out."]);
+      const eleven = Array.from({ length: 11 }, (_, n) => `feed${n}.example.com`);
+      expect(withHosts(eleven)).toEqual(["network"]);
+      expect(sayOfHosts(eleven)).toEqual(["List at most 10 hosts."]);
+    });
+
+    it("refuses hosts that are not a list of texts, with one message", () => {
+      // A text longer than ten characters is not also counted as too many hosts.
+      expect(withHosts("api.github.com")).toEqual(["network"]);
+      expect(sayOfHosts("api.github.com")[0]).toContain("expected array");
+      expect(withHosts(null)).toEqual(["network"]);
+      expect(withHosts({ 0: "api.github.com" })).toEqual(["network"]);
+      expect(withHosts([443])).toEqual(["network.0"]);
+    });
+
+    it("names every problem at once", () => {
+      expect(withHosts(["api.github.com", "localhost", "API.example.com", "api.github.com"])).toEqual([
+        "network.1",
+        "network.2",
+        "network.3",
+      ]);
+      const elevenBad = [...Array.from({ length: 10 }, (_, n) => `feed${n}.example.com`), "localhost"];
+      expect(withHosts(elevenBad)).toEqual(["network", "network.10"]);
+    });
+
+    it("may be left out", () => {
+      expect(withHosts(undefined)).toEqual([]);
     });
   });
 

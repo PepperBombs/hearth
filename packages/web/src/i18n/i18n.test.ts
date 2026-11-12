@@ -1,6 +1,15 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { LOCALES } from "@hearth/shared";
-import { createTranslator, dictionaries, pickLocalized, placeholdersOf, translate, type MessageKey, type PlainMessageKey } from "./index";
+import {
+  createTranslator,
+  dictionaries,
+  joinNames,
+  pickLocalized,
+  placeholdersOf,
+  translate,
+  type MessageKey,
+  type PlainMessageKey,
+} from "./index";
 import {
   HTML_LANG,
   LOCALE_STORAGE_KEY,
@@ -93,6 +102,17 @@ describe("pickLocalized", () => {
     expect(pickLocalized({ en: "Grocery", zh: "购物清单" }, "zh")).toBe("购物清单");
     expect(pickLocalized({ en: "Grocery", zh: "" }, "zh")).toBe("Grocery");
     expect(pickLocalized({ en: "", zh: "购物清单" }, "en")).toBe("购物清单");
+  });
+});
+
+describe("joinNames", () => {
+  it("joins names as each language lists them", () => {
+    expect(joinNames(["api.github.com", "feeds.example.com", "photos.example.net"], "en")).toBe(
+      "api.github.com, feeds.example.com, photos.example.net",
+    );
+    expect(joinNames(["api.github.com", "feeds.example.com"], "zh")).toBe("api.github.com、feeds.example.com");
+    expect(joinNames(["api.github.com"], "zh")).toBe("api.github.com");
+    expect(joinNames([], "en")).toBe("");
   });
 });
 

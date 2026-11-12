@@ -144,6 +144,29 @@ describe("defineApp", () => {
     defineApp({ ...rest, settings: { on: { type: "switch", scope: "group", default: true, label: { en: "On", zh: "开" } } } });
     // @ts-expect-error not a property of a manifest
     defineApp({ ...rest, colour: "blue" });
+    // @ts-expect-error the hosts are a list
+    defineApp({ ...rest, network: "api.github.com" });
+    // @ts-expect-error a host is a name
+    defineApp({ ...rest, network: [443] });
+  });
+
+  it("takes the hosts an app fetches from, written in place or declared as a constant", () => {
+    const rest = {
+      id: "x1",
+      name: { en: "X", zh: "某" },
+      description: { en: "X", zh: "某" },
+      icon: "box",
+      color: "blue",
+      widget: { size: "small" },
+    } as const;
+    const HOSTS = ["api.github.com", "feeds.example.com"] as const;
+    const inPlace = defineApp({ ...rest, network: ["api.github.com"] });
+    const constant = defineApp({ ...rest, network: HOSTS });
+    expect(inPlace.network).toEqual(["api.github.com"]);
+    expect(constant.network).toBe(HOSTS);
+    expectTypeOf(inPlace).toExtend<Manifest>();
+    expectTypeOf(constant).toExtend<Manifest>();
+    expectTypeOf<Manifest["network"]>().toEqualTypeOf<readonly string[] | undefined>();
   });
 });
 

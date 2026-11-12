@@ -60,7 +60,18 @@ export default defineApp({
 - `manifestSchema` also refuses what the types cannot express: empty text, a
   default that does not fit its own setting (a `select` default that is not
   an option, a number outside `min` and `max`), placeholders that differ
-  between the two languages, and unknown properties.
+  between the two languages, a host in `network` that is not a plain host
+  name, and unknown properties.
+- **`network`** lists the hosts the app's jobs may fetch from, exactly as
+  the requests will name them: `network: ["api.github.com"]`. One to ten
+  lower-case DNS names, none twice: no scheme, port, path, wildcard or IP
+  address, and no name of the local network (`localhost`, `printer.local`,
+  anything ending in `.localhost`, `.local`, `.internal` or `.home.arpa`).
+  Whoever adds the app is told, in the dialog that adds it: "Fetches data
+  from api.github.com on its own." Leave it out for an app that fetches
+  nothing. It came with SDK 0.1.1, so a repository whose apps use it
+  declares `"hearth": { "sdk": "^0.1.1" }`. Jobs themselves, which do the
+  fetching, are not built yet (docs/mini-app-contract.md, section C).
 
 ### Settings
 

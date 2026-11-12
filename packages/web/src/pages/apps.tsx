@@ -17,6 +17,10 @@
  *   brings that back (owner's decision 2). Only an owner can, and for an
  *   owner the dialog reads the owners' list first and says so, with how many
  *   entries come back, so that who else may use it is chosen knowing that.
+ * - An app whose manifest names hosts in `network` fetches from them on its
+ *   own, and the dialog says so under its description, new or brought back
+ *   (owner's decision 14). It asks nothing more: the app is trusted code
+ *   that the server's owner chose to build in.
  */
 import { ArrowRightLeft, ChevronRight, LayoutGrid, Pin, Plus, RefreshCw, Trash2, UserRound, Users } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
@@ -37,7 +41,7 @@ import {
 import { AppIcon } from "../components/app-icon";
 import { Page } from "../components/shell/page";
 import { Card, CardFooter, CardHeader } from "../components/card";
-import { pickLocalized, type PlainMessageKey, type Translate } from "../i18n";
+import { joinNames, pickLocalized, type PlainMessageKey, type Translate } from "../i18n";
 import { cx } from "../lib/cx";
 import { failureCode } from "../session/api";
 import { useI18n } from "../session/preferences";
@@ -519,6 +523,7 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
           <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("apps.addChoose")}</legend>
           {addable.map((app) => {
             const entry = removed(app.id);
+            const hosts = app.manifest.network ?? [];
             return (
               <label
                 key={app.id}
@@ -536,6 +541,11 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="font-medium">{pickLocalized(app.manifest.name, locale)}</span>
                   <span className="text-xs text-fg-3">{pickLocalized(app.manifest.description, locale)}</span>
+                  {hosts.length > 0 ? (
+                    <span className="text-xs text-fg-2 wrap-anywhere">
+                      {t("apps.addNetwork", { hosts: joinNames(hosts, locale) })}
+                    </span>
+                  ) : null}
                   {entry ? <span className="text-xs font-medium text-fg-2">{restoreNote(entry, t)}</span> : null}
                 </span>
               </label>

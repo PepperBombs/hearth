@@ -3,7 +3,7 @@
 This is the design the framework is being built to. It was agreed with the
 owner before any of it was written, and it changes only by agreement. Parts
 that are not built yet are marked in section B. Section C, the design of
-build-order item 5, is not built yet.
+build-order item 5, marks its own steps the same way.
 
 ## Owner's decisions (these override anything below that disagrees)
 
@@ -762,7 +762,7 @@ Each step is one pull request; `pnpm check` passes at the end of each. A step th
 
 ## C. Scheduled jobs and outbound fetch
 
-Build-order item 5, designed before any of it is built. The owner's decisions 8 to 15 are agreed; the rest of this section follows from them and is for the owner to agree to before step C1 starts. Where section A differs (A3 reserved the builder name `job` without designing it, A4 sketched the trending app with each person's languages), this section wins. None of its steps is built.
+Build-order item 5, designed before any of it was built. The owner's decisions 8 to 15 come first, and the rest of this section follows from them. Where section A differs (A3 reserved the builder name `job` without designing it, A4 sketched the trending app with each person's languages), this section wins. Its build plan, at the end, marks each step once built.
 
 ### Owner's decisions for section C (these override anything below that disagrees)
 
@@ -1253,10 +1253,16 @@ refresh: app.job(
 
 ### Build plan for section C
 
-Each step is one pull request into `main` of the repository it names; `pnpm check` passes at the end of each, and each updates `AGENTS.md` where a fact there changes. The SDK becomes 0.1.1 in C1; C2, C6 and C7 add to it without raising it again, since no repository declares 0.1.1 before C9, which needs all of them. None of these steps is built.
+Each step is one pull request into `main` of the repository it names; `pnpm check` passes at the end of each, and each updates `AGENTS.md` where a fact there changes. The SDK becomes 0.1.1 in C1; C2, C6 and C7 add to it without raising it again, since no repository declares 0.1.1 before C9, which needs all of them. A step that is built says so; the others are not built yet.
 
-- **C1. The manifest's hosts** (`hearth`). `network` in `Manifest` and in `manifestSchema`; the add dialog's line (`apps.addNetwork` in `en.ts` and `zh.ts`); the SDK's version 0.1.1.
+- **C1. The manifest's hosts** *Built.* (`hearth`). `network` in `Manifest` and in `manifestSchema`; the add dialog's line (`apps.addNetwork` in `en.ts` and `zh.ts`); the SDK's version 0.1.1.
   *Testable:* the schema takes `["api.github.com"]` and refuses a scheme, a port, a path, upper case, a wildcard, an IP address, `localhost`, `printer.local`, a name twice, an empty list and eleven names; the dialog names the hosts of a new app and of one brought back, in both languages (`manage.test.tsx`, with a made-up manifest).
+  *As built, where it differs from "The manifest's hosts":*
+  - **A label neither starts nor ends with a hyphen**, as in every DNS host name, which the design did not say. `home.arpa` itself is refused with the names that end in it; a name that only starts like a local one (`localhost.example.com`) is a name of the internet and is taken.
+  - **The schema counts the hosts itself**, not with zod's `.min()` and `.max()`, which also measure a text given instead of a list and would add a misleading "at most 10" to the message that a list is wanted. It reports every problem at once, each at the host it is about (`network.2`); a name given twice is reported at its second place.
+  - **The start-up check refuses a bad host** through `manifestSchema`, in `createRegistry` and so in `hearth-apps check` (`registry.test.ts`). Refusing hosts in an app that defines no job waits for C2, which brings jobs.
+  - **The hosts are joined by `joinNames`** (`packages/web/src/i18n/index.ts`): ", " in English and "、" in Chinese. The separators are not in the dictionaries, because every string there must hold Chinese text (an i18n test) and "、" alone holds none. The line comes right under the description; for an app brought back, the note about its data follows it.
+  - **The SDK is 0.1.1** (`packages/sdk/package.json` and `SDK_VERSION`). `hearth-stones` and `packages/fixture-apps` still declare `^0.1.0`, which 0.1.1 fits. A repository whose apps name `network` declares `^0.1.1`, which an SDK of 0.1.0 refuses with status 3.
 - **C2. Jobs in the SDK, checked at start-up** (`hearth`). `app.job`, `Job`, `JobAbout`, `JobCtx`, `FetchInit`, `FetchResponse`, `FetchError`, `SpaceSettingsOf` and `JobName`; `routes` takes jobs; `checkServer` and `createRegistry` check them; the new lint message for `fetch`. Nothing runs a job yet.
   *Testable:* type tests (a job's settings are the space's only, `read` gives no way to write, `JobName` lists jobs and `QueryName` and `MutationName` do not, a job without a description or an interval does not compile); the start-up check refuses an empty description, 14, 10081 and 60.5 minutes, an input, and hosts without a job; `/q/` and `/m/` answer 404 for a job's name.
 - **C3. `ctx.fetch`** (`hearth`). `fetch.ts`: the rules, the pace, Node's transport and the stand-in file; `HEARTH_FETCH_STANDINS` in `config.ts`.

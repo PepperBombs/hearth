@@ -96,11 +96,14 @@ which passes `check` untouched; and step 15, the grocery list, the first
 mini-app of `hearth-stones` (`grocery/` there), which the people of a space
 share, with tests of its own and an end-to-end test here of two family
 members sharing one list (`e2e/mini-apps`, `pnpm e2e:mini-apps`). Items 2
-to 4 are built; item 5 is next. It follows section C of the same document:
-the owner's decisions 8 to 15 at its top, the design of jobs, `ctx.fetch`
-and the scheduler, the GitHub Trending app, and eleven build steps, C1 to
-C11, none of them built yet. The document's last two sections, the
-questions behind decisions 1 to 5 and the risks, are D and E.
+to 4 are built; item 5 is being built. It follows section C of the same
+document: the owner's decisions 8 to 15 at its top, the design of jobs,
+`ctx.fetch` and the scheduler, the GitHub Trending app, and eleven build
+steps, C1 to C11, each marked there once built. Built so far: C1, the
+hosts an app's jobs may fetch from (`network` in the manifest, checked by
+`manifestSchema`), which the dialog that adds an app names, and the SDK's
+version 0.1.1. The document's last two sections, the questions behind
+decisions 1 to 5 and the risks, are D and E.
 
 ## Layout and commands
 
@@ -110,7 +113,7 @@ questions behind decisions 1 to 5 and the risks, are D and E.
 | `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too, and `appHooks` (`src/web/hooks.ts`), the hooks a widget or page is written with. `@hearth/sdk/web/scope` is the React context those hooks read, which the shell fills; for the framework only. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer`, `AppError`, `z` and the types of `ctx`; it holds no logic. `@hearth/sdk/testing` (`src/testing.ts`) is what an app's tests are written with: `testApp`, `AppCallError` and their types; it holds no logic, only the hand-over to what the framework installs through `@hearth/sdk/testing/host` (`src/testing-host.ts`, for the framework only). `src/routes.ts` holds the types that name an app's routes, shared by the hooks and the tests and exported from `@hearth/sdk/web`. `@hearth/sdk/manifest-schema` is the run-time check of a manifest and of a setting's value (`settingValueProblems`), for the framework only. `bin/hearth-apps.mjs` and `tools` are the `hearth-apps` command, plain JavaScript: `sync.mjs` (finds the apps, the version handshake, writes the generated lists), `import-scan.mjs` (what a file of an app may import), `default-export.mjs` (whether `widget.tsx`, `page.tsx` and `server.ts` have the default export the generated lists import), `check.mjs`, `test.mjs` (runs the apps' tests), `dev.mjs` (the dev servers with the apps in), `new.mjs` (a new app, copied from the sample checklist), `eslint-boundary.mjs`. `@hearth/sdk/eslint` (`eslint.js`) and `tsconfig.app.json` are the ESLint and TypeScript configuration of a mini-apps repository. Imports no other Hearth package. |
 | `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file), `installs.ts` (who may use which app where; add, remove, bring back, move to another space, delete data, each person's switch and pin), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db`, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds), `routes.ts`, `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports), `check-bundle.ts` (run by `hearth-apps check`, not by the server), and `app-testing.ts` with `app-testing.setup.ts` (the implementation of `testApp` for an app's own tests, which `vitest.apps.config.ts` at the package's root installs; not part of the server). `installs.ts` also holds the owners' list of a space's apps (`listSpaceApps`) and the access route's work (`setAppAccess`). `src/groups` is groups and their people: `policy.ts` (`groupRights`: who may create groups and invite), `members.ts` (create, rename, add or invite, change, remove or leave, take an invitation back) and `routes.ts`. `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository. Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file, a widget, a page and tests of its own (`checklist.test.ts`, written with `testApp`), and is the template `hearth-apps new` copies; `feed` a manifest and a widget, no server file. |
-| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card, the avatar and `LinkedText` in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes and settings, and adding, removing, moving, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, moving, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page, with the dialogs that add, move and remove an app. `src/groups` is the groups' cards in Settings: `groups.tsx` (the cards, creating, renaming, leaving), `people.tsx` (the people, adding, the dialog for one person, invitations), `access-table.tsx` (the member-by-app table), `api.ts` and `queries.ts`. |
+| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card, the avatar and `LinkedText` in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes and settings, and adding, removing, moving, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, moving, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page, with the dialogs that add, move and remove an app; the one that adds names the hosts an app's manifest lists in `network`. `src/groups` is the groups' cards in Settings: `groups.tsx` (the cards, creating, renaming, leaving), `people.tsx` (the people, adding, the dialog for one person, invitations), `access-table.tsx` (the member-by-app table), `api.ts` and `queries.ts`. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). `servers.ts` holds the addresses, the people and the command that starts a copy of the built server. `e2e/mini-apps` holds the tests of mini-apps from another repository, one file per app named after its ID (`grocery.spec.ts`), which `playwright.mini-apps.config.ts` runs against Hearth built with them. |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Each release is built with the mini-apps of `APPS_REPO` at the same moment, copied in beside the framework and linked to its SDK. Not yet tested on a real server; `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl. |
 | `.github/workflows` | `ci.yml`: the framework by itself (`check`), end to end with the sample apps (`e2e`), and with `main` of `hearth-stones` checked out beside it, checked, built and end to end (`mini-apps`). |
@@ -137,8 +140,11 @@ Things that bite:
 
 - TypeScript stays on version 6 until `typescript-eslint` supports 7.
 - Every interface string goes in both `packages/web/src/i18n/en.ts` and
-  `zh.ts`; a missing key is a type error. Words in [brackets] name a page
-  and are drawn as a link to it by `LinkedText`
+  `zh.ts`; a missing key is a type error. Every Chinese string must hold
+  Chinese text (an i18n test), so what is punctuation alone stays in code:
+  `joinNames` (`packages/web/src/i18n/index.ts`) joins names that are the
+  same in both languages, such as host names, with ", " or "、". Words in
+  [brackets] name a page and are drawn as a link to it by `LinkedText`
   (`packages/web/src/components/linked-text.tsx`), wherever they fall in
   each language; an i18n test checks that both languages mark the same
   link. A string with brackets must be drawn with `LinkedText`.
@@ -501,14 +507,26 @@ Things that bite:
 - `SDK_VERSION` in `packages/sdk/src/index.ts` must equal `version` in
   `packages/sdk/package.json`; a unit test fails otherwise. Below 1.0, a
   breaking change to the SDK's types or to the manifest schema raises the
-  minor version.
+  minor version, and an addition the patch version: 0.1.1 added `network`
+  to the manifest. A mini-apps repository whose apps use an addition
+  declares that version (`^0.1.1`), which an older SDK refuses with status
+  3; one that declares `^0.1.0` still fits 0.1.1. `hearth-stones` and
+  `packages/fixture-apps` declare `^0.1.0` until an app of theirs names
+  hosts (section C: C8 and C9). Section C adds to the SDK in C2, C6 and C7
+  without raising it again, since nothing declares 0.1.1 before C9.
 - The SDK's type tests (`expectTypeOf`, `@ts-expect-error` in
   `packages/sdk/src/index.test.ts` and `server.test.ts`) fail in
   `pnpm typecheck`, not in the test runner.
 - A manifest has two descriptions that must agree: the types in
   `packages/sdk/src/index.ts` and the schema in `manifest-schema.ts`. Change
-  both. `@hearth/sdk` itself must keep importing nothing (it ends up in the
-  web bundle with every manifest); zod stays in `manifest-schema.ts` and
+  both. The schema holds what the types cannot: `network` is 1 to 10
+  lower-case DNS names of two or more labels, the last letters only (so
+  no scheme, port, path, wildcard or IP address), none twice and none of
+  the local network (`localhost`, `*.localhost`, `*.local`, `*.internal`,
+  `home.arpa` and below); it counts the hosts itself, because zod's
+  `.max()` on a list also measures a text given in its place.
+  `@hearth/sdk` itself must keep importing nothing (it ends up in the web
+  bundle with every manifest); zod stays in `manifest-schema.ts` and
   `server.ts`.
 - Icon and colour names are listed in the SDK. A new icon also needs its
   Lucide icon in `packages/sdk/src/web/icon.tsx` (a type error until then); a

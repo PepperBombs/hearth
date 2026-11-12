@@ -50,13 +50,29 @@ const counter = defineApp({
   },
 });
 
+/** An app that fetches from two hosts on its own, as its manifest's `network` says. */
+const headlines = defineApp({
+  id: "headlines",
+  name: { en: "Headlines", zh: "头条" },
+  description: { en: "The latest headlines from two feeds.", zh: "两个来源的最新头条。" },
+  icon: "file-text",
+  color: "blue",
+  widget: { size: "wide" },
+  network: ["feeds.example.com", "photos.example.net"],
+});
+
 const Empty = () => null;
 const BUNDLED: readonly BundledApp[] = [
   { id: "checklist", manifest: checklistManifest, hasPage: true, widget: part("checklist/widget"), page: part("checklist/page") },
   { id: "feed", manifest: feedManifest, hasPage: false, widget: part("feed/widget") },
   { id: "counter", manifest: counter, hasPage: false, widget: () => Promise.resolve({ default: Empty }) },
 ];
-const MANIFESTS: Record<string, Manifest> = { checklist: checklistManifest, feed: feedManifest, counter };
+/** The build of BUNDLED plus the app that fetches on its own. */
+const WITH_HEADLINES: readonly BundledApp[] = [
+  ...BUNDLED,
+  { id: "headlines", manifest: headlines, hasPage: false, widget: () => Promise.resolve({ default: Empty }) },
+];
+const MANIFESTS: Record<string, Manifest> = { checklist: checklistManifest, feed: feedManifest, counter, headlines };
 
 function summary(manifest: Manifest, spaceId: string, extra: Partial<AppSummary> = {}): AppSummary {
   return {
@@ -591,6 +607,77 @@ describe("the Apps page", () => {
     expect(within(add).getByRole("radio", { name: "暂时只有我" })).toBeTruthy();
     expect(await within(add).findByText("曾被移除：再次添加会恢复它的数据，共 2 条。")).toBeTruthy();
     expect(within(add).getByRole("button", { name: "恢复" })).toBeTruthy();
+  });
+});
+
+describe("the hosts an app fetches from", () => {
+  /** The choice of one app in the dialog that adds apps: its radio button with everything written beside it. */
+  const choice = (add: HTMLElement, name: RegExp) => within(add).getByRole("radio", { name }).closest("label") as HTMLElement;
+  /** The texts under an app's name in its choice, in order. */
+  const linesOf = (option: HTMLElement) =>
+    Array.from(option.querySelectorAll("span > span"), (line) => line.textContent ?? "").filter((line) => line !== "");
+
+  it("are named under the description of a new app, and nothing is said of an app that names none", async () => {
+    const server = new FakeServer();
+    start(server, "/apps", WITH_HEADLINES);
+
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
+    const add = await dialog("Add an app to your personal space");
+    expect(linesOf(choice(add, /Headlines/))).toEqual([
+      "Headlines",
+      "The latest headlines from two feeds.",
+      "Fetches data from feeds.example.com, photos.example.net on its own.",
+    ]);
+    for (const other of [/Checklist/, /Feed/, /Counter/]) {
+      expect(choice(add, other).textContent, String(other)).not.toMatch(/Fetches data/);
+    }
+
+    // The dialog asks nothing more: the app is added as any other.
+    fireEvent.click(within(add).getByRole("radio", { name: /Headlines/ }));
+    fireEvent.click(within(add).getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(server.changes).toEqual([`PUT /api/spaces/${PERSONAL}/apps/headlines {}`]));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("are named for an app brought back, before what comes back with it", async () => {
+    const server = new FakeServer();
+    server.removed[FAMILY] = [{ id: "headlines", rowCount: 4 }];
+    start(server, "/apps", WITH_HEADLINES);
+
+    fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Add an app" }));
+    const add = await dialog("Add an app to Family");
+    expect(await within(add).findByText("Removed earlier: adding it again brings back its data, 4 saved entries.")).toBeTruthy();
+    expect(linesOf(choice(add, /Headlines/))).toEqual([
+      "Headlines",
+      "The latest headlines from two feeds.",
+      "Fetches data from feeds.example.com, photos.example.net on its own.",
+      "Removed earlier: adding it again brings back its data, 4 saved entries.",
+    ]);
+    fireEvent.click(within(add).getByRole("radio", { name: /Headlines/ }));
+    fireEvent.click(within(add).getByRole("button", { name: "Bring back" }));
+    await waitFor(() => expect(server.changes).toEqual([`PUT /api/spaces/${FAMILY}/apps/headlines {"memberAccess":"none"}`]));
+  });
+
+  it("are named in Chinese, for a new app and for one brought back", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([], { locale: "zh" });
+    server.removed[FAMILY] = [{ id: "headlines", rowCount: 4 }];
+    start(server, "/apps", WITH_HEADLINES);
+
+    fireEvent.click(within(await spaceCard("个人")).getByRole("button", { name: "添加应用" }));
+    const personal = await dialog("向个人空间添加应用");
+    expect(linesOf(choice(personal, /头条/))).toEqual(["头条", "两个来源的最新头条。", "会自行从 feeds.example.com、photos.example.net 获取数据。"]);
+    fireEvent.click(within(personal).getByRole("button", { name: "取消" }));
+
+    fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "添加应用" }));
+    const family = await dialog("向Family添加应用");
+    expect(await within(family).findByText("曾被移除：再次添加会恢复它的数据，共 4 条。")).toBeTruthy();
+    expect(linesOf(choice(family, /头条/))).toEqual([
+      "头条",
+      "两个来源的最新头条。",
+      "会自行从 feeds.example.com、photos.example.net 获取数据。",
+      "曾被移除：再次添加会恢复它的数据，共 4 条。",
+    ]);
   });
 });
 

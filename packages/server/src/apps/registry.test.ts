@@ -67,6 +67,8 @@ describe("createRegistry", () => {
     ["an unknown colour", { color: "red" }, "color"],
     ["an empty description", { description: { en: "Short notes.", zh: " " } }, "description.zh"],
     ["a property it does not know", { hasPage: true }, "hasPage"],
+    ["a host that is not a plain DNS name", { network: ["https://api.github.com"] }, "network.0"],
+    ["a host of the local network", { network: ["api.github.com", "printer.local"] }, "network.1"],
   ])("refuses a manifest with %s", (_label, change, where) => {
     const problems = problemsOf([bundled({ ...notes, ...change } as unknown as Manifest)]);
     expect(problems.join("\n")).toContain(where);

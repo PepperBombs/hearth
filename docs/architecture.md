@@ -324,11 +324,14 @@ allows its kind, or says why there are none. Adding an app to a group, and
 moving one into a group, asks who else may use it, "only me for now" first.
 An app the space removed is offered too: for an owner the dialog reads the
 space's owners' list first and says that adding it again brings back its
-data, with how many entries, and its button says "Bring back". Whatever
-the server answers to adding, removing or moving, the session and the
-owners' list are loaded again, so a page that was out of date catches up.
-The page is "Apps" in the sidebar and in the phone's tab bar, and the empty
-dashboard and the group cards link to it.
+data, with how many entries, and its button says "Bring back". An app
+whose manifest lists hosts in `network` is said to fetch data from them on
+its own ("Fetches data from api.github.com on its own."), new or brought
+back; the dialog asks nothing more about it. Whatever the server answers
+to adding, removing or moving, the session and the owners' list are loaded
+again, so a page that was out of date catches up. The page is "Apps" in
+the sidebar and in the phone's tab bar, and the empty dashboard and the
+group cards link to it.
 
 The settings dialog (`packages/web/src/apps/settings-dialog.tsx`) opens
 from the Apps page, from the button on the app's card and from the top bar

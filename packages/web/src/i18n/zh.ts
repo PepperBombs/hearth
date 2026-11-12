@@ -50,6 +50,7 @@ export const zh: Dictionary = {
   "apps.addNothing": "这台服务器上的应用都已经在这里了。",
   "apps.addNothingFits": "这台服务器上的其他应用不能添加到这个空间。",
   "apps.addNoneInstalled": "这台服务器上还没有安装应用。",
+  "apps.addNetwork": "会自行从 {hosts} 获取数据。",
   "apps.addRestoreNone": "曾被移除：再次添加会恢复它的设置。",
   "apps.addRestoreOne": "曾被移除：再次添加会恢复它的数据，共 1 条。",
   "apps.addRestoreMany": "曾被移除：再次添加会恢复它的数据，共 {count} 条。",
