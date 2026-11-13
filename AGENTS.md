@@ -233,8 +233,24 @@ Things that bite:
   (`HEARTH_BASE`, `FRAMEWORK_REPO`, `REMOTE`, `BRANCH`, `SELF_UPDATE`) keep
   their names, meanings and defaults, in a config file of `NAME=value`
   lines found as today; and `state/deploy-script` and
-  `state/deploy-script.new` are the starter's to write. Everything else may
-  change. The same list is at the top of the script: keep the two alike.
+  `state/deploy-script.new` are the starter's to write. That is all a
+  hand-over needs. But an installed copy that cannot hand a run over (the
+  newest commit's script is missing, empty, not a regular file or not
+  parsed, or could not be copied under `state/`) does that run's work
+  itself, as far as the build, by what it knew on the day it was installed.
+  So these may not change either, except in a way the oldest installed copy
+  gets right: a release is `releases/<time>` and a finished one holds
+  `RELEASE` with `framework=`, `apps=` and `version=` (such a copy deletes
+  every folder named like a release that has no `RELEASE` and is not
+  `current`); `current` is a link to a release; `state/restart-pending`
+  makes it restart `SERVICE` until `/api/health` at `LIVE_URL` reports that
+  version; `state/failed` is one line, `<stage> <framework commit> <apps
+  commit>`; and it deletes `hearth-deploy-trial-*.db` and
+  `DATABASE.restoring` beside the database. It stops before any of that on
+  a setting it does not know or a value it refuses, so adding a setting is
+  safe, and giving an old file or folder a new meaning is not. Everything
+  else may change. Both lists are at the top of the script: keep them
+  alike.
 - In the deploy script, everything above "From here on this copy does the
   work" also runs in a copy that only hands the run over, which may be much
   older than the config file and than the script it starts. So nothing
@@ -242,7 +258,14 @@ Things that bite:
   that the copy cannot read, or a setting it does not know, is remembered
   (`config_problem`) for the copy that does the work to stop on; only
   `check_starter_settings` runs there; and the tools, folders and database
-  that the work needs are looked at below that line. A new setting goes
+  that the work needs are looked at below that line. One kind of line
+  stops a starter at once, in `load_config`: one it cannot read that begins
+  with the name of one of its own five settings, in any mix of capitals or
+  with a hyphen ("Branch=stable", "SELF-UPDATE=off", "BRANCH stable"),
+  which no later script can mean anything by, and which would otherwise
+  leave the starter going by the default. A name it can read and does not
+  know (`SELF_UPDATES`) is still only remembered, and said with the error
+  when one of the five is then wrong (`starter_setting`). A new setting goes
   into `check_settings`, never among the starter's five. Nor may anything
   there read or change the server's state (the releases, `state/failed`, a
   pending restart): the root refusal, the lock, the fetch of the framework
@@ -255,14 +278,32 @@ Things that bite:
   meanwhile, it compares the two commits' scripts, both read from the
   clone, never its own file, which a run that got in between may have
   replaced (by rename: a running copy goes on reading the old one). A
-  commit whose deploy script is missing, not a regular file or not parsed
-  is not deployed while `SELF_UPDATE` is on: the copy that found out goes
-  on and stops where the build would start, so that `state/failed` holds
-  it like any failed build. A framework fetch that fails before the
-  hand-over is remembered (`framework_fetch`) and reported in step 1,
-  after the leftovers and a pending restart, and the run goes by the
-  commit fetched last. `SELF_UPDATE=off` is also the way out when a
-  commit's script parses but fails as it runs.
+  commit whose deploy script is missing, empty, not a regular file or not
+  parsed is not deployed while `SELF_UPDATE` is on: the copy that found out
+  goes on, clears leftovers away, finishes a pending restart, and stops
+  where the build would start, so that `state/failed` holds it like any
+  failed build. If that copy stops earlier, on the config file, a value, a
+  tool or the database (the checks between "From here on" and the
+  leftovers, while `explain_this_copy` is yes), `die` first says why it is
+  the copy doing the work (`say_script_problem`: what bash said, the NOTE,
+  what to do), because what stopped it may be right for the script it
+  could not start; nothing is recorded then, and it is said at every run.
+  A framework fetch that fails before the hand-over is remembered
+  (`framework_fetch`) and reported in step 1, after the leftovers and a
+  pending restart, and the run goes by the commit fetched last. A pending
+  restart therefore waits for that fetch to fail, up to its limit of two
+  minutes from a remote that does not answer, and for two such fetches
+  when the run is handed over, since the copy that takes over is not told
+  of a fetch that failed and tries again; with `SELF_UPDATE=off` nothing is
+  fetched before the restart, which a test holds it to. A script that
+  parses is handed every run while its commit is the newest, whatever it
+  then does: if it fails or does nothing, no run does anything, a pending
+  restart and newer mini-apps included, and one that ends with status 0
+  says nothing. `SELF_UPDATE=off` is the way out then, once the script of
+  the running release is installed in the old copy's place; so is the next
+  commit whose script works. An unexpected error names the file with the
+  line, since after a hand-over the copy that speaks is
+  `state/deploy-script`.
 - Which mini-apps a server holds is decided when it is built, by
   `HEARTH_APPS_DIR` at that moment: one folder, or several separated like
   `PATH`, a relative one read from the root of this repository. The running
@@ -470,14 +511,26 @@ Things that bite:
   notes which copy asked and whether the lock was held (`pnpm-by.log`,
   `pnpm_askers`). The git stand-in keeps the remote's branch (`main`)
   apart from what the last fetch brought (`fetched`), answers `ls-tree` and
-  `show`, and through files in the test folder makes a fetch fail, leave a
-  process behind or run something in its middle, and `show` stop short or
-  give another text each time. The last test runs the script with the real
-  git on a repository it makes up, so the git commands the script uses
-  must work there as well as in the stand-in. The refusal to run as root is
-  tried in a user namespace (`unshare --map-root-user`), and skipped with a
-  line that says so where a user may not make one; the tests never run
-  anything as the real root. `run` is a run that builds nothing, and
+  `show`, and through files in the test folder makes a fetch fail (in the
+  words `fetch-fails` holds, if it holds any), leave a process behind or
+  run something in its middle, and `show` stop short or give another text
+  each time; it writes down every call that finds
+  `HEARTH_DEPLOY_HANDED_OVER` or `HEARTH_DEPLOY_FETCHED` in its environment
+  (`git-told.log`), which no call may. The last test runs the script with
+  the real git on a repository it makes up, so the git commands the script
+  uses must work there as well as in the stand-in. The refusal to run as
+  root is tried in a user namespace (`unshare --map-root-user`), and
+  skipped with a line that says so where a user may not make one; the
+  tests never run anything as the real root. Whether GitHub's runners let
+  the test run is not known: Ubuntu 24.04 keeps ordinary users from making
+  such a namespace unless a kernel setting is switched off, which `ci.yml`
+  does not do. Under GitHub Actions a skipped test is therefore also
+  written as a warning on the run's page (`skip_test`); look for it, and
+  decide then. What a starter must do without is tested by taking it away:
+  a `PATH` of links that leaves out node, pnpm, tar and systemctl
+  (`starter-bin`), a database nobody may read, and another `bash` first on
+  `PATH` that writes down what it is asked to run. `run` is a run that
+  builds nothing, and
   `deploy` waits a second first, because releases are named after the
   second.
 - A test that runs `hearth-apps` or `sync()` passes `--out` (or `out`) with

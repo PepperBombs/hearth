@@ -79,14 +79,30 @@
 # branch, so it says nothing unless HEARTH_DEPLOY_VERBOSE is set.
 #
 # If the fetch of (d) fails, the run goes on, by the commit that was fetched
-# last: a restart that is still pending needs no network. The failure is
-# reported in step 1, by the copy that gets there.
+# last: finishing a restart that is still pending needs no network. The
+# failure is reported in step 1, by the copy that gets there. The restart
+# does wait for the fetch to fail, though, since (d) comes before anything
+# else: no time at all when the remote refuses, and up to the fetch's limit
+# of two minutes when the remote does not answer. A copy that is handed the
+# run after a fetch that failed is not told that the branch is fetched, so it
+# tries for itself, and the restart then waits for two fetches.
 #
-# A commit whose deploy script is missing, or cannot be parsed, is not
+# A commit whose deploy script is missing, empty, or cannot be parsed, is not
 # deployed: nothing could carry out its run. The copy that found this does
-# everything else and stops with an error where it would start to build.
+# everything else (the leftovers of an interrupted run, a pending restart,
+# "nothing new") and stops with an error where it would start to build.
 # Like any failed build, that is tried again after RETRY_AFTER_MINUTES, or at
-# once after a new commit.
+# once after a new commit. When that copy stops earlier, on the config file
+# or on something else that only the work needs, it says first why it is the
+# one doing the work: what stopped it may be right for a newer deploy script.
+#
+# A deploy script that bash can parse is handed the run, whatever it then
+# does. If it fails as it runs, or does nothing, then for as long as its
+# commit is the newest nothing a run does happens: a pending restart is not
+# finished and newer mini-apps are not deployed either, at every run, and a
+# script that ends with status 0 says nothing of it. The way out is the next
+# commit whose deploy script works, which is handed the run at once, or
+# SELF_UPDATE=off.
 #
 # The newest commit's code runs as the deploy user in every build anyway
 # (pnpm build), so running that commit's deploy script as the same user
@@ -99,8 +115,9 @@
 # release's deploy script differs from it.
 #
 # What an installed copy counts on, for as long as it stays installed. A
-# later version of this script must keep to all of it; everything else may
-# change:
+# later version of this script must keep to all of it: to the first list
+# below for the hand-over, and to the second for the run that cannot be
+# handed over. Everything else may change.
 #
 #   - the framework repository holds the script as the regular file
 #     deploy/hearth-deploy.sh;
@@ -118,9 +135,36 @@
 #
 # So, before the hand-over, a copy must not stop on what only the copy that
 # does the work needs. A line of the config file that it cannot read, or a
-# setting it does not know, is only remembered until then; nothing but the
-# five settings is checked; and the tools, the folders and the database that
-# only the work needs are looked at afterwards.
+# setting it does not know, is only remembered until then, unless the line
+# is plainly one of the five settings misspelt, which no later script can
+# mean anything by; nothing but the five settings is checked; and the tools,
+# the folders and the database that only the work needs are looked at
+# afterwards.
+#
+# The second list is for the one case in which an installed copy cannot
+# hand a run over (the newest commit's deploy script is missing,
+# empty, not a regular file or not parsed, or could not be copied under
+# state/). It then does that run's work itself, up to where the build would
+# start, by what it knew on the day it was installed. So a later version
+# must also leave these as they are, or change them only in a way that a
+# copy as old as the oldest one installed gets right:
+#
+#   - a release is a folder releases/<time>, named as is_release_name says,
+#     and a finished one holds the file RELEASE with the lines framework=,
+#     apps= and version=. Such a copy DELETES every folder with a name like
+#     that and no RELEASE, unless "current" points at it;
+#   - "current" is a link to releases/<time>;
+#   - while state/restart-pending exists (it holds the number of tries so
+#     far, or nothing), such a copy restarts SERVICE, up to three times,
+#     until LIVE_URL/api/health reports the version of current/RELEASE;
+#   - state/failed is one line, "<stage> <framework commit> <apps commit>",
+#     the stage being build, sdk or live. Such a copy reads it, and writes
+#     "build ..." for the commits whose deploy script it could not start;
+#   - beside DATABASE, such a copy deletes hearth-deploy-trial-*.db (with
+#     -wal and -shm) and DATABASE.restoring;
+#   - such a copy stops, before any of this, on a setting in the config file
+#     that it does not know, and on a value it would refuse. So a new
+#     setting is safe to add; a new meaning for an old file or folder is not.
 #
 # Layout under HEARTH_BASE (default /opt/hearth):
 #
@@ -216,10 +260,26 @@ health_pid=""       # the trial server, while it runs
 trial_db=""         # the copy of the database the trial server uses
 build_log=""
 previous_note="Nothing was changed."
+framework_commit=""     # the commit the framework's branch is at, once known
+script_problem=""       # why that commit's deploy script cannot be handed the
+#                         run, if it cannot; see read_deploy_script
+script_remedy=""        # what to do about it
+script_problem_lines="" # what bash said about a script it cannot parse
+explain_this_copy=no    # yes while this copy checks what only the work needs
+
+# Why this copy does the work, although it is not the deploy script of the
+# newest framework commit.
+say_script_problem() {
+  [[ -z $script_problem_lines ]] || printf '%s\n' "$script_problem_lines" | sed 's/^/    /' >&2
+  log "NOTE: the deploy script of framework commit ${framework_commit:0:12} cannot carry out this run, because $script_problem. So this copy does, which may not know a setting or a value that a newer deploy script knows. $script_remedy." >&2
+}
 
 die() {
   trap - ERR
   set +e
+  # Said first, because what stops this copy may well be right: written for a
+  # deploy script newer than this copy, which this run could not be handed to.
+  [[ $explain_this_copy != yes || -z $script_problem ]] || say_script_problem
   log "ERROR: $*" >&2
   if [[ -n $build_log && -s $build_log ]]; then
     log "Last lines of $build_log:" >&2
@@ -259,7 +319,9 @@ on_exit() {
 }
 trap on_exit EXIT
 trap 'die "Interrupted."' INT TERM
-trap 'die "An unexpected error occurred on line $LINENO."' ERR
+# The file is named with the line: after a hand-over the copy that speaks is
+# state/deploy-script, not the installed one.
+trap 'die "An unexpected error occurred on line $LINENO of ${BASH_SOURCE[0]}."' ERR
 
 # ---------------------------------------------------------------------------
 # Config file: lines of NAME=value. No shell code is run from it.
@@ -269,6 +331,14 @@ trap 'die "An unexpected error occurred on line $LINENO."' ERR
 # or a setting it does not know. Reading does not stop on it, because a newer
 # deploy script may know better, and this copy may only be the one that
 # hands the run over to it. The copy that does the work stops on it.
+#
+# Not so a line that cannot be read and begins with the name of one of the
+# five settings a copy acts on before it hands a run over, in any mix of
+# capitals, or with a hyphen for the underscore: "Branch=stable", "BRANCH:
+# stable", "SELF-UPDATE=off". No deploy script, however new, means anything
+# by such a line, and this copy would go by the default in its place: fetch
+# another branch than the one meant, or hand over a run that was to stay
+# here. Reading stops there.
 config_problem=""
 load_config() {
   local file=$1 line number=0 name value
@@ -278,6 +348,15 @@ load_config() {
     line=${line%$'\r'}
     [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
     if ! [[ $line =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+      if [[ $line =~ ^[[:space:]]*([A-Za-z0-9_-]+) ]]; then
+        name=${BASH_REMATCH[1]^^}
+        name=${name//-/_}
+        case $name in
+          HEARTH_BASE | FRAMEWORK_REPO | REMOTE | BRANCH | SELF_UPDATE)
+            die "$file, line $number: expected $name=value."
+            ;;
+        esac
+      fi
       [[ -n $config_problem ]] || config_problem="$file, line $number: expected NAME=value."
       continue
     fi
@@ -308,12 +387,19 @@ number_between() { [[ $1 =~ ^[0-9]{1,9}$ ]] && ((10#$1 >= $2 && 10#$1 <= $3)); }
 # checked before that: what a newer deploy script makes of the other settings
 # is its own business.
 check_starter_settings() {
-  [[ $HEARTH_BASE == /* && $HEARTH_BASE != / ]] || die "HEARTH_BASE must be an absolute path."
-  [[ -n $FRAMEWORK_REPO ]] || die "FRAMEWORK_REPO is not set: the clone of the framework repository."
-  [[ $FRAMEWORK_REPO == /* ]] || die "FRAMEWORK_REPO must be an absolute path."
-  [[ $REMOTE =~ ^[A-Za-z0-9._-]+$ ]] || die "REMOTE must be the name of a Git remote, such as origin."
-  [[ $BRANCH =~ ^[A-Za-z0-9._/-]+$ ]] || die "BRANCH must be the name of a branch, such as main."
-  [[ $SELF_UPDATE == on || $SELF_UPDATE == off ]] || die "SELF_UPDATE must be on or off."
+  [[ $HEARTH_BASE == /* && $HEARTH_BASE != / ]] || starter_setting "HEARTH_BASE must be an absolute path."
+  [[ -n $FRAMEWORK_REPO ]] || starter_setting "FRAMEWORK_REPO is not set: the clone of the framework repository."
+  [[ $FRAMEWORK_REPO == /* ]] || starter_setting "FRAMEWORK_REPO must be an absolute path."
+  [[ $REMOTE =~ ^[A-Za-z0-9._-]+$ ]] || starter_setting "REMOTE must be the name of a Git remote, such as origin."
+  [[ $BRANCH =~ ^[A-Za-z0-9._/-]+$ ]] || starter_setting "BRANCH must be the name of a branch, such as main."
+  [[ $SELF_UPDATE == on || $SELF_UPDATE == off ]] || starter_setting "SELF_UPDATE must be on or off."
+}
+
+# Stops on one of those five. What was only remembered of the config file is
+# said with it, since it may be the reason: a name with a letter too many
+# leaves the setting it was meant for as it was.
+starter_setting() {
+  die "$1${config_problem:+ Also: $config_problem}"
 }
 
 # The settings only the copy that does the work needs.
@@ -391,7 +477,6 @@ framework_branch_commit() {
 # read_deploy_script COMMIT FILE: copies the deploy script of a framework
 # commit out of the clone into FILE. If it cannot, it returns 1 and leaves the
 # reason in $script_problem, and what to do about it in $script_remedy.
-script_problem=""
 script_remedy="Push a commit that puts deploy/hearth-deploy.sh right"
 read_deploy_script() {
   local commit=$1 file=$2 entry
@@ -408,6 +493,10 @@ read_deploy_script() {
     ! git -C "$FRAMEWORK_REPO" show "$commit:deploy/hearth-deploy.sh" >"$file" 2>/dev/null; then
     script_problem="it could not be copied from $FRAMEWORK_REPO to $file"
     script_remedy="Look at that clone, and at the space left on the disk"
+  elif [[ ! -s $file ]]; then
+    # bash parses an empty file without a word, and running it does nothing,
+    # with status 0: every run would end there, silently.
+    script_problem="deploy/hearth-deploy.sh is empty in that commit"
   fi
   [[ -z $script_problem ]]
 }
@@ -648,10 +737,8 @@ starter_fetched=${HEARTH_DEPLOY_FETCHED:-}
 unset HEARTH_DEPLOY_HANDED_OVER HEARTH_DEPLOY_FETCHED
 
 handover_file=$state_dir/deploy-script
-framework_commit=""     # the commit the framework's branch is at, once known
-framework_fetch=""      # "done" once this run has fetched that branch; "failed"
-#                         if it could not, which step 1 reports
-script_problem_lines="" # what bash said about a script it cannot parse
+framework_fetch="" # "done" once this run has fetched the framework's branch;
+#                    "failed" if it could not, which step 1 reports
 
 # is_this_copy FILE: whether FILE holds the script this copy is, byte for
 # byte. The installed copy is its own file. A copy that was handed over to is
@@ -697,9 +784,9 @@ if [[ $SELF_UPDATE == on && $locked == yes ]]; then
     framework_fetch=done
     framework_commit=$fetched_commit
   else
-    # Not the end of the run: a restart that is still pending needs no
-    # network. This run goes by the commit that was fetched last, if there is
-    # one, and step 1 says what try_fetch left.
+    # Not the end of the run: finishing a restart that is still pending needs
+    # no network. This run goes by the commit that was fetched last, if there
+    # is one, and step 1 says what try_fetch left.
     framework_fetch=failed
   fi
 
@@ -723,11 +810,15 @@ fi
 # ---------------------------------------------------------------------------
 # From here on this copy does the work
 # ---------------------------------------------------------------------------
+# Until the checks below are through, a copy that could not hand the run
+# over says so before what stops it (see die): the config file, a value or a
+# missing tool may all be right for the deploy script it could not start.
+explain_this_copy=yes
 if [[ -n $config_problem ]]; then
-  # Said first, because the config file may well be right: written for a
-  # deploy script newer than this copy, which this run could not be handed to.
-  [[ -z $script_problem ]] ||
-    log "NOTE: the deploy script of framework commit ${framework_commit:0:12} cannot carry out this run, because $script_problem. So this copy does, which may not know a setting that a newer deploy script knows:" >&2
+  # Without the base folder there was no lock, and so no newer deploy script
+  # that this run could have been handed to. The config file may be right
+  # for one: the folder is what is wrong for certain.
+  [[ $locked == yes ]] || die "$HEARTH_BASE does not exist or this user cannot write to it."
   die "$config_problem"
 fi
 check_settings
@@ -746,6 +837,7 @@ if [[ -n $DATABASE && -f $DATABASE ]]; then
   [[ -r $DATABASE && -w $database_dir ]] ||
     die "This user cannot read $DATABASE or cannot write to $database_dir, so the database cannot be copied before a switch. Fix the permissions, or set DATABASE to nothing to deploy without that safety net."
 fi
+explain_this_copy=no
 
 # Leftovers of a run that was cut short (power loss): folders with no RELEASE.
 current_name=$(current_release_name)

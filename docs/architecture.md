@@ -576,10 +576,12 @@ also the commit that changes the script, and the installed copy is
 installed once. That commit's code runs as the deploy user in the build
 anyway, so its deploy script gains no right by this; the systemd units and
 the polkit rule, which need root, are still installed by hand. A commit
-whose deploy script is missing or cannot be parsed is not deployed, and
-`SELF_UPDATE=off` in the deploy's settings makes the installed copy do the
-work itself. What an installed copy counts on in every later version of the
-script is listed at the top of the script.
+whose deploy script is missing, empty or cannot be parsed is not deployed:
+the installed copy does that run itself as far as the build. `SELF_UPDATE=off`
+in the deploy's settings makes the installed copy do all the work itself.
+What an installed copy counts on in every later version of the script, for
+handing a run over and for the run it cannot hand over, is listed at the
+top of the script.
 
 Mini-apps written for another version of the SDK than the framework holds
 stop the build with status 3 (see "How mini-apps get into a build"). The

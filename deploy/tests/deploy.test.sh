@@ -11,11 +11,13 @@
 #   git        a folder of "commits" instead of a repository, one for the
 #              framework and one for the mini-apps: "main" in it is the
 #              branch on the remote, and "fetched" what the last fetch
-#              brought. A fetch can be made to fail, to leave a process
-#              behind that is still running when it is over, or to run
-#              something of the test's in its middle; "show" can be cut
-#              short, or made to give another text each time. The last test
-#              uses the real git instead, on a repository it makes up.
+#              brought. A fetch can be made to fail, in words of the
+#              test's if it likes, to leave a process behind that is still
+#              running when it is over, or to run something of the test's in
+#              its middle; "show" can be cut short, or made to give another
+#              text each time. It writes down every call that finds, in its
+#              environment, what a starter tells the copy it starts. The last
+#              test uses the real git instead, on a repository it makes up.
 #   pnpm       it writes down which copy of the deploy script asked, and
 #              whether that copy holds the lock;
 #              in the framework, "install" links the SQLite library and the
@@ -97,6 +99,7 @@ mkdir -p "$BASE" "$FRAMEWORK/commits" "$STONES/commits" "$T/bin" "$T/data"
 : >"$T/pnpm.log"
 : >"$T/pnpm-by.log"
 : >"$T/started.log"
+: >"$T/git-told.log"
 : >"$T/service.pid"
 # The PATH before the substitutes: where the real git is.
 system_path=$PATH
@@ -143,6 +146,11 @@ cat >"$T/bin/git" <<EOF
 [[ \$1 == -C ]] || exit 2
 repo=\$2
 shift 2
+# What a starter tells the copy it starts is for that copy alone: a call that
+# finds it in its environment is written down.
+if [[ -n \${HEARTH_DEPLOY_HANDED_OVER+set}\${HEARTH_DEPLOY_FETCHED+set} ]]; then
+  printf '%s %s\n' "\$1" "\$repo" >>"$T/git-told.log"
+fi
 case \$1 in
   rev-parse)
     case \$2 in
@@ -154,7 +162,11 @@ case \$1 in
     ;;
   fetch)
     printf 'fetch %s\n' "\$repo" >>"$T/git.log"
-    if [[ -e $T/fetch-fails ]]; then
+    # It fails while this file is there, in the file's words if it has any.
+    if [[ -s $T/fetch-fails ]]; then
+      cat "$T/fetch-fails" >&2
+      exit 128
+    elif [[ -e $T/fetch-fails ]]; then
       echo "fatal: unable to access 'https://example.com/hearth.git/': Could not resolve host: example.com" >&2
       exit 128
     fi
@@ -569,10 +581,15 @@ end_test() {
   passed=$((passed + 1))
   echo "ok  $current_test"
 }
-# skip_test REASON: for a test this machine cannot run.
+# skip_test REASON: for a test this machine cannot run. One line among all
+# the others is not seen in a CI run that passes, and a test nobody runs
+# holds the script to nothing: so under GitHub Actions the line is also a
+# warning, which the run's page shows.
 skip_test() {
   skipped=$((skipped + 1))
   echo "SKIPPED  $current_test: $1"
+  [[ -z ${GITHUB_ACTIONS:-} ]] ||
+    echo "::warning title=A deploy test was skipped::$current_test: $1"
 }
 
 expect_status() { [[ $status -eq $1 ]] || fail "the deploy script exited with $status, not $1"; }
@@ -643,6 +660,9 @@ P=d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0
 Q=e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1
 R=f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2
 S=a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3
+U=b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4
+V=c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5
+W=d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6
 # Commits of the mini-apps.
 NO_APPS=1111111111111111111111111111111111111111
 NO_LOCKFILE=2222222222222222222222222222222222222222
@@ -939,6 +959,16 @@ expect_output "    fatal: unable to access 'https://example.com/hearth.git/': Co
 expect_live fffffff
 end_test
 
+start_test "what git says of a fetch that failed is passed on without the token in the remote's address"
+echo "fatal: unable to access 'https://sample-user:sample-token@example.com/hearth.git/': The requested URL returned error: 403" >"$T/fetch-fails"
+run
+rm "$T/fetch-fails"
+expect_status 1
+expect_output "    fatal: unable to access 'https://***@example.com/hearth.git/': The requested URL returned error: 403"
+expect_no_output "sample-token"
+expect_output "ERROR: Could not fetch main of the framework repository."
+end_test
+
 start_test "a newer deploy script in the newest commit carries out the run, and deploys the commit that brought it"
 make_commit $G "[$USERS,$LISTS]" "" 0.2.0
 newer_script "$(script_of $G)" g
@@ -969,6 +999,14 @@ expect_status 0
 [[ ! -s $T/out.log ]] || fail "the run said: $(<"$T/out.log")"
 expect_started "$(started_as g $G)"
 [[ $(fetches_of "$FRAMEWORK") == 1 ]] || fail "the framework was fetched $(fetches_of "$FRAMEWORK") times"
+end_test
+
+start_test "what the starter told the copy it started reaches nothing that copy starts"
+# The newer script was told its commit and that the framework is fetched, in
+# its environment. It went on to ask git for the mini-apps: that call, like
+# every other so far, found neither there.
+[[ $(fetches_of "$STONES") == 1 ]] || fail "the copy that was handed the run fetched the mini-apps $(fetches_of "$STONES") times"
+[[ ! -s $T/git-told.log ]] || fail "git was started with HEARTH_DEPLOY_HANDED_OVER or HEARTH_DEPLOY_FETCHED in its environment: $(sort -u "$T/git-told.log" | tr '\n' ';')"
 end_test
 
 start_test "a run that finds its config file through the environment is handed over without an argument"
@@ -1026,6 +1064,28 @@ expect_output "NOTE: deploy/hearth-deploy.sh in this release differs from the in
 expect_no_output "This run is carried out by"
 cmp -s "$BASE/state/deploy-script" "$(script_of $G)" || fail "state/deploy-script was written"
 [[ $(fetches_of "$FRAMEWORK") == 1 ]] || fail "the framework was fetched $(fetches_of "$FRAMEWORK") times"
+end_test
+
+start_test "with SELF_UPDATE=off nothing is fetched until a pending restart was dealt with"
+# As before there was a hand-over: the fetch that finds the copy to do the
+# work is not made, so a restart waits for no remote. Each fetch writes down
+# whether the restart note was still there.
+systemctl --no-ask-password stop hearth.service
+: >"$BASE/state/restart-pending"
+cat >"$T/during-fetch" <<EOF
+#!/usr/bin/env bash
+[[ -e $BASE/state/restart-pending ]] && echo pending >>"$T/at-fetch" || echo done >>"$T/at-fetch"
+EOF
+chmod +x "$T/during-fetch"
+: >"$T/at-fetch"
+run
+rm "$T/during-fetch"
+expect_status 0
+expect_output "hearth.service now runs release $release_i (version c3c3c3c)."
+[[ $(tr '\n' ' ' <"$T/at-fetch") == "done done " ]] ||
+  fail "the framework and the mini-apps were fetched while the restart was: $(tr '\n' ' ' <"$T/at-fetch")"
+expect_started ""
+expect_live c3c3c3c
 write_config 5
 end_test
 
@@ -1065,6 +1125,28 @@ expect_status 1
 expect_output "$(not_deployed $J $FOR_SDK_2 "bash cannot parse it")"
 end_test
 
+start_test "a copy that cannot hand the run over still clears leftovers away and finishes a pending restart"
+# It does everything of a run but the build, by what it knows itself.
+systemctl --no-ask-password stop hearth.service
+: >"$BASE/state/restart-pending"
+mkdir "$BASE/releases/20000101T000000Z"
+touch -d "20 minutes ago" "$BASE/state/failed"
+run
+expect_status 1
+expect_order "Removing the unfinished release 20000101T000000Z left by an interrupted run." \
+  "hearth.service now runs release $release_i (version c3c3c3c)."
+expect_order "hearth.service now runs release $release_i (version c3c3c3c)." \
+  "$(not_deployed $J $FOR_SDK_2 "bash cannot parse it")"
+[[ ! -e $BASE/releases/20000101T000000Z ]] || fail "the unfinished release was left behind"
+[[ ! -e $BASE/state/restart-pending ]] || fail "the restart note was left behind"
+[[ $(failure_note) == "build $J $FOR_SDK_2" ]] || fail "the failure note is: $(failure_note)"
+# It stopped on nothing before the build, so it had no need to say why it is
+# the copy that does the work.
+expect_no_output "NOTE: the deploy script of framework commit"
+expect_started ""
+expect_live c3c3c3c
+end_test
+
 start_test "a commit without a deploy script is not deployed"
 make_commit $K "[$USERS,$LISTS]" "" 0.2.0
 rm "$(script_of $K)"
@@ -1076,6 +1158,23 @@ expect_output "Release $release_i is still the one in use."
 expect_live c3c3c3c
 [[ $(release_count) == "$releases" ]] || fail "a release was built"
 [[ $(failure_note) == "build $K $FOR_SDK_2" ]] || fail "the failure note is: $(failure_note)"
+end_test
+
+start_test "a commit whose deploy script is empty is not deployed"
+# bash parses an empty file, and running it does nothing, with status 0: a
+# run handed to it would end at once, every time, without a word.
+make_commit $U "[$USERS,$LISTS]" "" 0.2.0
+: >"$(script_of $U)"
+releases=$(release_count)
+deploy
+expect_status 1
+expect_output "$(not_deployed $U $FOR_SDK_2 "deploy/hearth-deploy.sh is empty in that commit") Push a commit that puts deploy/hearth-deploy.sh right; or set SELF_UPDATE=off"
+expect_output "Release $release_i is still the one in use."
+expect_live c3c3c3c
+[[ $(release_count) == "$releases" ]] || fail "a release was built"
+[[ $(failure_note) == "build $U $FOR_SDK_2" ]] || fail "the failure note is: $(failure_note)"
+cmp -s "$BASE/state/deploy-script" "$(script_of $G)" || fail "the empty script was put under state/"
+[[ ! -e $BASE/state/deploy-script.new ]] || fail "state/deploy-script.new was left behind"
 end_test
 
 start_test "the next commit with a deploy script that works is handed the run and deployed"
@@ -1160,6 +1259,53 @@ expect_output "Nothing was changed."
 write_config 5
 end_test
 
+start_test "a line that misspells one of the five settings a starter acts on stops the run before anything is fetched"
+# No deploy script, however new, means anything by such a line, and the
+# starter would go by the default in its place: fetch main where another
+# branch was meant, or hand over a run that was to stay with it.
+mapfile -t misspelt <<'EOF'
+BRANCH: stable|BRANCH
+Branch=stable|BRANCH
+BRANCH stable|BRANCH
+SELF_UPDATE off|SELF_UPDATE
+SELF-UPDATE=off|SELF_UPDATE
+self_update=off|SELF_UPDATE
+remote = upstream|REMOTE
+Hearth_Base=/srv/hearth|HEARTH_BASE
+FRAMEWORK_REPO /srv/hearth/repos/hearth|FRAMEWORK_REPO
+EOF
+for entry in "${misspelt[@]}"; do
+  line=${entry%|*} name=${entry##*|}
+  write_config 5 "$line"
+  run
+  expect_status 1
+  expect_output "ERROR: $T/deploy.conf, line $(grep -n -x -F -- "$line" "$T/deploy.conf" | cut -d: -f1): expected $name=value."
+  expect_output "Nothing was changed."
+  [[ $(fetches_of "$FRAMEWORK") == 0 ]] || fail "the framework was fetched with the line: $line"
+  expect_started ""
+done
+# A name that only begins like one of the five may be a later script's: it is
+# remembered, and the run is handed over.
+write_config 5 "BRANCH_PREFIX: release"
+run
+expect_status 1
+expect_started "$(started_as n $N)"
+expect_output "ERROR: $T/deploy.conf, line $(grep -n '^BRANCH_PREFIX' "$T/deploy.conf" | cut -d: -f1): expected NAME=value."
+write_config 5
+end_test
+
+start_test "when one of those five settings is wrong, a line of the config file that may be why is named with it"
+# A letter too many in the name: the setting it was meant for has no value.
+sed 's/^FRAMEWORK_REPO=/FRAMEWORK_REPOS=/' "$T/deploy.conf" >"$T/typo.conf"
+config=$T/typo.conf
+run
+config=$T/deploy.conf
+expect_status 1
+expect_output "ERROR: FRAMEWORK_REPO is not set: the clone of the framework repository. Also: $T/typo.conf, line $(grep -n '^FRAMEWORK_REPOS=' "$T/typo.conf" | cut -d: -f1): FRAMEWORK_REPOS is not a setting this script knows."
+[[ $(fetches_of "$FRAMEWORK") == 0 ]] || fail "the framework was fetched"
+expect_started ""
+end_test
+
 start_test "SELF_UPDATE is on or off, which is checked before anything is fetched"
 write_config 5 SELF_UPDATE=sometimes
 run
@@ -1170,8 +1316,57 @@ expect_started ""
 write_config 5
 end_test
 
+start_test "a starter needs none of the tools that only the work needs: without node, pnpm, tar and systemctl the run is still handed over"
+# A later deploy script may do without any of them. A folder with the
+# commands a starter and the substitute for git use, and those four left out.
+mkdir "$T/starter-bin"
+for tool in bash env git flock timeout cmp mv rm mkdir cp cat head tail sed date sleep true; do
+  # The file on PATH, also for a command that bash has as a builtin.
+  ln -s "$(type -P "$tool")" "$T/starter-bin/$tool"
+done
+run_in=(env "PATH=$T/starter-bin")
+run
+run_in=()
+expect_status 1
+expect_started "$(started_as n $N)"
+# Said by the copy that was handed the run, which does need them.
+expect_output "ERROR: The command 'node' is not installed or not on PATH."
+end_test
+
+start_test "the database is looked at by the copy that does the work, after the hand-over"
+database_mode=$(stat -c %a "$DATABASE")
+chmod 000 "$DATABASE"
+run
+chmod "$database_mode" "$DATABASE"
+expect_status 1
+expect_started "$(started_as n $N)"
+expect_output "ERROR: This user cannot read $DATABASE or cannot write to $T/data"
+end_test
+
+start_test "the newer deploy script is checked and started by the bash that runs the starter, not by the one PATH finds"
+# Another bash first on PATH, which writes down what it was asked to run
+# and passes it on. The substitutes and the installed copy itself are
+# started through it, by name; the newer script must not be.
+mkdir "$T/other-bash"
+cat >"$T/other-bash/bash" <<EOF
+#!$BASH
+printf '%s\n' "\$*" >>"$T/other-bash.log"
+exec "$BASH" "\$@"
+EOF
+chmod +x "$T/other-bash/bash"
+: >"$T/other-bash.log"
+run_in=(env "PATH=$T/other-bash:$PATH")
+run
+run_in=()
+expect_status 0
+expect_started "$(started_as n $N)"
+grep -qF -- "$script" "$T/other-bash.log" || fail "the bash that PATH finds was not asked for the installed copy, so this test shows nothing"
+! grep -qF -- "$BASE/state/deploy-script" "$T/other-bash.log" ||
+  fail "the bash that PATH finds was used: $(grep -F -- "$BASE/state/deploy-script" "$T/other-bash.log" | tr '\n' ';')"
+end_test
+
 # ---------------------------------------------------------------------------
-start_test "when the fetch fails, the run is handed over by the commit fetched last, and a pending restart does not wait"
+start_test "when the fetch fails, the run is handed over by the commit fetched last, and a pending restart is finished once both copies have tried the fetch"
 # The remote has a commit that the server has not fetched, with a deploy
 # script of its own.
 make_commit $O "[$USERS,$LISTS]" "" 0.2.0
@@ -1183,7 +1378,9 @@ run
 rm "$T/fetch-fails"
 expect_status 1
 # Started without the word that the framework is fetched, so it tried that
-# for itself.
+# for itself: the restart waits for two fetches to fail, which here takes no
+# time, and takes the fetch's time limit twice from a remote that does not
+# answer.
 expect_started "$(started_as n $N unset)"
 [[ $(fetches_of "$FRAMEWORK") == 2 ]] || fail "the framework was fetched $(fetches_of "$FRAMEWORK") times"
 expect_order "hearth.service now runs release $release_n (version b8b8b8b)." \
@@ -1329,7 +1526,56 @@ run
 expect_status 1
 expect_order "NOTE: the deploy script of framework commit ${S:0:12} cannot carry out this run, because that commit has no deploy/hearth-deploy.sh. So this copy does" \
   "FUTURE_SETTING is not a setting this script knows."
+# And what to do about it.
+expect_output "that a newer deploy script knows. Push a commit that puts deploy/hearth-deploy.sh right."
 write_config 5
+end_test
+
+start_test "it says so too when a value or a missing tool stops it, with what bash said of a script it cannot parse"
+make_commit $W "[$USERS,$LISTS]" "" 0.2.0
+printf 'if\n' >>"$(script_of $W)"
+# A value that a later deploy script may well take.
+write_config 5 KEEP_RELEASES=0
+run
+expect_status 1
+expect_order "    deploy/hearth-deploy.sh: line " \
+  "NOTE: the deploy script of framework commit ${W:0:12} cannot carry out this run, because bash cannot parse it. So this copy does"
+expect_order "NOTE: the deploy script of framework commit ${W:0:12} cannot carry out this run" \
+  "ERROR: KEEP_RELEASES must be a number, at least 1."
+write_config 5
+# A tool that a later deploy script may do without.
+run_in=(env "PATH=$T/starter-bin")
+run
+run_in=()
+expect_status 1
+expect_order "NOTE: the deploy script of framework commit ${W:0:12} cannot carry out this run" \
+  "ERROR: The command 'node' is not installed or not on PATH."
+[[ ! -e $BASE/state/failed ]] || fail "a failure note was written"
+end_test
+
+start_test "a base folder that cannot be used is what a starter says, not a setting it does not know"
+# With no base folder there is no lock and nobody to hand the run to, so the
+# config file may be right for a deploy script this copy never got to.
+printf 'HEARTH_BASE=%s\nFRAMEWORK_REPO=%s\nFUTURE_SETTING=yes\n' "$T/no-such-base" "$FRAMEWORK" >"$T/no-base.conf"
+config=$T/no-base.conf
+run
+config=$T/deploy.conf
+expect_status 1
+expect_output "ERROR: $T/no-such-base does not exist or this user cannot write to it."
+expect_no_output "FUTURE_SETTING"
+[[ ! -e $T/no-such-base ]] || fail "the base folder was made"
+end_test
+
+start_test "an error in a copy that was handed the run names that copy's file with the line"
+# The newest commit's deploy script parses, and fails as it does the work.
+# The line counts in state/deploy-script, not in the installed copy.
+make_commit $V "[$USERS,$LISTS]" "" 0.2.0
+newer_script "$(script_of $V)" v 's/^pending_failure=""$/false/'
+run
+expect_status 1
+expect_started "$(started_as v $V)"
+expect_output "ERROR: An unexpected error occurred on line $(grep -n -x 'false' "$(script_of $V)" | cut -d: -f1) of $BASE/state/deploy-script."
+expect_output "Nothing was changed."
 end_test
 
 # ---------------------------------------------------------------------------
@@ -1379,6 +1625,14 @@ EOF
   [[ $(sed -n 's/^framework=//p' "$REAL/base/current/RELEASE") == "$first_commit" ]] ||
     fail "RELEASE does not name the commit"
   expect_output "is live (version "
+
+  # Only a commit's ID is taken for the commit a copy was started for. A name
+  # that git would read as the newest commit makes no copy that commit's
+  # deploy script: the installed copy still hands the run over.
+  run HEARTH_DEPLOY_HANDED_OVER="origin/main"
+  expect_status 0
+  expect_started "$(started_as real "$first_commit")"
+  expect_output "Nothing new: main is already deployed."
 
   # A link where the script was: git would hand out where it leads.
   rm "$REAL/work/deploy/hearth-deploy.sh"

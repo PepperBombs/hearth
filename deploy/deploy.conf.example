@@ -21,7 +21,11 @@ BRANCH=main
 # the installed copy does all the work itself, and says after a switch when
 # the release's script differs from it. See docs/self-hosting.md, step 5.
 # A deploy script from before this setting existed stops on a config file
-# that names it, so the line is best left out unless you want "off".
+# that names it, so the line is best left out unless you want "off", and
+# written only once a copy that knows it is installed. With "off" the
+# installed copy deploys every release, however old it is: install the
+# script of the running release before you switch. Write the name exactly:
+# under another name, such as SELF_UPDATES, the run is still handed over.
 # SELF_UPDATE=on
 
 # How many old releases to keep for going back.
