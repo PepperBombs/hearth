@@ -1788,6 +1788,20 @@ expect_no_output "unexpected error"
 [[ ! -e $BASE/state/deploy-script.new ]] || fail "state/deploy-script.new was left behind"
 end_test
 
+start_test "a folder left at state/deploy-script does not keep a run from being handed over"
+rm -f "$BASE/state/deploy-script"
+mkdir "$BASE/state/deploy-script"
+: >"$BASE/state/deploy-script/left-behind"
+run
+expect_status 0
+expect_started "$(started_as ab $AB)"
+expect_output "Nothing new: main is already deployed."
+expect_no_output "Could not put the deploy script"
+[[ -f $BASE/state/deploy-script && ! -L $BASE/state/deploy-script ]] || fail "state/deploy-script is not a regular file"
+cmp -s "$BASE/state/deploy-script" "$(script_of $AB)" || fail "state/deploy-script is not the newest commit's deploy script"
+[[ ! -e $BASE/state/deploy-script.new ]] || fail "state/deploy-script.new was left behind"
+end_test
+
 start_test "a deploy script that can be neither written under state/ nor cleared away there leaves the run to the copy that found out, as far as the build"
 # state/ is closed to writing, with a file of an earlier run still at the
 # name: the copy cannot remove it before it writes, nor afterwards.

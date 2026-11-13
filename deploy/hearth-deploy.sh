@@ -135,7 +135,7 @@
 #     and deploy/deploy.conf.example);
 #   - state/deploy-script and state/deploy-script.new are the starter's to
 #     write. Whatever lies at the second, a link or a folder too, is removed
-#     before it is written.
+#     before it is written, and so is a folder at the first.
 #
 # So, before the hand-over, a copy must not stop on what only the copy that
 # does the work needs. A line of the config file that it cannot read, or a
@@ -773,7 +773,11 @@ is_this_copy() {
 hand_over() {
   # Renamed into place, never written over: bash reads a running script from
   # its file as it goes, and a copy that an earlier run started may still be
-  # reading this one.
+  # reading this one. A folder left at the name would keep the rename from
+  # working at every run, and no later commit could put that right, so it is
+  # cleared away first; a link there is replaced by the rename, never
+  # followed.
+  [[ ! -d $handover_file || -L $handover_file ]] || rm -rf -- "$handover_file" || true
   mv -T -- "$1" "$handover_file" ||
     die "Could not put the deploy script of framework commit ${framework_commit:0:12} at $handover_file."
   [[ -z ${HEARTH_DEPLOY_VERBOSE:-} ]] ||

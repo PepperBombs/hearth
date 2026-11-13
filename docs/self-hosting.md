@@ -107,17 +107,21 @@ newer script is kept in `/opt/hearth/state/deploy-script` and runs as the
 `hearth` user, as the code of that commit does in every build, so this
 gives it no right it did not have.
 
-A hand-over itself writes nothing in the journal. A run that builds a
-release says which script does the work ("This run is carried out by the
-deploy script of framework commit ..."); a run that finds nothing new, or
-stops on an error before the build, does not. Two things follow. A line
-such as "An unexpected error occurred on line 752 of
-/opt/hearth/state/deploy-script" counts in the file it names, not in
-`/usr/local/bin/hearth-deploy`. And a change you make to the installed copy
-on the server has no effect while `main` holds another script: every run is
-handed to that one. To see a hand-over happen without waiting for a
-release, start one run by hand with `HEARTH_DEPLOY_VERBOSE` set; it is a
-run like any other, and deploys what is new:
+A hand-over itself writes nothing in the journal. A run that was handed
+over and builds a release says so ("This run is carried out by the deploy
+script of framework commit ..."). A run that the installed copy does itself
+says nothing of it, and neither does a run that finds nothing new or stops
+on an error before the build. The installed copy does a run itself while
+the newest commit's script is the same as it: that is so from the day you
+install it until a commit next changes the script, so do not look for that
+line as proof right after installing. Two things follow. In a line such as
+"An unexpected error occurred on line 752 of
+/opt/hearth/state/deploy-script", the line number is a line of the file it
+names, not of `/usr/local/bin/hearth-deploy`. And a change you make to the
+installed copy on the server has no effect while `main` holds another
+script: every run is handed to that one. To see a hand-over happen without
+waiting for a release, start one run by hand with `HEARTH_DEPLOY_VERBOSE`
+set; it is a run like any other, and deploys what is new:
 
 ```sh
 sudo -u hearth env HEARTH_DEPLOY_VERBOSE=1 /usr/local/bin/hearth-deploy /etc/hearth/deploy.conf

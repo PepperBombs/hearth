@@ -234,7 +234,8 @@ Things that bite:
   their names, meanings and defaults, in a config file of `NAME=value`
   lines found as today; and `state/deploy-script` and
   `state/deploy-script.new` are the starter's to write (whatever lies at
-  the second, a link or a folder too, is removed before it is written).
+  the second, a link or a folder too, is removed before it is written, and
+  so is a folder at the first).
   That is all a hand-over needs. But an installed copy that cannot hand a
   run over does that run's work itself, by what it knew on the day it was
   installed.
