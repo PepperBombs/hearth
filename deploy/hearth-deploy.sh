@@ -79,8 +79,10 @@
 # branch, so it says nothing unless HEARTH_DEPLOY_VERBOSE is set.
 #
 # If the fetch of (d) fails, the run goes on, by the commit that was fetched
-# last: finishing a restart that is still pending needs no network. The
-# failure is reported in step 1, by the copy that gets there. The restart
+# last: finishing a restart that is still pending needs no network. If none
+# was ever fetched, or the clone cannot be read at all, there is no deploy
+# script to look at, and this copy goes on itself. The failure is reported
+# in step 1, by the copy that gets there. The restart
 # does wait for the fetch to fail, though, since (d) comes before anything
 # else: no time at all when the remote refuses, and up to the fetch's limit
 # of two minutes when the remote does not answer. A copy that is handed the
@@ -141,13 +143,17 @@
 # the folders and the database that only the work needs are looked at
 # afterwards.
 #
-# The second list is for the one case in which an installed copy cannot
-# hand a run over (the newest commit's deploy script is missing,
-# empty, not a regular file or not parsed, or could not be copied under
-# state/). It then does that run's work itself, up to where the build would
-# start, by what it knew on the day it was installed. So a later version
-# must also leave these as they are, or change them only in a way that a
-# copy as old as the oldest one installed gets right:
+# The second list is for the runs that an installed copy cannot hand over.
+# There are two kinds. The newest commit's deploy script is missing, empty,
+# not a regular file or not parsed, or could not be copied under state/: the
+# copy then does that run's work itself, up to where the build would start.
+# Or the copy knows no commit of the framework: the clone cannot be read
+# (FRAMEWORK_REPO does not name one, or names one that git refuses this
+# user), or the branch was never fetched and the fetch fails. It then does
+# the work up to step 1, which reports the fetch. Either way it goes by what
+# it knew on the day it was installed. So a later version must also leave
+# these as they are, or change them only in a way that a copy as old as the
+# oldest one installed gets right:
 #
 #   - a release is a folder releases/<time>, named as is_release_name says,
 #     and a finished one holds the file RELEASE with the lines framework=,
@@ -334,11 +340,12 @@ trap 'die "An unexpected error occurred on line $LINENO of ${BASH_SOURCE[0]}."' 
 #
 # Not so a line that cannot be read and begins with the name of one of the
 # five settings a copy acts on before it hands a run over, in any mix of
-# capitals, or with a hyphen for the underscore: "Branch=stable", "BRANCH:
-# stable", "SELF-UPDATE=off". No deploy script, however new, means anything
-# by such a line, and this copy would go by the default in its place: fetch
-# another branch than the one meant, or hand over a run that was to stay
-# here. Reading stops there.
+# capitals, or with a hyphen for the underscore, or after the word "export",
+# which someone who takes the file for shell code writes: "Branch=stable",
+# "BRANCH: stable", "SELF-UPDATE=off", "export BRANCH=stable". No deploy
+# script, however new, means anything by such a line, and this copy would
+# go by the default in its place: fetch another branch than the one meant,
+# or hand over a run that was to stay here. Reading stops there.
 config_problem=""
 load_config() {
   local file=$1 line number=0 name value
@@ -348,8 +355,8 @@ load_config() {
     line=${line%$'\r'}
     [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
     if ! [[ $line =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
-      if [[ $line =~ ^[[:space:]]*([A-Za-z0-9_-]+) ]]; then
-        name=${BASH_REMATCH[1]^^}
+      if [[ $line =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z0-9_-]+) ]]; then
+        name=${BASH_REMATCH[2]^^}
         name=${name//-/_}
         case $name in
           HEARTH_BASE | FRAMEWORK_REPO | REMOTE | BRANCH | SELF_UPDATE)
@@ -810,6 +817,22 @@ fi
 # ---------------------------------------------------------------------------
 # From here on this copy does the work
 # ---------------------------------------------------------------------------
+# The file this copy was started as, for the note at the end of a deploy
+# with SELF_UPDATE=off. Worked out here, while a name that was given
+# relative to the folder the run was started in still leads to it.
+installed_script=$(command -v -- "$0" 2>/dev/null || printf '%s' "$0")
+[[ $installed_script == /* ]] || installed_script=$PWD/$installed_script
+
+# The timer starts a run in /. A run by hand starts in the folder of whoever
+# starts it, which this user may not be allowed to enter: sudo -u keeps the
+# folder, and a home folder is closed to others. find then ends with an
+# error although it found everything, and a deploy that went well would end
+# with the warning that old releases could not be removed. So the work is
+# done from /, as the timer's is. Not before this point: a copy that is
+# handed a run reads the starter's arguments, the config file among them,
+# from the folder the starter was started in.
+cd /
+
 # Until the checks below are through, a copy that could not hand the run
 # over says so before what stops it (see die): the config file, a value or a
 # missing tool may all be right for the deploy script it could not start.
@@ -817,8 +840,11 @@ explain_this_copy=yes
 if [[ -n $config_problem ]]; then
   # Without the base folder there was no lock, and so no newer deploy script
   # that this run could have been handed to. The config file may be right
-  # for one: the folder is what is wrong for certain.
-  [[ $locked == yes ]] || die "$HEARTH_BASE does not exist or this user cannot write to it."
+  # for one: the folder is what is wrong for certain, and is said first. The
+  # line is said with it, since it may be the reason: HEARTH_BASE under a
+  # name with a letter too many leaves the base folder at its default.
+  [[ $locked == yes ]] ||
+    die "$HEARTH_BASE does not exist or this user cannot write to it. Also: $config_problem"
   die "$config_problem"
 fi
 check_settings
@@ -1144,7 +1170,6 @@ prune_releases || log "WARNING: could not remove old releases; the deploy itself
 # With SELF_UPDATE on, the release was deployed by its own deploy script,
 # whatever the installed copy holds.
 if [[ $SELF_UPDATE == off ]]; then
-  installed_script=$(command -v -- "$0" 2>/dev/null || printf '%s' "$0")
   if ! cmp -s -- "$installed_script" "$new_release/hearth/deploy/hearth-deploy.sh"; then
     log "NOTE: deploy/hearth-deploy.sh in this release differs from the installed copy ($installed_script). Install the new one when convenient; see docs/self-hosting.md."
   fi

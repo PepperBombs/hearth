@@ -234,10 +234,14 @@ Things that bite:
   their names, meanings and defaults, in a config file of `NAME=value`
   lines found as today; and `state/deploy-script` and
   `state/deploy-script.new` are the starter's to write. That is all a
-  hand-over needs. But an installed copy that cannot hand a run over (the
-  newest commit's script is missing, empty, not a regular file or not
-  parsed, or could not be copied under `state/`) does that run's work
-  itself, as far as the build, by what it knew on the day it was installed.
+  hand-over needs. But an installed copy that cannot hand a run over does
+  that run's work itself, by what it knew on the day it was installed.
+  There are two such runs: the newest commit's script is missing, empty,
+  not a regular file or not parsed, or could not be copied under `state/`
+  (the work as far as the build); and the copy knows no commit of the
+  framework, because the clone cannot be read (`FRAMEWORK_REPO` names none,
+  or one git refuses the deploy user) or the branch was never fetched and
+  the fetch fails (the work as far as step 1, which reports the fetch).
   So these may not change either, except in a way the oldest installed copy
   gets right: a release is `releases/<time>` and a finished one holds
   `RELEASE` with `framework=`, `apps=` and `version=` (such a copy deletes
@@ -260,16 +264,28 @@ Things that bite:
   `check_starter_settings` runs there; and the tools, folders and database
   that the work needs are looked at below that line. One kind of line
   stops a starter at once, in `load_config`: one it cannot read that begins
-  with the name of one of its own five settings, in any mix of capitals or
-  with a hyphen ("Branch=stable", "SELF-UPDATE=off", "BRANCH stable"),
-  which no later script can mean anything by, and which would otherwise
-  leave the starter going by the default. A name it can read and does not
-  know (`SELF_UPDATES`) is still only remembered, and said with the error
-  when one of the five is then wrong (`starter_setting`). A new setting goes
+  with the name of one of its own five settings, in any mix of capitals,
+  with a hyphen or after the word "export" ("Branch=stable",
+  "SELF-UPDATE=off", "BRANCH stable", "export BRANCH=stable"), which no
+  later script can mean anything by, and which would otherwise leave the
+  starter going by the default. A name it can read and does not know
+  (`SELF_UPDATES`) is still only remembered, and said after "Also:" with
+  the error when one of the five is then wrong (`starter_setting`) or the
+  base folder cannot be used: `HEARTH_BASES=...` leaves the base folder at
+  its default. A new setting goes
   into `check_settings`, never among the starter's five. Nor may anything
   there read or change the server's state (the releases, `state/failed`, a
   pending restart): the root refusal, the lock, the fetch of the framework
-  and `state/deploy-script` are all there is.
+  and `state/deploy-script` are all there is. Nor may it change folder: a
+  copy that is handed a run reads the starter's arguments, a config file
+  named relative to the caller's folder among them, where the starter was
+  started. The copy that does the work begins with `cd /`, as the timer
+  starts every run: a run by hand (`sudo -u hearth hearth-deploy`) keeps
+  the caller's folder, which the deploy user may not be allowed to enter,
+  and `find` then ends with an error although it found everything, so
+  that a deploy that went well ended with a warning. So nothing below that
+  line may read a path the caller gave relative to its folder; the copy's
+  own file is worked out just before (`installed_script`).
 - The installed copy knows itself by its own file. A copy that was handed
   a run knows itself by commit: it is the script of the commit in
   `HEARTH_DEPLOY_HANDED_OVER`, on the starter's word. With its branch at
@@ -519,17 +535,22 @@ Things that bite:
   (`git-told.log`), which no call may. The last test runs the script with
   the real git on a repository it makes up, so the git commands the script
   uses must work there as well as in the stand-in. The refusal to run as
-  root is tried in a user namespace (`unshare --map-root-user`), and
-  skipped with a line that says so where a user may not make one; the
-  tests never run anything as the real root. Whether GitHub's runners let
-  the test run is not known: Ubuntu 24.04 keeps ordinary users from making
-  such a namespace unless a kernel setting is switched off, which `ci.yml`
-  does not do. Under GitHub Actions a skipped test is therefore also
-  written as a warning on the run's page (`skip_test`); look for it, and
-  decide then. What a starter must do without is tested by taking it away:
-  a `PATH` of links that leaves out node, pnpm, tar and systemctl
-  (`starter-bin`), a database nobody may read, and another `bash` first on
-  `PATH` that writes down what it is asked to run. `run` is a run that
+  root is tried as a user who is root in the script's eyes only, in one of
+  two ways: a user namespace (`unshare --map-root-user`), which Ubuntu
+  24.04 keeps from ordinary users unless a kernel setting is switched off
+  (`ci.yml` does not switch it off), or else `fakeroot`, which the list of
+  packages of GitHub's `ubuntu-24.04` image names. The tests never run
+  anything as the real root. Where neither works the test is skipped with
+  a line that says so, and where `CI` is set a skipped test fails the
+  whole run at its end (an error on the run's page under GitHub Actions):
+  a test nobody runs holds the script to nothing. No CI run has shown yet
+  which of the two ways a runner takes; if the `check` job fails on the
+  skip, add `fakeroot` or the kernel setting there, never a way around the
+  test. What a starter must do without is tested by taking it away: a
+  `PATH` of links that leaves out node, pnpm, tar and systemctl
+  (`starter-bin`), the folder for the build logs removed, a database
+  nobody may read, and another `bash` first on `PATH` that writes down
+  what it is asked to run. `run` is a run that
   builds nothing, and
   `deploy` waits a second first, because releases are named after the
   second.

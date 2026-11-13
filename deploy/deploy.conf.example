@@ -1,5 +1,6 @@
 # Settings for deploy/hearth-deploy.sh. Copy to /etc/hearth/deploy.conf.
-# This file holds no secrets.
+# This file holds no secrets. It is not a shell script: each setting is one
+# line of NAME=value, with no "export" before it and no variables in it.
 
 # Everything the deployment owns lives under this folder.
 HEARTH_BASE=/opt/hearth

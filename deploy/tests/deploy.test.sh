@@ -106,18 +106,22 @@ system_path=$PATH
 # A process a test started to hold the lock, while it runs.
 lock_holder=""
 
+# Stops what the tests started and removes their folder.
+cleanup_folder() {
+  if [[ -s $T/service.pid ]]; then kill "$(<"$T/service.pid")" 2>/dev/null || true; fi
+  if [[ -n $lock_holder ]]; then kill "$lock_holder" 2>/dev/null || true; fi
+  [[ -n ${HEARTH_DEPLOY_TEST_DIR:-} ]] || rm -rf -- "$T"
+}
 cleanup() {
   local status=$?
   trap - EXIT
-  if [[ -s $T/service.pid ]]; then kill "$(<"$T/service.pid")" 2>/dev/null || true; fi
-  if [[ -n $lock_holder ]]; then kill "$lock_holder" 2>/dev/null || true; fi
   if [[ $status -ne 0 ]]; then
     echo "--- output of the last deploy run ---" >&2
     cat "$T/out.log" >&2 2>/dev/null || true
     echo "--- service log ---" >&2
     cat "$T/service.log" >&2 2>/dev/null || true
   fi
-  [[ -n ${HEARTH_DEPLOY_TEST_DIR:-} ]] || rm -rf -- "$T"
+  cleanup_folder
   exit "$status"
 }
 trap cleanup EXIT
@@ -583,13 +587,14 @@ end_test() {
 }
 # skip_test REASON: for a test this machine cannot run. One line among all
 # the others is not seen in a CI run that passes, and a test nobody runs
-# holds the script to nothing: so under GitHub Actions the line is also a
-# warning, which the run's page shows.
+# holds the script to nothing: so where CI is set, a skipped test fails the
+# whole run at its end (see the last lines of this file). Under GitHub
+# Actions the line is also an error on the run's page.
 skip_test() {
   skipped=$((skipped + 1))
   echo "SKIPPED  $current_test: $1"
-  [[ -z ${GITHUB_ACTIONS:-} ]] ||
-    echo "::warning title=A deploy test was skipped::$current_test: $1"
+  [[ -z ${CI:-} || -z ${GITHUB_ACTIONS:-} ]] ||
+    echo "::error title=A deploy test was skipped::$current_test: $1"
 }
 
 expect_status() { [[ $status -eq $1 ]] || fail "the deploy script exited with $status, not $1"; }
@@ -663,6 +668,8 @@ S=a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3
 U=b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4
 V=c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5
 W=d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6
+X=e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7
+Y=f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8
 # Commits of the mini-apps.
 NO_APPS=1111111111111111111111111111111111111111
 NO_LOCKFILE=2222222222222222222222222222222222222222
@@ -1249,6 +1256,26 @@ expect_output "ERROR: KEEP_RELEASES must be a number, at least 1."
 write_config 5
 end_test
 
+start_test "the folders that the work needs are made by the copy that does the work, and not before the hand-over"
+# A later deploy script may keep its build logs elsewhere. With their folder
+# gone, a run in which the copy that does the work stops on a setting leaves
+# none behind: the starter made none, and the copy it started had not got
+# that far.
+rm -rf "$BASE/logs"
+write_config 5 KEEP_RELEASES=abc
+run
+expect_status 1
+expect_started "$(started_as n $N)"
+expect_output "ERROR: KEEP_RELEASES must be a number, at least 1."
+[[ ! -e $BASE/logs ]] || fail "the folder for the build logs was made before the hand-over, or before the settings were checked"
+write_config 5
+# The copy that goes to work makes it.
+run
+expect_status 0
+expect_started "$(started_as n $N)"
+[[ -d $BASE/logs ]] || fail "the copy that does the work did not make the folder for the build logs"
+end_test
+
 start_test "a line of the config file that cannot be read stops the copy that does the work, after the hand-over"
 write_config 5 "future setting = 1"
 run
@@ -1273,6 +1300,8 @@ self_update=off|SELF_UPDATE
 remote = upstream|REMOTE
 Hearth_Base=/srv/hearth|HEARTH_BASE
 FRAMEWORK_REPO /srv/hearth/repos/hearth|FRAMEWORK_REPO
+export BRANCH=stable|BRANCH
+  export  SELF_UPDATE=off|SELF_UPDATE
 EOF
 for entry in "${misspelt[@]}"; do
   line=${entry%|*} name=${entry##*|}
@@ -1284,13 +1313,15 @@ for entry in "${misspelt[@]}"; do
   [[ $(fetches_of "$FRAMEWORK") == 0 ]] || fail "the framework was fetched with the line: $line"
   expect_started ""
 done
-# A name that only begins like one of the five may be a later script's: it is
-# remembered, and the run is handed over.
-write_config 5 "BRANCH_PREFIX: release"
-run
-expect_status 1
-expect_started "$(started_as n $N)"
-expect_output "ERROR: $T/deploy.conf, line $(grep -n '^BRANCH_PREFIX' "$T/deploy.conf" | cut -d: -f1): expected NAME=value."
+# A name that only begins like one of the five may be a later script's, with
+# "export" before it or not: it is remembered, and the run is handed over.
+for line in "BRANCH_PREFIX: release" "export BRANCH_PREFIX=release" "export=BRANCH"; do
+  write_config 5 "$line"
+  run
+  expect_status 1
+  expect_started "$(started_as n $N)"
+  expect_output "ERROR: $T/deploy.conf, line $(grep -n -x -F -- "$line" "$T/deploy.conf" | cut -d: -f1): expected NAME=value."
+done
 write_config 5
 end_test
 
@@ -1484,14 +1515,48 @@ expect_live f2f2f2f
 [[ ! -e $BASE/state/failed ]] || fail "the failure note was left behind"
 end_test
 
+start_test "a run started in a folder that the deploy user may not enter deploys like any other, without a warning"
+# A run by hand, as "sudo -u hearth hearth-deploy" in the caller's home
+# folder: find cannot go back to such a folder when it is done, and ends
+# with an error although it found everything. The installed copy is started
+# there, and so is the copy it hands the run to.
+make_commit $X "[$USERS,$LISTS]" "" 0.2.0
+newer_script "$(script_of $X)" x
+mkdir "$T/closed"
+run_in=("$BASH" -c 'cd -- "$1" && chmod 000 . && shift && exec "$@"' _ "$T/closed")
+deploy
+run_in=()
+chmod 755 "$T/closed"
+expect_status 0
+expect_started "$(started_as x $X)"
+expect_live e7e7e7e
+expect_output "is live (version e7e7e7e)."
+expect_no_output "WARNING"
+expect_no_output "Permission denied"
+rmdir "$T/closed"
+end_test
+
 # ---------------------------------------------------------------------------
 start_test "a run as root is refused before anything is fetched or handed over"
-# In a user namespace this user is root in its own eyes and in the script's,
-# and nothing more: the test must not run anything as the real root.
-if unshare --map-root-user true 2>/dev/null; then
+# Root in the script's eyes and nothing more: the test must not run anything
+# as the real root. There are two ways. In a user namespace this user is
+# root in its own eyes (unshare); Ubuntu 24.04 keeps ordinary users from
+# making one unless a kernel setting is switched off. And fakeroot, which
+# the image of GitHub's ubuntu-24.04 runners lists among its packages, tells
+# a program that asks who it is "root", and changes nothing else.
+as_root=()
+for way in "unshare --map-root-user" fakeroot; do
+  # Split into words on purpose.
+  # shellcheck disable=SC2086
+  if [[ $($way "$BASH" -c 'echo $EUID' 2>/dev/null) == 0 ]]; then
+    read -r -a as_root <<<"$way"
+    break
+  fi
+done
+if ((${#as_root[@]} > 0)); then
   # The newest commit's deploy script is not the installed copy, so a run
   # that got further would be handed over.
-  run_in=(unshare --map-root-user)
+  run_in=("${as_root[@]}")
   run
   run_in=()
   expect_status 1
@@ -1500,8 +1565,26 @@ if unshare --map-root-user true 2>/dev/null; then
   expect_started ""
   end_test
 else
-  skip_test "this user cannot be made root in a user namespace (unshare --map-root-user)"
+  skip_test "this user cannot be made root in its own eyes: neither \"unshare --map-root-user\" nor fakeroot works here. Allow user namespaces (on Ubuntu 24.04: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0) or install fakeroot"
 fi
+
+# ---------------------------------------------------------------------------
+start_test "with SELF_UPDATE=off a copy started by a name relative to the caller's folder still knows its own file at the end"
+# The work is done from /, where that name leads nowhere. The commit carries
+# the script under test, so there is nothing to install and nothing to say.
+make_commit $Y "[$USERS,$LISTS]" "" 0.2.0
+write_config 5 SELF_UPDATE=off
+installed=./${script##*/}
+run_in=("$BASH" -c 'cd -- "$1" && shift && exec "$@"' _ "${script%/*}")
+deploy
+run_in=()
+installed=$script
+expect_status 0
+expect_live f8f8f8f
+expect_started ""
+expect_no_output "differs from the installed copy"
+write_config 5
+end_test
 
 # ---------------------------------------------------------------------------
 start_test "with SELF_UPDATE=off the installed copy deploys a commit that has no deploy script"
@@ -1531,7 +1614,7 @@ expect_output "that a newer deploy script knows. Push a commit that puts deploy/
 write_config 5
 end_test
 
-start_test "it says so too when a value or a missing tool stops it, with what bash said of a script it cannot parse"
+start_test "it says so too when a value, a missing tool or the database stops it, with what bash said of a script it cannot parse"
 make_commit $W "[$USERS,$LISTS]" "" 0.2.0
 printf 'if\n' >>"$(script_of $W)"
 # A value that a later deploy script may well take.
@@ -1550,19 +1633,51 @@ run_in=()
 expect_status 1
 expect_order "NOTE: the deploy script of framework commit ${W:0:12} cannot carry out this run" \
   "ERROR: The command 'node' is not installed or not on PATH."
+# A database that a later deploy script may read another way, or not at all.
+database_mode=$(stat -c %a "$DATABASE")
+chmod 000 "$DATABASE"
+run
+chmod "$database_mode" "$DATABASE"
+expect_status 1
+expect_order "NOTE: the deploy script of framework commit ${W:0:12} cannot carry out this run" \
+  "ERROR: This user cannot read $DATABASE or cannot write to $T/data"
 [[ ! -e $BASE/state/failed ]] || fail "a failure note was written"
 end_test
 
-start_test "a base folder that cannot be used is what a starter says, not a setting it does not know"
+start_test "a copy that knows no commit of the framework does the work itself as far as the fetch, which it reports last"
+# The clone cannot be read, here because FRAMEWORK_REPO names a folder that
+# is none. There is no deploy script to look at, so the run is not handed
+# over, and what needs no network is done first, as when a fetch fails.
+mkdir "$T/no-clone"
+sed "s|^FRAMEWORK_REPO=.*|FRAMEWORK_REPO=$T/no-clone|" "$T/deploy.conf" >"$T/no-clone.conf"
+mkdir "$BASE/releases/20000101T000000Z"
+: >"$BASE/state/restart-pending"
+config=$T/no-clone.conf
+run
+config=$T/deploy.conf
+expect_status 1
+expect_order "Removing the unfinished release 20000101T000000Z left by an interrupted run." \
+  "ERROR: $T/no-clone is not a Git repository (the framework repository)."
+expect_order "an earlier run could not confirm that" \
+  "ERROR: $T/no-clone is not a Git repository (the framework repository)."
+[[ ! -e $BASE/releases/20000101T000000Z ]] || fail "the unfinished release was left behind"
+[[ ! -e $BASE/state/restart-pending ]] || fail "the restart note was left behind"
+[[ ! -e $BASE/state/failed ]] || fail "a failure note was written"
+expect_started ""
+end_test
+
+start_test "a base folder that cannot be used is what a starter says first, and a line it could not make sense of with it"
 # With no base folder there is no lock and nobody to hand the run to, so the
-# config file may be right for a deploy script this copy never got to.
+# config file may be right for a deploy script this copy never got to: the
+# folder comes first. The line is named too, because it may be the reason:
+# HEARTH_BASE under a name with a letter too many (HEARTH_BASES) leaves the
+# base folder at its default, which is then the folder that is not there.
 printf 'HEARTH_BASE=%s\nFRAMEWORK_REPO=%s\nFUTURE_SETTING=yes\n' "$T/no-such-base" "$FRAMEWORK" >"$T/no-base.conf"
 config=$T/no-base.conf
 run
 config=$T/deploy.conf
 expect_status 1
-expect_output "ERROR: $T/no-such-base does not exist or this user cannot write to it."
-expect_no_output "FUTURE_SETTING"
+expect_output "ERROR: $T/no-such-base does not exist or this user cannot write to it. Also: $T/no-base.conf, line 3: FUTURE_SETTING is not a setting this script knows."
 [[ ! -e $T/no-such-base ]] || fail "the base folder was made"
 end_test
 
@@ -1668,6 +1783,12 @@ fi
 
 if ((skipped > 0)); then
   echo "deploy tests: $passed passed, $skipped skipped."
+  if [[ -n ${CI:-} ]]; then
+    trap - EXIT
+    echo "deploy tests: FAILED, because CI is set, where every test must run. The lines that begin with SKIPPED say what each one needs." >&2
+    cleanup_folder
+    exit 1
+  fi
 else
   echo "deploy tests: $passed passed."
 fi

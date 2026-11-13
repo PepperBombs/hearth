@@ -162,9 +162,10 @@ Two things to know before you write that line:
   install the script of the release that is running, the last one that
   worked, with the line above.
 
-The name must be written exactly. A line the script can tell is
-`SELF_UPDATE` misspelt ("SELF-UPDATE=off", "self_update=off", no "=") stops
-every run and names the line. Another name, such as "SELF_UPDATES=off", is
+The name must be written exactly, with nothing before it: `deploy.conf` is
+not a shell script. A line the script can tell is `SELF_UPDATE` misspelt
+("SELF-UPDATE=off", "self_update=off", "export SELF_UPDATE=off", no "=")
+stops every run and names the line. Another name, such as "SELF_UPDATES=off", is
 taken for a setting of a newer deploy script: the run is still handed over,
 and the copy that does the work then stops on the line it does not know.
 
