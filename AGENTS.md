@@ -569,10 +569,11 @@ Things that bite:
   a test nobody runs holds the script to nothing. The same holds for the
   whole file: started as root it runs itself as another user with
   `setpriv`, and where that is missing it skips every test, which fails at
-  once where `CI` is set. No CI run has shown yet
-  which of the two ways a runner takes; if the `check` job fails on the
-  skip, add `fakeroot` or the kernel setting there, never a way around the
-  test. What a starter must do without is tested by taking it away: a
+  once where `CI` is set. On GitHub's `ubuntu-24.04` runner the test runs:
+  the first CI run with this rule passed with nothing skipped (its log does
+  not say which of the two ways it took). If the `check` job ever fails on
+  the skip, add `fakeroot` or the kernel setting there, never a way around
+  the test. What a starter must do without is tested by taking it away: a
   `PATH` of links that leaves out node, pnpm, tar and systemctl
   (`starter-bin`), the folder for the build logs removed, a database
   nobody may read, and another `bash` first on `PATH` that writes down
