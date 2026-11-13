@@ -100,19 +100,24 @@ starts each run: it fetches `main` of the framework, and when that commit's
 `deploy/hearth-deploy.sh` differs from itself, it hands the whole run over
 to it. So every release is built, tried and switched to by its own deploy
 script, also the release that brings a newer one, and
-`/usr/local/bin/hearth-deploy` never needs installing again. The newer
-script is kept in `/opt/hearth/state/deploy-script` and runs as the `hearth`
-user, as the code of that commit does in every build, so this gives it no
-right it did not have.
+`/usr/local/bin/hearth-deploy` never needs installing again, unless a later
+version of this guide asks for it: what the installed copy does before it
+hands a run over is the one part of the script that no push reaches. The
+newer script is kept in `/opt/hearth/state/deploy-script` and runs as the
+`hearth` user, as the code of that commit does in every build, so this
+gives it no right it did not have.
 
-A hand-over is silent, so the journal does not say which copy spoke. Two
-things follow. A line such as "An unexpected error occurred on line 752 of
+A hand-over itself writes nothing in the journal. A run that builds a
+release says which script does the work ("This run is carried out by the
+deploy script of framework commit ..."); a run that finds nothing new, or
+stops on an error before the build, does not. Two things follow. A line
+such as "An unexpected error occurred on line 752 of
 /opt/hearth/state/deploy-script" counts in the file it names, not in
 `/usr/local/bin/hearth-deploy`. And a change you make to the installed copy
 on the server has no effect while `main` holds another script: every run is
-handed to that one. To see a hand-over happen, start one run by hand with
-`HEARTH_DEPLOY_VERBOSE` set; it is a run like any other, and deploys what
-is new:
+handed to that one. To see a hand-over happen without waiting for a
+release, start one run by hand with `HEARTH_DEPLOY_VERBOSE` set; it is a
+run like any other, and deploys what is new:
 
 ```sh
 sudo -u hearth env HEARTH_DEPLOY_VERBOSE=1 /usr/local/bin/hearth-deploy /etc/hearth/deploy.conf
@@ -125,31 +130,63 @@ after each switch that "deploy/hearth-deploy.sh in this release differs
 from the installed copy". Install the new one from the release that is
 running, not from the checkout of step 3: the deploy only fetches into
 `/opt/hearth/repos/hearth`, so the files there stay as they were when you
-cloned it, and the `install` line above would put the old copy back.
+cloned it, and the `install` line above would put the old copy back. Keep
+the old copy, look at the new one, install it, and check:
 
 ```sh
+sudo cp -p /usr/local/bin/hearth-deploy /usr/local/bin/hearth-deploy.old
+sudo -u hearth bash -n /opt/hearth/current/hearth/deploy/hearth-deploy.sh
 sudo install -m 755 /opt/hearth/current/hearth/deploy/hearth-deploy.sh /usr/local/bin/hearth-deploy
+grep -c SELF_UPDATE /usr/local/bin/hearth-deploy
 ```
 
-Until then, a copy from before mini-apps were built in keeps building every
-release without them, and a copy from before jobs existed starts the trial
-of a new release with its jobs on, so that for the seconds the trial lasts
-they run against the copy of the database and may fetch from outside.
+The second line is bash reading the script without running it. It must say
+nothing: what it says is an error in a script that must not be installed.
+The last line must now print a number above 0. If it still prints 0, the
+release that is running does not hold the new script yet, because it is not
+deployed or its deploy failed (look at the journal), and you have installed
+the old script again, which changes nothing: install once more when that
+release runs. The hand-over has not run on a real server yet (see the top
+of this guide). Should the new copy misbehave on yours, this puts the old
+one back; take a `SELF_UPDATE` line out of `deploy.conf` with it, since the
+old copy stops on one:
+
+```sh
+sudo install -m 755 /usr/local/bin/hearth-deploy.old /usr/local/bin/hearth-deploy
+```
+
+Until the new copy is installed, a copy from before mini-apps were built in
+keeps building every release without them, and a copy from before jobs
+existed starts the trial of a new release with its jobs on, so that for the
+seconds the trial lasts they run against the copy of the database and may
+fetch from outside.
 
 `SELF_UPDATE=off` in `/etc/hearth/deploy.conf` switches the hand-over off.
 The installed copy then does all the work itself, as it used to, and the
 journal says after a switch when the release's script differs from it. Use
 it if you would rather read a new deploy script before it runs on your
-server, and install it yourself with the line above; or for a while, to
-deploy with the installed copy when a commit's own deploy script is broken
-(see "When a deployment fails").
+server, and install it yourself with the `bash -n` and `install` lines
+above; or for a while, to deploy with the installed copy when a commit's
+own deploy script is broken (see "When a deployment fails"). In that second
+case the release that is then deployed holds the broken script: do not
+install the script of that release. For a script that is missing, empty or
+not parsed the journal says so itself ("Do NOT install it"). For one that
+bash can parse and that does not work it cannot know, and asks for the
+install as for any script that differs. When a commit whose script works is
+on `main`, take the `SELF_UPDATE=off` line out again: the next run is
+handed to that script.
 
 Two things to know before you write that line:
 
 - **The installed copy must know the setting.** A copy from before the
   hand-over existed stops on a config file that names `SELF_UPDATE`, at
-  every run, and deploys nothing. Install the new copy first (the line
-  above), then write the setting. To have no run in between, which would be
+  every run, and deploys nothing ("SELF_UPDATE is not a setting this script
+  knows"). Install the new copy first (the lines above), then write the
+  setting. If the `grep` there still prints 0, the release that is running
+  is itself from before the hand-over, and installing from it changes
+  nothing: take the `SELF_UPDATE` line out of `deploy.conf` again, let the
+  next run deploy the release that brings the new script, then install and
+  write the setting. To have no run in between, which would be
   handed over because "on" is the default, stop the timer while you do
   both: `sudo systemctl stop hearth-deploy.timer`, install, write the
   setting, `sudo systemctl start hearth-deploy.timer`.
@@ -159,8 +196,16 @@ Two things to know before you write that line:
   it would deploy: it does not know what later deploy scripts learned, and
   it stops on a setting in `deploy.conf` that was added since. So before
   you set `SELF_UPDATE=off`, also as the way out of a broken deploy script,
-  install the script of the release that is running, the last one that
-  worked, with the line above.
+  install the script of the release that is running, with the lines above.
+  In that order: once "off" has deployed a commit whose script is broken,
+  the release that is running is the one that holds it. The running
+  release's script is the last one that worked, with one exception. A
+  script whose fault shows only after it has deployed its own commit (when
+  it finds nothing new, tidies up, finishes a restart, or when only the
+  mini-apps change) is the script of the running release itself. Then take
+  the script of the release before it: `sudo ls /opt/hearth/releases` lists
+  the releases that are kept, oldest first, and each holds
+  `hearth/deploy/hearth-deploy.sh`.
 
 The name must be written exactly, with nothing before it: `deploy.conf` is
 not a shell script. A line the script can tell is `SELF_UPDATE` misspelt
@@ -251,7 +296,10 @@ build output is in `/opt/hearth/logs`.
   installed copy, after installing the script of the running release in its
   place (step 5): the same commits are tried again after
   `RETRY_AFTER_MINUTES`, or at once when you delete
-  `/opt/hearth/state/failed`.
+  `/opt/hearth/state/failed`. The release that is then deployed holds the
+  broken script, so do not install the script of that release; the journal
+  says "Do NOT install it" after the switch. When a commit whose script
+  works is on `main`, take the `SELF_UPDATE=off` line out again.
 
   The installed copy is as old as the day you installed it, so it may stop
   before it gets that far, on a setting in `deploy.conf` that was added
@@ -273,7 +321,14 @@ build output is in `/opt/hearth/logs`.
   journal says nothing at all, and the only sign is that pushes are no
   longer deployed. The ways out are the same: push a commit whose script
   works, which is handed the next run and deployed at once; or install the
-  script of the running release and set `SELF_UPDATE=off`.
+  script of the running release and set `SELF_UPDATE=off`, in that order.
+  If the faulty script deployed its own commit before its fault showed, it
+  is the script of the running release: install the one of the release
+  before it instead (step 5 says where to find it). And once "off" has
+  deployed a commit whose script does not work, do not install the script
+  of that release, although the journal asks for it as for any script that
+  differs from the installed copy: it cannot tell that a script which bash
+  can parse does not work.
 - **The new release fails as the live service.** The script stops the
   service, puts the database back as it was just before the switch, points
   `current` at the previous release and starts it. The database has to go

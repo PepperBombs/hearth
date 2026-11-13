@@ -114,7 +114,8 @@
 #
 # SELF_UPDATE=off in the config file switches all of this off. The installed
 # copy then does the work itself, and says so after a deploy when the
-# release's deploy script differs from it.
+# release's deploy script differs from it, or when that script is one that
+# must not be installed: missing, empty, not a regular file or not parsed.
 #
 # What an installed copy counts on, for as long as it stays installed. A
 # later version of this script must keep to all of it: to the first list
@@ -133,7 +134,8 @@
 #     and where the config file is found and how it is written (see "Usage"
 #     and deploy/deploy.conf.example);
 #   - state/deploy-script and state/deploy-script.new are the starter's to
-#     write.
+#     write. Whatever lies at the second, a link or a folder too, is removed
+#     before it is written.
 #
 # So, before the hand-over, a copy must not stop on what only the copy that
 # does the work needs. A line of the config file that it cannot read, or a
@@ -446,15 +448,18 @@ is_release_name() { [[ $1 =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; }
 
 # try_fetch REPO LABEL: fetches the branch and leaves the commit it is at in
 # $fetched_commit. If it cannot, it returns 1 and leaves what to say about it
-# in $fetch_failure, and what git said in $fetch_output.
+# in $fetch_failure, and what git said in $fetch_output. That is kept also
+# for a clone git cannot use: a folder that is no repository is one reason,
+# and a repository that belongs to another user, which git refuses and says
+# how to allow, is another.
 fetched_commit=""
 fetch_failure=""
 fetch_output=""
 try_fetch() {
   local repo=$1 label=$2
   fetched_commit="" fetch_failure="" fetch_output=""
-  if ! git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
-    fetch_failure="$repo is not a Git repository (the $label)."
+  if ! fetch_output=$(git -C "$repo" rev-parse --git-dir 2>&1); then
+    fetch_failure="git cannot use $repo (the $label)."
     return 1
   fi
   if ! fetch_output=$(GIT_TERMINAL_PROMPT=0 timeout 120 git -C "$repo" fetch --quiet --no-tags \
@@ -484,6 +489,9 @@ framework_branch_commit() {
 # read_deploy_script COMMIT FILE: copies the deploy script of a framework
 # commit out of the clone into FILE. If it cannot, it returns 1 and leaves the
 # reason in $script_problem, and what to do about it in $script_remedy.
+# Whatever lay at FILE is removed first, so that FILE is a new regular file:
+# written through a link left there, the script would land where the link
+# leads, outside state/, and a folder left there would stop every copy.
 script_remedy="Push a commit that puts deploy/hearth-deploy.sh right"
 read_deploy_script() {
   local commit=$1 file=$2 entry
@@ -496,7 +504,7 @@ read_deploy_script() {
     script_problem="that commit has no deploy/hearth-deploy.sh"
   elif [[ $entry != 100???" blob "* ]]; then
     script_problem="deploy/hearth-deploy.sh is not a regular file in that commit"
-  elif ! mkdir -p -- "$state_dir" ||
+  elif ! mkdir -p -- "$state_dir" || ! rm -rf -- "$file" 2>/dev/null ||
     ! git -C "$FRAMEWORK_REPO" show "$commit:deploy/hearth-deploy.sh" >"$file" 2>/dev/null; then
     script_problem="it could not be copied from $FRAMEWORK_REPO to $file"
     script_remedy="Look at that clone, and at the space left on the disk"
@@ -777,7 +785,7 @@ hand_over() {
   flock -u 9
   exec 9>&-
   export HEARTH_DEPLOY_HANDED_OVER=$framework_commit
-  [[ $framework_fetch != done ]] || export HEARTH_DEPLOY_FETCHED=$framework_commit
+  [[ $framework_fetch != "done" ]] || export HEARTH_DEPLOY_FETCHED=$framework_commit
   exec "$BASH" "$handover_file" "${arguments[@]}"
 }
 
@@ -786,9 +794,9 @@ if [[ $SELF_UPDATE == on && $locked == yes ]]; then
   framework_commit=$(framework_branch_commit)
   if [[ -n $framework_commit && $starter_fetched == "$framework_commit" ]]; then
     # The copy that handed this run over fetched the branch a moment ago.
-    framework_fetch=done
+    framework_fetch="done"
   elif try_fetch "$FRAMEWORK_REPO" "framework repository"; then
-    framework_fetch=done
+    framework_fetch="done"
     framework_commit=$fetched_commit
   else
     # Not the end of the run: finishing a restart that is still pending needs
@@ -810,7 +818,9 @@ if [[ $SELF_UPDATE == on && $locked == yes ]]; then
         script_problem_lines=${script_problem_lines//"$candidate"/deploy/hearth-deploy.sh}
       fi
     fi
-    rm -f -- "$candidate"
+    # Not worth the run if it cannot be removed: read_deploy_script clears
+    # the name before it writes there again.
+    rm -f -- "$candidate" || true
   fi
 fi
 
@@ -918,7 +928,7 @@ if [[ $framework_fetch == failed ]]; then
   # The fetch before the hand-over. Said only now, because what came before
   # needed no network.
   fetch_failed
-elif [[ $framework_fetch != done ]]; then
+elif [[ $framework_fetch != "done" ]]; then
   try_fetch "$FRAMEWORK_REPO" "framework repository" || fetch_failed
   framework_commit=$fetched_commit
 fi
@@ -982,7 +992,7 @@ if [[ -n $script_problem ]]; then
   # Found before the hand-over, and said here so that it counts as a build
   # that failed: tried again after a while, not on every run.
   [[ -z $script_problem_lines ]] || printf '%s\n' "$script_problem_lines" | sed 's/^/    /' >&2
-  die "The newest commits (framework ${framework_commit:0:12}, mini-apps ${apps_commit:0:12}) are not deployed: the deploy script of that framework commit cannot carry out the run, because $script_problem. $script_remedy; or set SELF_UPDATE=off in $config_file to deploy with the installed copy of the script."
+  die "The newest commits (framework ${framework_commit:0:12}, mini-apps ${apps_commit:0:12}) are not deployed: the deploy script of that framework commit cannot carry out the run, because $script_problem. $script_remedy; or deploy them with the installed copy of the script, which may be much older than they are: read \"When a deployment fails\" in docs/self-hosting.md before you set SELF_UPDATE=off in $config_file."
 fi
 new_release=$HEARTH_BASE/releases/$stamp
 build_log=$HEARTH_BASE/logs/$stamp.log
@@ -1168,9 +1178,19 @@ log "Release $stamp is live (version $version)."
 prune_releases || log "WARNING: could not remove old releases; the deploy itself succeeded." >&2
 
 # With SELF_UPDATE on, the release was deployed by its own deploy script,
-# whatever the installed copy holds.
+# whatever the installed copy holds. With it off, the installed copy has just
+# deployed a release whose own script it never looked at, and "off" is also
+# the way to deploy a commit whose script is broken: installed, a script
+# that is empty or not parsed would end every run from then on. So the note
+# asks for an install only of a script that a hand-over would have started.
+# Every check is the condition of an "if": nothing here may fail a deploy
+# that went well.
 if [[ $SELF_UPDATE == off ]]; then
-  if ! cmp -s -- "$installed_script" "$new_release/hearth/deploy/hearth-deploy.sh"; then
+  release_script=$new_release/hearth/deploy/hearth-deploy.sh
+  if [[ -L $release_script || ! -f $release_script || ! -s $release_script ]] ||
+    ! "$BASH" -n "$release_script" >/dev/null 2>&1; then
+    log "NOTE: deploy/hearth-deploy.sh in this release is missing, empty, not a regular file or not parsed by bash. Do NOT install it: keep the installed copy ($installed_script). See \"When a deployment fails\" in docs/self-hosting.md."
+  elif ! cmp -s -- "$installed_script" "$release_script"; then
     log "NOTE: deploy/hearth-deploy.sh in this release differs from the installed copy ($installed_script). Install the new one when convenient; see docs/self-hosting.md."
   fi
 fi

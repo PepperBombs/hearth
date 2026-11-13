@@ -20,12 +20,15 @@ BRANCH=main
 # script of the newest framework commit, so every release is deployed by its
 # own script and the installed copy never needs installing again. With "off"
 # the installed copy does all the work itself, and says after a switch when
-# the release's script differs from it. See docs/self-hosting.md, step 5.
+# the release's script differs from it, or is one that must not be
+# installed. See docs/self-hosting.md, step 5.
 # A deploy script from before this setting existed stops on a config file
 # that names it, so the line is best left out unless you want "off", and
 # written only once a copy that knows it is installed. With "off" the
 # installed copy deploys every release, however old it is: install the
-# script of the running release before you switch. Write the name exactly:
+# script of the running release before you switch, or of the release before
+# it when the running one's own script is what is wrong (step 5 of the
+# guide says how to tell, and where they are). Write the name exactly:
 # under another name, such as SELF_UPDATES, the run is still handed over.
 # SELF_UPDATE=on
 

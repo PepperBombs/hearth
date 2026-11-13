@@ -11,13 +11,15 @@
 #   git        a folder of "commits" instead of a repository, one for the
 #              framework and one for the mini-apps: "main" in it is the
 #              branch on the remote, and "fetched" what the last fetch
-#              brought. A fetch can be made to fail, in words of the
-#              test's if it likes, to leave a process behind that is still
-#              running when it is over, or to run something of the test's in
-#              its middle; "show" can be cut short, or made to give another
-#              text each time. It writes down every call that finds, in its
-#              environment, what a starter tells the copy it starts. The last
-#              test uses the real git instead, on a repository it makes up.
+#              brought. Of a folder without commits it says what git says
+#              of one that is no repository. A fetch can be made to fail,
+#              in words of the test's if it likes, to leave a process behind
+#              that is still running when it is over, or to run something of
+#              the test's in its middle; "show" can be cut short, or made to
+#              give another text each time. It writes down every call that
+#              finds, in its environment, what a starter tells the copy it
+#              starts. The last test uses the real git instead, on a
+#              repository it makes up.
 #   pnpm       it writes down which copy of the deploy script asked, and
 #              whether that copy holds the lock;
 #              in the framework, "install" links the SQLite library and the
@@ -68,11 +70,17 @@ for package in "$sqlite_package" "$sdk/node_modules/typescript"; do
 done
 
 # The deploy script refuses to run as root. In a container that has only
-# root, run the whole test as an unprivileged user instead.
+# root, run the whole test as an unprivileged user instead. Where that
+# cannot be done every test is skipped, which fails the run where CI is set,
+# as one skipped test does (see skip_test).
 if [[ $EUID -eq 0 ]]; then
   if ! command -v setpriv >/dev/null 2>&1; then
     echo "deploy tests: SKIPPED. They cannot run as root, and setpriv is not here to drop root."
-    exit 0
+    [[ -n ${CI:-} ]] || exit 0
+    [[ -z ${GITHUB_ACTIONS:-} ]] ||
+      echo "::error title=The deploy tests were skipped::They cannot run as root, and setpriv is not here to drop root."
+    echo "deploy tests: FAILED, because CI is set, where every test must run. Run them as another user than root, or install setpriv (util-linux)." >&2
+    exit 1
   fi
   T=$(mktemp -d "${TMPDIR:-/tmp}/hearth-deploy-test.XXXXXX")
   trap 'rm -rf -- "$T"' EXIT
@@ -158,7 +166,13 @@ fi
 case \$1 in
   rev-parse)
     case \$2 in
-      --git-dir) [[ -d \$repo/commits ]] && echo .git ;;
+      --git-dir)
+        if [[ ! -d \$repo/commits ]]; then
+          echo "fatal: not a git repository (or any of the parent directories): .git" >&2
+          exit 128
+        fi
+        echo .git
+        ;;
       --verify) [[ -s \$repo/fetched ]] && cat "\$repo/fetched" ;;
       --short) printf '%s\n' "\${3:0:7}" ;;
       *) exit 2 ;;
@@ -572,6 +586,12 @@ not_deployed() {
     "${1:0:12}" "${2:0:12}" "$3"
 }
 
+# The other way out that such a run names, after what to do about the
+# script: SELF_UPDATE=off, and where to read first what that takes.
+with_the_installed_copy() {
+  printf 'or deploy them with the installed copy of the script, which may be much older than they are: read "When a deployment fails" in docs/self-hosting.md before you set SELF_UPDATE=off in %s.' "$config"
+}
+
 fail() {
   echo "FAILED: $current_test: $*" >&2
   exit 1
@@ -608,6 +628,12 @@ expect_order() {
   [[ -n $first ]] || fail "the output does not say: $1"
   [[ -n $second ]] || fail "the output does not say: $2"
   ((first < second)) || fail "the output says \"$2\" before \"$1\""
+}
+
+# What a run with SELF_UPDATE=off says after it deployed a release whose own
+# deploy script no hand-over would start.
+do_not_install() {
+  printf 'NOTE: deploy/hearth-deploy.sh in this release is missing, empty, not a regular file or not parsed by bash. Do NOT install it: keep the installed copy (%s). See "When a deployment fails" in docs/self-hosting.md.' "$script"
 }
 
 # The version the live service reports, or "down".
@@ -670,6 +696,12 @@ V=c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5
 W=d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6
 X=e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7
 Y=f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8
+Z=a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9
+AB=b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0
+AC=c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1
+AD=d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2
+AE=e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3
+AF=f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4
 # Commits of the mini-apps.
 NO_APPS=1111111111111111111111111111111111111111
 NO_LOCKFILE=2222222222222222222222222222222222222222
@@ -1105,7 +1137,7 @@ stops=$(count_of stop "$T/systemctl.log")
 releases=$(release_count)
 deploy
 expect_status 1
-expect_output "$(not_deployed $J $FOR_SDK_2 "bash cannot parse it") Push a commit that puts deploy/hearth-deploy.sh right; or set SELF_UPDATE=off in $T/deploy.conf to deploy with the installed copy of the script."
+expect_output "$(not_deployed $J $FOR_SDK_2 "bash cannot parse it") Push a commit that puts deploy/hearth-deploy.sh right; $(with_the_installed_copy)"
 # What bash said, under the name the file has in the repository.
 expect_output "    deploy/hearth-deploy.sh: line "
 expect_output "Release $release_i is still the one in use."
@@ -1175,7 +1207,7 @@ make_commit $U "[$USERS,$LISTS]" "" 0.2.0
 releases=$(release_count)
 deploy
 expect_status 1
-expect_output "$(not_deployed $U $FOR_SDK_2 "deploy/hearth-deploy.sh is empty in that commit") Push a commit that puts deploy/hearth-deploy.sh right; or set SELF_UPDATE=off"
+expect_output "$(not_deployed $U $FOR_SDK_2 "deploy/hearth-deploy.sh is empty in that commit") Push a commit that puts deploy/hearth-deploy.sh right; $(with_the_installed_copy)"
 expect_output "Release $release_i is still the one in use."
 expect_live c3c3c3c
 [[ $(release_count) == "$releases" ]] || fail "a release was built"
@@ -1482,7 +1514,7 @@ run
 rm "$T/show-cut-short"
 expect_status 1
 expect_started ""
-expect_output "$(not_deployed $Q $FOR_SDK_2 "it could not be copied from $FRAMEWORK to $BASE/state/deploy-script.new") Look at that clone, and at the space left on the disk; or set SELF_UPDATE=off"
+expect_output "$(not_deployed $Q $FOR_SDK_2 "it could not be copied from $FRAMEWORK to $BASE/state/deploy-script.new") Look at that clone, and at the space left on the disk; $(with_the_installed_copy)"
 cmp -s "$BASE/state/deploy-script" "$(script_of $P)" || fail "state/deploy-script was replaced"
 [[ ! -e $BASE/state/deploy-script.new ]] || fail "what could be read of it was left under state/"
 [[ $(release_count) == "$releases" ]] || fail "a release was built"
@@ -1595,6 +1627,9 @@ deploy
 expect_status 0
 expect_live a3a3a3a
 expect_started ""
+# The release has no deploy script to install.
+expect_output "$(do_not_install)"
+expect_no_output "Install the new one"
 write_config 5
 # Once it is deployed there is nothing to build, and so nothing to stop for.
 run
@@ -1657,9 +1692,14 @@ run
 config=$T/deploy.conf
 expect_status 1
 expect_order "Removing the unfinished release 20000101T000000Z left by an interrupted run." \
-  "ERROR: $T/no-clone is not a Git repository (the framework repository)."
+  "ERROR: git cannot use $T/no-clone (the framework repository)."
 expect_order "an earlier run could not confirm that" \
-  "ERROR: $T/no-clone is not a Git repository (the framework repository)."
+  "ERROR: git cannot use $T/no-clone (the framework repository)."
+# Why not is git's to say: it may be a clone that belongs to another user,
+# which git refuses with the command that allows it.
+expect_order "    fatal: not a git repository (or any of the parent directories): .git" \
+  "ERROR: git cannot use $T/no-clone (the framework repository)."
+expect_no_output "is not a Git repository"
 [[ ! -e $BASE/releases/20000101T000000Z ]] || fail "the unfinished release was left behind"
 [[ ! -e $BASE/state/restart-pending ]] || fail "the restart note was left behind"
 [[ ! -e $BASE/state/failed ]] || fail "a failure note was written"
@@ -1691,6 +1731,126 @@ expect_status 1
 expect_started "$(started_as v $V)"
 expect_output "ERROR: An unexpected error occurred on line $(grep -n -x 'false' "$(script_of $V)" | cut -d: -f1) of $BASE/state/deploy-script."
 expect_output "Nothing was changed."
+end_test
+
+# ---------------------------------------------------------------------------
+start_test "a config file named relative to the caller's folder is found by the copy the run is handed to"
+# A run by hand. The copy that is handed the run reads the starter's
+# arguments from the folder the starter was started in, so a starter must
+# not change folder before it hands the run over.
+make_commit $Z "[$USERS,$LISTS]" "" 0.2.0
+newer_script "$(script_of $Z)" z
+config=deploy.conf
+run_in=("$BASH" -c 'cd -- "$1" && shift && exec "$@"' _ "$T")
+deploy
+run_in=()
+expect_status 0
+expect_started "$(started_as z $Z)"
+[[ $(started) == "z args=[deploy.conf] "* ]] || fail "the newer script was not given the name as the starter got it: $(started)"
+config=$T/deploy.conf
+expect_no_output "Cannot read the config file"
+expect_live a9a9a9a
+end_test
+
+# ---------------------------------------------------------------------------
+start_test "a link left at state/deploy-script.new is replaced, never written through"
+# Written through it, the newest commit's deploy script would land where the
+# link leads, outside state/, over what is there.
+make_commit $AB "[$USERS,$LISTS]" "" 0.2.0
+newer_script "$(script_of $AB)" ab
+echo "not the deploy script's to write" >"$T/elsewhere"
+ln -s "$T/elsewhere" "$BASE/state/deploy-script.new"
+deploy
+expect_status 0
+expect_started "$(started_as ab $AB)"
+expect_live b0b0b0b
+[[ $(<"$T/elsewhere") == "not the deploy script's to write" ]] || fail "the file the link led to was written over"
+[[ -f $BASE/state/deploy-script && ! -L $BASE/state/deploy-script ]] || fail "state/deploy-script is not a regular file"
+cmp -s "$BASE/state/deploy-script" "$(script_of $AB)" || fail "state/deploy-script is not the newest commit's deploy script"
+# Nor is a file made where a link leads that has nothing at its end.
+rm "$T/elsewhere"
+ln -s "$T/elsewhere" "$BASE/state/deploy-script.new"
+run
+expect_status 0
+expect_started "$(started_as ab $AB)"
+[[ ! -e $T/elsewhere ]] || fail "a file was made where the link led"
+[[ -f $BASE/state/deploy-script && ! -L $BASE/state/deploy-script ]] || fail "state/deploy-script is not a regular file"
+end_test
+
+start_test "a folder left at state/deploy-script.new does not keep a run from being handed over"
+mkdir "$BASE/state/deploy-script.new"
+: >"$BASE/state/deploy-script.new/left-behind"
+run
+expect_status 0
+expect_started "$(started_as ab $AB)"
+expect_output "Nothing new: main is already deployed."
+expect_no_output "unexpected error"
+[[ ! -e $BASE/state/deploy-script.new ]] || fail "state/deploy-script.new was left behind"
+end_test
+
+start_test "a deploy script that can be neither written under state/ nor cleared away there leaves the run to the copy that found out, as far as the build"
+# state/ is closed to writing, with a file of an earlier run still at the
+# name: the copy cannot remove it before it writes, nor afterwards.
+make_commit $AC "[$USERS,$LISTS]" "" 0.2.0
+newer_script "$(script_of $AC)" ac
+echo "left by an earlier run" >"$BASE/state/deploy-script.new"
+state_mode=$(stat -c %a "$BASE/state")
+chmod 555 "$BASE/state"
+releases=$(release_count)
+deploy
+chmod "$state_mode" "$BASE/state"
+expect_status 1
+expect_started ""
+expect_no_output "unexpected error"
+expect_output "$(not_deployed $AC $FOR_SDK_2 "it could not be copied from $FRAMEWORK to $BASE/state/deploy-script.new") Look at that clone, and at the space left on the disk; $(with_the_installed_copy)"
+expect_output "Release $(current_release) is still the one in use."
+[[ $(release_count) == "$releases" ]] || fail "a release was built"
+[[ $(<"$BASE/state/deploy-script.new") == "left by an earlier run" ]] || fail "the file that could not be removed was written over"
+expect_live b0b0b0b
+# With state/ open again the run is handed over, and the commit deployed.
+deploy
+expect_status 0
+expect_started "$(started_as ac $AC)"
+expect_live c1c1c1c
+[[ ! -e $BASE/state/deploy-script.new ]] || fail "state/deploy-script.new was left behind"
+end_test
+
+# ---------------------------------------------------------------------------
+start_test "with SELF_UPDATE=off the installed copy asks for no install of a release's deploy script that no hand-over would start"
+# "off" is also the way to deploy a commit whose deploy script is broken.
+# Installed in the installed copy's place, as the note asks of a script that
+# differs, such a script would end every run from then on.
+write_config 5 SELF_UPDATE=off
+# One that bash cannot parse.
+make_commit $AD "[$USERS,$LISTS]" "" 0.2.0
+printf 'if\n' >>"$(script_of $AD)"
+deploy
+expect_status 0
+expect_live d2d2d2d
+expect_started ""
+expect_output "$(do_not_install)"
+expect_no_output "Install the new one"
+# An empty one.
+make_commit $AE "[$USERS,$LISTS]" "" 0.2.0
+: >"$(script_of $AE)"
+deploy
+expect_status 0
+expect_live e3e3e3e
+expect_output "$(do_not_install)"
+expect_no_output "Install the new one"
+# A link, here to a script that works: no regular file, which is what a
+# hand-over asks for.
+make_commit $AF "[$USERS,$LISTS]" "" 0.2.0
+newer_script "$FRAMEWORK/commits/$AF/deploy/the-script.sh" af
+rm "$(script_of $AF)"
+ln -s the-script.sh "$(script_of $AF)"
+deploy
+expect_status 0
+expect_live f4f4f4f
+expect_started ""
+expect_output "$(do_not_install)"
+expect_no_output "Install the new one"
+write_config 5
 end_test
 
 # ---------------------------------------------------------------------------

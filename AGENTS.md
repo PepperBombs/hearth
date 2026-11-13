@@ -233,9 +233,11 @@ Things that bite:
   (`HEARTH_BASE`, `FRAMEWORK_REPO`, `REMOTE`, `BRANCH`, `SELF_UPDATE`) keep
   their names, meanings and defaults, in a config file of `NAME=value`
   lines found as today; and `state/deploy-script` and
-  `state/deploy-script.new` are the starter's to write. That is all a
-  hand-over needs. But an installed copy that cannot hand a run over does
-  that run's work itself, by what it knew on the day it was installed.
+  `state/deploy-script.new` are the starter's to write (whatever lies at
+  the second, a link or a folder too, is removed before it is written).
+  That is all a hand-over needs. But an installed copy that cannot hand a
+  run over does that run's work itself, by what it knew on the day it was
+  installed.
   There are two such runs: the newest commit's script is missing, empty,
   not a regular file or not parsed, or could not be copied under `state/`
   (the work as far as the build); and the copy knows no commit of the
@@ -279,7 +281,15 @@ Things that bite:
   and `state/deploy-script` are all there is. Nor may it change folder: a
   copy that is handed a run reads the starter's arguments, a config file
   named relative to the caller's folder among them, where the starter was
-  started. The copy that does the work begins with `cd /`, as the timer
+  started; a test hands a run over with a config file named that way. A
+  change above that line reaches no server by being merged: with the
+  hand-over on, the lock, the fetch and the decision to hand over are the
+  installed copy's, which no push updates, and nothing tells the owner that
+  it is behind (the note that a release's script differs is written only
+  with `SELF_UPDATE=off`). Say so in the pull request, and add to
+  `docs/self-hosting.md` that the installed copy must be installed again
+  for it, with the reason. The copy that does the work begins with `cd /`,
+  as the timer
   starts every run: a run by hand (`sudo -u hearth hearth-deploy`) keeps
   the caller's folder, which the deploy user may not be allowed to enter,
   and `find` then ends with an error although it found everything, so
@@ -306,7 +316,9 @@ Things that bite:
   could not start; nothing is recorded then, and it is said at every run.
   A framework fetch that fails before the hand-over is remembered
   (`framework_fetch`) and reported in step 1, after the leftovers and a
-  pending restart, and the run goes by the commit fetched last. A pending
+  pending restart, with what git said (also of a clone it cannot use, such
+  as one that belongs to another user: "git cannot use ..."), and the run
+  goes by the commit fetched last. A pending
   restart therefore waits for that fetch to fail, up to its limit of two
   minutes from a remote that does not answer, and for two such fetches
   when the run is handed over, since the copy that takes over is not told
@@ -316,8 +328,17 @@ Things that bite:
   then does: if it fails or does nothing, no run does anything, a pending
   restart and newer mini-apps included, and one that ends with status 0
   says nothing. `SELF_UPDATE=off` is the way out then, once the script of
-  the running release is installed in the old copy's place; so is the next
-  commit whose script works. An unexpected error names the file with the
+  the running release is installed in the old copy's place (of the release
+  before it, when the faulty script deployed its own commit before its
+  fault showed); so is the next commit whose script works. With
+  `SELF_UPDATE=off` the installed copy says after a deploy when the
+  release's script differs from it, and says instead that it must not be
+  installed when it is missing, empty, not a regular file or not parsed:
+  "off" is also how a commit with such a script gets deployed, and
+  installed it would end every run. Each of those checks is the condition
+  of an `if`, since nothing after "is live" may fail a deploy that went
+  well. A script that parses and does not work it cannot tell from a good
+  one; the guide warns of that. An unexpected error names the file with the
   line, since after a hand-over the copy that speaks is
   `state/deploy-script`.
 - Which mini-apps a server holds is decided when it is built, by
@@ -527,7 +548,8 @@ Things that bite:
   notes which copy asked and whether the lock was held (`pnpm-by.log`,
   `pnpm_askers`). The git stand-in keeps the remote's branch (`main`)
   apart from what the last fetch brought (`fetched`), answers `ls-tree` and
-  `show`, and through files in the test folder makes a fetch fail (in the
+  `show`, says of a folder without commits what git says of one that is no
+  repository, and through files in the test folder makes a fetch fail (in the
   words `fetch-fails` holds, if it holds any), leave a process behind or
   run something in its middle, and `show` stop short or give another text
   each time; it writes down every call that finds
@@ -543,7 +565,10 @@ Things that bite:
   anything as the real root. Where neither works the test is skipped with
   a line that says so, and where `CI` is set a skipped test fails the
   whole run at its end (an error on the run's page under GitHub Actions):
-  a test nobody runs holds the script to nothing. No CI run has shown yet
+  a test nobody runs holds the script to nothing. The same holds for the
+  whole file: started as root it runs itself as another user with
+  `setpriv`, and where that is missing it skips every test, which fails at
+  once where `CI` is set. No CI run has shown yet
   which of the two ways a runner takes; if the `check` job fails on the
   skip, add `fakeroot` or the kernel setting there, never a way around the
   test. What a starter must do without is tested by taking it away: a
