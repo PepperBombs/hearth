@@ -4,11 +4,15 @@ This guide sets up one Linux server with no public ports. Cloudflare Tunnel
 carries traffic to it and Cloudflare Access decides who gets in.
 
 **Tested on one real server so far.** The steps below have been run end to
-end once, with the releases up to the grocery list. Scheduled jobs and what
-they fetch from outside (GitHub Trending) came later, and so did the deploy
-script's handing each run over to the newest copy of itself (step 5):
-neither has run on a real server yet. Expect details to differ on yours,
-and correct them here.
+end once, with the releases up to the grocery list. The deploy script's
+handing each run over to the newest copy of itself (step 5) came later and
+has run there too, on its ordinary path: the one-time install, and one
+release that was handed to its own script and deployed by it. What it does
+when something is wrong (a commit whose script is broken, a fetch that
+fails, `SELF_UPDATE=off`) has run only in its tests. Scheduled jobs and
+what they fetch from outside (GitHub Trending) also came later, and have
+not run on a real server yet. Expect details to differ on yours, and
+correct them here.
 
 Everything personal (your domain, email address, secrets) stays on the server
 and never goes into a repository.
@@ -150,10 +154,10 @@ The last line must now print a number above 0. If it still prints 0, the
 release that is running does not hold the new script yet, because it is not
 deployed or its deploy failed (look at the journal), and you have installed
 the old script again, which changes nothing: install once more when that
-release runs. The hand-over has not run on a real server yet (see the top
-of this guide). Should the new copy misbehave on yours, this puts the old
-one back; take a `SELF_UPDATE` line out of `deploy.conf` with it, since the
-old copy stops on one:
+release runs. The hand-over has run on one real server so far (see the
+top of this guide). Should the new copy misbehave on yours, this puts the
+old one back; take a `SELF_UPDATE` line out of `deploy.conf` with it, since
+the old copy stops on one:
 
 ```sh
 sudo install -m 755 /usr/local/bin/hearth-deploy.old /usr/local/bin/hearth-deploy
