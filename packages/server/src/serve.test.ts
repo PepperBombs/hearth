@@ -14,6 +14,7 @@
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer, connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -66,7 +67,6 @@ let base: string;
 /** Every request that would have left this machine: none may. */
 let outside: string[];
 const realFetch = globalThis.fetch;
-
 beforeEach(() => {
   folder = mkdtempSync(path.join(tmpdir(), "hearth-serve-"));
   mkdirSync(path.join(folder, "web"));
@@ -257,6 +257,36 @@ describe("the way out and the wake", () => {
     expect(outside).toEqual([FEED]);
     outside = [];
     expect(lines).toEqual(expect.arrayContaining([expect.stringMatching(/^error: App "headlines", job "refresh", space .*: the run failed: Could not reach feeds\.example\.com/)]));
+  });
+
+  it("without stand-ins, reads a real answer of Node's fetch while the server listens", async () => {
+    // The feed, on this machine. Its answer comes from Node's own fetch: no test's "new Response" stands for it.
+    const feed = createHttpServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ items: [{ title: "Rain expected" }, { title: "Market opens" }] }));
+    });
+    await new Promise<void>((resolve) => feed.listen(0, "127.0.0.1", () => resolve()));
+    const feedAt = `http://127.0.0.1:${(feed.address() as AddressInfo).port}/headlines.json`;
+    // The feed's address leads there, with everything else Node's transport asked for; any other request stays refused.
+    const refusing = globalThis.fetch;
+    vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) =>
+      input === FEED ? realFetch(feedAt, init) : refusing(input, init),
+    );
+    try {
+      await start({ fetchStandIns: null });
+      const spaceId = await personalSpace();
+      await call("PUT", `/api/spaces/${spaceId}/apps/headlines`, {});
+      await vi.waitFor(async () => {
+        const status = await statusOf(spaceId, "headlines", "refresh");
+        expect(status.lastSucceededAt ?? status.lastFailedAt).not.toBeNull();
+      }, soon);
+      // The run read the answer's status and its body.
+      expect(lines.filter((line) => line.startsWith("error:"))).toEqual([]);
+      const latest = await call<{ output: { title: string }[] }>("POST", `/api/spaces/${spaceId}/apps/headlines/q/latest`, {});
+      expect(latest.body.output.map((row) => row.title)).toEqual(["Rain expected", "Market opens"]);
+    } finally {
+      await new Promise<void>((resolve) => feed.close(() => resolve()));
+    }
   });
 });
 

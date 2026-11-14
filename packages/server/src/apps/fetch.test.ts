@@ -590,6 +590,20 @@ describe("ctx.fetch's limits", () => {
     });
   });
 
+  it("know an answer by the platform's own Response, whatever the global Response has become since", async () => {
+    // What Node's fetch answers with is no instance of a class a library put in the global's place,
+    // as serve() of @hono/node-server does unless told not to.
+    const real = new Response("ok", { status: 203 });
+    vi.stubGlobal("Response", class extends Response {});
+    try {
+      const { fetch } = throughNode(() => real);
+      const answer = await fetch(SEARCH);
+      expect([answer.status, answer.text]).toEqual([203, "ok"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("fail as network when the answer breaks off", async () => {
     const { fetch } = throughNode(
       () =>
