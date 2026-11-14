@@ -567,6 +567,22 @@ that a newer build has migrated. There is no self-hosted GitHub Actions
 runner, because the repositories are public. See
 [self-hosting.md](self-hosting.md).
 
+The copy of the script that is installed on the server only starts a run.
+It fetches the framework, and when the newest commit's
+`deploy/hearth-deploy.sh` differs from itself, it hands the whole run over
+to that one, which the deploy user then runs from `state/deploy-script`.
+So every commit is built, tried and switched to by its own deploy script,
+also the commit that changes the script, and the installed copy is
+installed once. That commit's code runs as the deploy user in the build
+anyway, so its deploy script gains no right by this; the systemd units and
+the polkit rule, which need root, are still installed by hand. A commit
+whose deploy script is missing, empty or cannot be parsed is not deployed:
+the installed copy does that run itself as far as the build. `SELF_UPDATE=off`
+in the deploy's settings makes the installed copy do all the work itself.
+What an installed copy counts on in every later version of the script, for
+handing a run over and for the run it cannot hand over, is listed at the
+top of the script.
+
 Mini-apps written for another version of the SDK than the framework holds
 stop the build with status 3 (see "How mini-apps get into a build"). The
 release that runs stays, those commits are not built again, and the next
@@ -652,6 +668,12 @@ back, and a restart that cannot be confirmed, using stand-ins for git, pnpm
 and systemctl. It also builds mini-apps in, and turns down mini-apps that
 cannot be linked and mini-apps written for another SDK version: the made-up
 commits carry the real `hearth-apps sync`, so that check is the real one.
+And it follows the runs that one copy of the script hands over to another:
+a newer deploy script that deploys the commit which brought it, with one
+fetch and under the lock; a commit whose script is missing or broken, which
+is not deployed; settings that only a newer script knows; a fetch that
+fails; a run that finds the lock taken, or is started as root. One of
+these tests uses the real git, on a repository it makes up.
 
 TypeScript is held at version 6 on purpose. The lint tooling
 (`typescript-eslint`) does not yet support TypeScript 7; if TypeScript is
