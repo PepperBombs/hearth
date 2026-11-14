@@ -1005,6 +1005,9 @@ mkdir -- "$new_release"
 : >"$build_log"
 
 log "New commits: framework ${framework_commit:0:12}, mini-apps ${apps_commit:0:12}. Building release $stamp (version $version)."
+# The one line by which the journal shows that a run was handed over: the
+# hand-over itself writes nothing, and a build the installed copy does
+# itself has no such line.
 [[ -z $handed_over ]] ||
   log "This run is carried out by the deploy script of framework commit ${handed_over:0:12}."
 
