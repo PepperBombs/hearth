@@ -877,7 +877,8 @@ Things that bite:
   `new Response`, made of the global of that moment, and every end-to-end
   server answers jobs from the stand-in file. Keep both halves of the fix:
   `startServer` passes `overrideGlobalObjects: false` (the option only
-  skips those classes; answers are written the same), and `fetch.ts`
+  skips those classes; answers then go through the library's general
+  path, with the same status, headers and body), and `fetch.ts`
   knows an answer by `PlatformResponse`, the class kept when the module
   loads, never by the global. A test in `serve.test.ts` holds the first:
   while `startServer` listens, a job reads a real answer of Node's fetch
