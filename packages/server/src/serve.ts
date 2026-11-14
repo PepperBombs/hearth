@@ -113,7 +113,10 @@ export function startServer(options: StartOptions): RunningServer {
   });
   // The caller hears of a failure to listen through `listening` or the server's "error" event; nothing is left waiting.
   listening.catch(() => {});
-  const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info) => {
+  // `overrideGlobalObjects: false` leaves the platform's Request and Response in place. Left to itself,
+  // serve() puts lighter classes of its own there, and an answer of Node's fetch is no instance of
+  // those: every job's ctx.fetch then took a real answer for none (see PlatformResponse in apps/fetch.ts).
+  const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port, overrideGlobalObjects: false }, (info) => {
     announce(config, info, scheduler, log);
     scheduler?.start();
     markListening(info);

@@ -41,6 +41,15 @@ import { FetchError, type FetchInit, type FetchResponse } from "@hearth/sdk/serv
 import { z } from "zod";
 import type { Config } from "../config";
 
+/**
+ * The platform's own Response, kept when this module loads: the class of
+ * every answer Node's fetch gives. Never ask the global of the moment
+ * instead. A library may put a class of its own there (the listener of
+ * @hono/node-server does, unless told not to), which the platform's answers
+ * are no instance of, and every real answer would then count as none.
+ */
+const PlatformResponse = Response;
+
 /** What every request says it comes from. */
 export const USER_AGENT = "Hearth";
 /** How long an answer may take, from sending its request to the last byte of its body. */
@@ -333,12 +342,12 @@ async function exchange(
     } catch (error) {
       if (controller.signal.aborted) {
         // An answer that still comes is not read.
-        sent.then((late) => late instanceof Response && discard(late), () => {});
+        sent.then((late) => late instanceof PlatformResponse && discard(late), () => {});
         throw controller.signal.reason;
       }
       throw notReached(error, address);
     }
-    if (!(response instanceof Response)) {
+    if (!(response instanceof PlatformResponse)) {
       throw new FetchError("network", `Could not reach ${address.hostname}: the transport gave no answer.`);
     }
     const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get("location") : null;

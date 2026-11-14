@@ -867,6 +867,24 @@ Things that bite:
   one (`ctx.fetch(url).then(...)`) is the job's: `serveHearth` logs it if
   it rejects unhandled. `jobs.test.ts` ("requests a run leaves behind")
   listens for unhandled rejections while runs end each way.
+- `serve()` of `@hono/node-server` replaces the globals `Request` and
+  `Response` with lighter classes of its own unless it is given
+  `overrideGlobalObjects: false`, and an answer of Node's fetch is no
+  instance of those. `fetch.ts` asked the global what a `Response` is, so
+  on a server that listened every `ctx.fetch` through Node's transport
+  failed with "the transport gave no answer", whatever the host answered.
+  No test saw it: made-up transports and a made-up `fetch` answer with
+  `new Response`, made of the global of that moment, and every end-to-end
+  server answers jobs from the stand-in file. Keep both halves of the fix:
+  `startServer` passes `overrideGlobalObjects: false` (the option only
+  skips those classes; answers are written the same), and `fetch.ts`
+  knows an answer by `PlatformResponse`, the class kept when the module
+  loads, never by the global. A test in `serve.test.ts` holds the first:
+  while `startServer` listens, a job reads a real answer of Node's fetch
+  from a listener on this machine, and the global `Response` is still the
+  platform's. One in `fetch.test.ts` holds the second, with the global
+  replaced. A test of Node's transport that must stand for a real server
+  needs an answer of the real `fetch`, not `new Response`.
 - `HEARTH_FETCH_STANDINS` names a JSON file whose stand-ins answer every
   `ctx.fetch` (`standInFile`), at once and unpaced, read again at every
   request, so a test changes the answers by writing it: write it whole,
