@@ -67,9 +67,6 @@ let base: string;
 /** Every request that would have left this machine: none may. */
 let outside: string[];
 const realFetch = globalThis.fetch;
-/** The platform's own Response, as it is before any server of these tests listens. */
-const PlatformResponse = globalThis.Response;
-
 beforeEach(() => {
   folder = mkdtempSync(path.join(tmpdir(), "hearth-serve-"));
   mkdirSync(path.join(folder, "web"));
@@ -287,8 +284,6 @@ describe("the way out and the wake", () => {
       expect(lines.filter((line) => line.startsWith("error:"))).toEqual([]);
       const latest = await call<{ output: { title: string }[] }>("POST", `/api/spaces/${spaceId}/apps/headlines/q/latest`, {});
       expect(latest.body.output.map((row) => row.title)).toEqual(["Rain expected", "Market opens"]);
-      // And the listener left the platform's Request and Response in place.
-      expect(globalThis.Response).toBe(PlatformResponse);
     } finally {
       await new Promise<void>((resolve) => feed.close(() => resolve()));
     }

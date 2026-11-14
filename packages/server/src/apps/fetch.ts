@@ -45,7 +45,7 @@ import type { Config } from "../config";
  * The platform's own Response, kept when this module loads: the class of
  * every answer Node's fetch gives. Never ask the global of the moment
  * instead. A library may put a class of its own there (the listener of
- * @hono/node-server does, unless told not to), which the platform's answers
+ * @hono/node-server does, and has to: see serve.ts), which the platform's answers
  * are no instance of, and every real answer would then count as none.
  */
 const PlatformResponse = Response;

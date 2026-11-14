@@ -113,10 +113,11 @@ export function startServer(options: StartOptions): RunningServer {
   });
   // The caller hears of a failure to listen through `listening` or the server's "error" event; nothing is left waiting.
   listening.catch(() => {});
-  // `overrideGlobalObjects: false` leaves the platform's Request and Response in place. Left to itself,
-  // serve() puts lighter classes of its own there, and an answer of Node's fetch is no instance of
-  // those: every job's ctx.fetch then took a real answer for none (see PlatformResponse in apps/fetch.ts).
-  const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port, overrideGlobalObjects: false }, (info) => {
+  // serve() puts lighter classes of its own in the place of the globals Request and Response, and it must
+  // be left to: Hono's bodyLimit makes a `new Request` of the listener's own request, which only the
+  // listener's class can read. So an answer of Node's fetch is no instance of the global Response from
+  // here on; apps/fetch.ts knows one by the platform's class instead (PlatformResponse there).
+  const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info) => {
     announce(config, info, scheduler, log);
     scheduler?.start();
     markListening(info);
