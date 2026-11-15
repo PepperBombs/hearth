@@ -16,7 +16,7 @@ import { AppError, type Json, type RouteDefinition } from "@hearth/sdk/server";
 import type { SpaceKind, User } from "@hearth/shared";
 import type { Db } from "../db/database";
 import { notFound, Refusal } from "../http/errors";
-import { resolveInstall } from "./installs";
+import { resolveInstall, type Caller } from "./installs";
 import type { Registry } from "./registry";
 import { settingsFor } from "./settings";
 import { readOnlyStore, writableStore } from "./store";
@@ -31,6 +31,12 @@ export type AppCall = {
   name: string;
   /** What the caller sent, not yet checked; undefined when they sent nothing. */
   input: Json | undefined;
+  /**
+   * The person themselves (the default), or an assistant acting for them,
+   * which may do no more than the space's owners allow it
+   * (docs/mini-app-contract.md, section F).
+   */
+  by?: Caller;
 };
 
 /**
@@ -82,8 +88,11 @@ function readInput(route: RouteDefinition, call: AppCall): unknown {
  *
  * Throws a Refusal:
  * - 404 when the app is not there for this person (see `resolveInstall`),
- *   or has no route of this kind and name (a job's name included);
- * - 403 for a mutation by someone who may only view;
+ *   or has no route of this kind and name (a job's name included); for an
+ *   assistant, also when the space's owners allow it nothing there or left
+ *   the app out;
+ * - 403 for a mutation by someone who may only view, or by an assistant
+ *   that may only read;
  * - 400 when the input does not fit the route's schema;
  * - 400, 404 or 409 when the handler throws an `AppError`.
  * Anything else the handler does wrong is an AppFaultError, which the
@@ -92,9 +101,10 @@ function readInput(route: RouteDefinition, call: AppCall): unknown {
  */
 export function callApp(db: Db, registry: Registry, call: AppCall): string {
   const { user, spaceId, appId, kind, name } = call;
+  const by = call.by ?? "person";
 
   const run = db.transaction((): string => {
-    const access = resolveInstall(db, registry, user.id, spaceId, appId);
+    const access = resolveInstall(db, registry, user.id, spaceId, appId, by);
     if (access === null) throw notFound();
     const app = registry.get(appId);
     const route =
@@ -103,7 +113,13 @@ export function callApp(db: Db, registry: Registry, call: AppCall): string {
     // Nor is a job, at either address: it runs by itself, for no one, and never for a caller.
     if (!app?.server || !route || route.kind === "job" || route.kind !== kind) throw notFound();
     if (kind === "mutation" && access !== "edit") {
-      throw new Refusal(403, "forbidden", "Changing anything in this app needs edit access to it.");
+      throw new Refusal(
+        403,
+        "forbidden",
+        by === "assistant"
+          ? "An assistant may only read this app in this space: changing anything needs Read and change for the space, and edit access to the app."
+          : "Changing anything in this app needs edit access to it.",
+      );
     }
     // After the checks, so that the input's faults are told only to someone who may use the app.
     const input = readInput(route, call);

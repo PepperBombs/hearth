@@ -144,6 +144,7 @@ describe("GET /api/session", () => {
           name: "",
           role: "owner",
           canAddApps: true,
+          assistant: "none",
           members: [{ id: session.user.id, name: "owner", role: "owner" }],
         },
       ],

@@ -6,6 +6,7 @@ import {
   addMemberResponseSchema,
   apiErrorSchema,
   appAccessRequestSchema,
+  assistantLevelRequestSchema,
   appCallRequestSchema,
   appCallResponseSchema,
   appPrefsPatchSchema,
@@ -50,6 +51,7 @@ const space: Session["spaces"][number] = {
   name: "Family",
   role: "member",
   canAddApps: false,
+  assistant: "none",
   members: [
     { id: "user-1", name: "Sam Example", role: "owner" },
     { id: "user-2", name: "Lin Example", role: "member" },
@@ -103,7 +105,7 @@ describe("the session", () => {
     expect(accepts(appSummarySchema, { ...app, widgetSize: "huge" })).toBe(false);
   });
 
-  it.each(["canAddApps", "members", "role"] as const)("needs %s on every space", (key) => {
+  it.each(["canAddApps", "members", "role", "assistant"] as const)("needs %s on every space", (key) => {
     expect(accepts(spaceSchema, without(space, key))).toBe(false);
   });
 
@@ -148,6 +150,7 @@ describe("request bodies", () => {
       [deleteAppDataRequestSchema, { confirm: "checklist" }],
       [moveAppRequestSchema, { toSpaceId: "space-2" }],
       [appAccessRequestSchema, { memberAccess: "edit" }],
+      [assistantLevelRequestSchema, { level: "view" }],
       [appPrefsPatchSchema, { pinned: true }],
       [appSettingsPatchSchema, { user: { hideDone: true } }],
       [appCallRequestSchema, { input: { id: "row-1" } }],
@@ -210,6 +213,18 @@ describe("request bodies", () => {
     expect(accepts(appAccessRequestSchema, { memberAccess: null })).toBe(false);
   });
 
+  it("leave an app out of what an assistant may use, and set what it may do in a space", () => {
+    expect(appAccessRequestSchema.parse({ assistant: false })).toEqual({ assistant: false });
+    expect(accepts(appAccessRequestSchema, { assistant: "no" })).toBe(false);
+    expect(accepts(appAccessRequestSchema, { assistant: null })).toBe(false);
+    for (const level of ["none", "view", "edit"]) {
+      expect(assistantLevelRequestSchema.parse({ level })).toEqual({ level });
+    }
+    for (const body of [{}, { level: "admin" }, { level: null }, { level: true }]) {
+      expect(accepts(assistantLevelRequestSchema, body), JSON.stringify(body)).toBe(false);
+    }
+  });
+
   it("need the typed confirmation to delete an app's data", () => {
     expect(accepts(deleteAppDataRequestSchema, {})).toBe(false);
     expect(accepts(deleteAppDataRequestSchema, { confirm: true })).toBe(false);
@@ -243,8 +258,8 @@ describe("request bodies", () => {
 describe("what the owners of a space see", () => {
   const view = {
     apps: [
-      { id: "checklist", hasCode: true, removedAt: null, rowCount: 12, memberAccess: "view", members: { "user-2": "edit" } },
-      { id: "retired", hasCode: false, removedAt: "2026-01-01T00:00:00.000Z", rowCount: 0, memberAccess: "none", members: {} },
+      { id: "checklist", hasCode: true, removedAt: null, rowCount: 12, memberAccess: "view", members: { "user-2": "edit" }, assistant: true },
+      { id: "retired", hasCode: false, removedAt: "2026-01-01T00:00:00.000Z", rowCount: 0, memberAccess: "none", members: {}, assistant: false },
     ],
     members: [
       { id: "user-1", name: "Sam Example", role: "owner", email: "sam@example.com", canAddApps: false },

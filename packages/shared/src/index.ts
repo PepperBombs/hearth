@@ -79,6 +79,13 @@ export const spaceSchema = z.object({
   canAddApps: z.boolean(),
   /** Everyone in the space, that person included, in the order they joined. */
   members: z.array(spaceMemberSchema),
+  /**
+   * What an assistant may do here for the people in it, as the space's
+   * owners chose: "none" (off, where every space starts), "view" (read only)
+   * or "edit" (read and change). A person's own access to each app still
+   * limits it (docs/mini-app-contract.md, section F).
+   */
+  assistant: memberAccessSchema,
 });
 export type Space = z.infer<typeof spaceSchema>;
 
@@ -191,6 +198,15 @@ export type CreateSpaceRequest = z.infer<typeof createSpaceRequestSchema>;
  */
 export const spacePatchSchema = z.strictObject({ name: spaceNameSchema }).partial();
 export type SpacePatch = z.infer<typeof spacePatchSchema>;
+
+/**
+ * PUT /api/spaces/:spaceId/assistant: what an assistant may do in the space
+ * (the session's `Space.assistant`). Owners only, of a personal space too;
+ * 403 `forbidden` for a member, 404 for anyone else. Answers 204 with no
+ * body.
+ */
+export const assistantLevelRequestSchema = z.strictObject({ level: memberAccessSchema });
+export type AssistantLevelRequest = z.infer<typeof assistantLevelRequestSchema>;
 
 /**
  * POST /api/spaces/:spaceId/members. Owners of a group only; a personal
@@ -319,6 +335,11 @@ export const appAccessRequestSchema = z.strictObject({
    * exception says; it applies if they stop being an owner.
    */
   members: z.record(z.string(), memberAccessSchema.nullable()).optional(),
+  /**
+   * Whether an assistant may use the app here, within what the space allows
+   * it (`Space.assistant`); false leaves the app out.
+   */
+  assistant: z.boolean().optional(),
 });
 export type AppAccessRequest = z.infer<typeof appAccessRequestSchema>;
 
@@ -360,6 +381,8 @@ export const installedAppSchema = z.object({
   memberAccess: memberAccessSchema,
   /** Exceptions by user ID; a member not listed follows `memberAccess`. */
   members: z.record(z.string(), memberAccessSchema),
+  /** False when the space's owners left the app out of what an assistant may use. */
+  assistant: z.boolean(),
 });
 export type InstalledApp = z.infer<typeof installedAppSchema>;
 

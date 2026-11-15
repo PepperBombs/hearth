@@ -5,7 +5,7 @@ import { ApiRequestError, failureCode, fetchSession, patchPreferences } from "./
 const session: Session = {
   user: { id: "u1", email: "sam@example.com", name: "Sam Example", locale: "en", theme: "system" },
   spaces: [
-    { id: "s1", kind: "personal", name: "", role: "owner", canAddApps: true, members: [{ id: "u1", name: "Sam Example", role: "owner" }] },
+    { id: "s1", kind: "personal", name: "", role: "owner", canAddApps: true, assistant: "none", members: [{ id: "u1", name: "Sam Example", role: "owner" }] },
   ],
   apps: [],
   canCreateGroups: false,

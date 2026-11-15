@@ -73,13 +73,14 @@ function sessionWith(apps: AppSummary[], user: Partial<Session["user"]> = {}): S
   return {
     user: me,
     spaces: [
-      { id: PERSONAL, kind: "personal", name: "", role: "owner", canAddApps: true, members: [{ id: me.id, name: me.name, role: "owner" }] },
+      { id: PERSONAL, kind: "personal", name: "", role: "owner", canAddApps: true, assistant: "none", members: [{ id: me.id, name: me.name, role: "owner" }] },
       {
         id: FAMILY,
         kind: "group",
         name: "Family",
         role: "owner",
         canAddApps: true,
+        assistant: "none",
         members: [
           { id: me.id, name: me.name, role: "owner" },
           { id: "u2", name: "Lin Example", role: "member" },

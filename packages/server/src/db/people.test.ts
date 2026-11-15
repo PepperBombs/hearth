@@ -55,6 +55,7 @@ describe("listSpacesForUser", () => {
       name: "Family",
       role: "member",
       canAddApps: false,
+      assistant: "none",
       members: [
         { id: sam, name: "Sam Example", role: "owner" },
         { id: lin, name: "Lin Example", role: "member" },

@@ -11,6 +11,7 @@ import { listAppsForUser } from "./apps/installs";
 import { requestGapFor } from "./apps/jobs";
 import { createRegistry, type BundledApp } from "./apps/registry";
 import { registerAppRoutes } from "./apps/routes";
+import { registerAssistantRoutes } from "./assistant/routes";
 import { identifyFromConfig, type Identify } from "./auth";
 import type { Config } from "./config";
 import type { Db } from "./db/database";
@@ -119,6 +120,7 @@ export function createApp(options: AppOptions): Hono<Env> {
   });
 
   registerGroupRoutes(app, { db, config, requireMember });
+  registerAssistantRoutes(app, { db, requireMember });
   registerAppRoutes(app, {
     db,
     registry,

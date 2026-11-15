@@ -153,7 +153,8 @@ describe("migration 2 on a database that migration 1 made", () => {
       expect(all(db, "PRAGMA foreign_key_check")).toEqual([]);
       expect(db.pragma("integrity_check", { simple: true })).toBe("ok");
 
-      // The code of this release reads the old rows.
+      // Today's code reads the old rows, once the migrations after this one ran too.
+      migrate(db);
       expect(listSpacesForUser(db, "u-lin")).toEqual([
         {
           id: "s-lin",
@@ -162,6 +163,7 @@ describe("migration 2 on a database that migration 1 made", () => {
           role: "owner",
           canAddApps: true,
           members: [{ id: "u-lin", name: "Lin Example", role: "owner" }],
+          assistant: "none",
         },
       ]);
 
@@ -252,9 +254,9 @@ describe("migration 3 on a database that migration 2 made", () => {
     // The release with jobs starts on the same file.
     db = openDatabase(path);
     try {
-      expect(migrate(db).map((migration) => migration.id)).toEqual([3]);
+      expect(migrate(db, upTo(3)).map((migration) => migration.id)).toEqual([3]);
       expect(all(db, "SELECT id, name FROM migrations ORDER BY id")).toEqual(
-        MIGRATIONS.map(({ id, name }) => ({ id, name })),
+        upTo(3).map(({ id, name }) => ({ id, name })),
       );
       for (const table of kept) {
         expect(all(db, `SELECT * FROM ${table} ORDER BY rowid`), table).toEqual(before[table]);
@@ -280,6 +282,90 @@ describe("migration 3 on a database that migration 2 made", () => {
       db.prepare("DELETE FROM app_rows WHERE space_id = 'family' AND app_id = 'feed'").run();
       db.prepare("DELETE FROM space_apps WHERE space_id = 'family' AND app_id = 'feed'").run();
       expect(all(db, "SELECT app_id AS appId FROM app_jobs")).toEqual([{ appId: "checklist" }]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("migration 4 on a database that migration 3 made", () => {
+  it("applies with data in place, switches the assistant off everywhere and leaves no app out", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "hearth-migrate-")), "hearth.db");
+
+    // What a server of the release before the assistant leaves behind.
+    let db = openDatabase(path);
+    expect(migrate(db, upTo(3)).map((migration) => migration.id)).toEqual([1, 2, 3]);
+    const user = db.prepare(
+      "INSERT INTO users (id, email, name, locale, theme, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    );
+    const space = db.prepare(
+      "INSERT INTO spaces (id, kind, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)",
+    );
+    const member = db.prepare(
+      "INSERT INTO space_members (space_id, user_id, role, can_add_apps, created_at) VALUES (?, ?, ?, ?, ?)",
+    );
+    user.run("u-sam", "sam@example.com", "Sam Example", "en", "dark", NOW);
+    user.run("u-lin", "lin@example.com", "Lin Example", "zh", "system", LATER);
+    space.run("s-sam", "personal", "", "u-sam", NOW);
+    space.run("s-lin", "personal", "", "u-lin", LATER);
+    space.run("family", "group", "Family", "u-sam", NOW);
+    member.run("s-sam", "u-sam", "owner", 0, NOW);
+    member.run("s-lin", "u-lin", "owner", 0, LATER);
+    member.run("family", "u-sam", "owner", 0, NOW);
+    member.run("family", "u-lin", "member", 1, LATER);
+    addApp(db, "family", "checklist", "u-sam");
+    addApp(db, "family", "feed", "u-lin");
+    db.prepare("UPDATE space_apps SET removed_at = ? WHERE space_id = 'family' AND app_id = 'feed'").run(LATER);
+    addRow(db, "row-1", "family", "checklist", "u-lin");
+    addSettings(db, "family", "checklist", "u-lin", "u-lin");
+    addAccess(db, "family", "checklist", "u-lin", "u-sam");
+    addPrefs(db, "family", "checklist", "u-lin");
+    addJob(db, "family", "checklist");
+    const kept = ["users", "space_members", "invitations", "app_rows", "app_settings", "app_access", "app_prefs", "app_jobs"];
+    const before = Object.fromEntries(
+      [...kept, "spaces", "space_apps"].map((table) => [table, all(db, `SELECT * FROM ${table} ORDER BY rowid`)]),
+    );
+    db.close();
+
+    // The release with the assistant starts on the same file.
+    db = openDatabase(path);
+    try {
+      expect(migrate(db).map((migration) => migration.id)).toEqual([4]);
+      expect(all(db, "SELECT id, name FROM migrations ORDER BY id")).toEqual(
+        MIGRATIONS.map(({ id, name }) => ({ id, name })),
+      );
+      for (const table of kept) {
+        expect(all(db, `SELECT * FROM ${table} ORDER BY rowid`), table).toEqual(before[table]);
+      }
+      // Every space starts with the assistant off, and no app is left out of what it may later use.
+      expect(all(db, "SELECT * FROM spaces ORDER BY rowid")).toEqual(
+        (before.spaces as object[]).map((row) => ({ ...row, assistant: "none" })),
+      );
+      expect(all(db, "SELECT * FROM space_apps ORDER BY rowid")).toEqual(
+        (before.space_apps as object[]).map((row) => ({ ...row, assistant: 1 })),
+      );
+      expect(all(db, "PRAGMA foreign_key_check")).toEqual([]);
+      expect(db.pragma("integrity_check", { simple: true })).toBe("ok");
+
+      // Only the values the contract names are taken.
+      expect(() => db.prepare("UPDATE spaces SET assistant = 'admin' WHERE id = 'family'").run()).toThrow(/CHECK/);
+      expect(() => db.prepare("UPDATE spaces SET assistant = NULL WHERE id = 'family'").run()).toThrow(/NOT NULL/);
+      expect(() => db.prepare("UPDATE space_apps SET assistant = 2 WHERE app_id = 'checklist'").run()).toThrow(/CHECK/);
+      for (const level of ["none", "view", "edit"]) {
+        db.prepare("UPDATE spaces SET assistant = ? WHERE id = 'family'").run(level);
+      }
+
+      // Today's code reads the old rows, and a space and an app made now start the same way.
+      expect(listSpacesForUser(db, "u-lin").map(({ id, assistant }) => ({ id, assistant }))).toEqual([
+        { id: "s-lin", assistant: "none" },
+        { id: "family", assistant: "edit" },
+      ]);
+      db.prepare("INSERT INTO spaces (id, kind, name, created_by, created_at) VALUES ('club', 'group', 'Club', 'u-sam', ?)").run(LATER);
+      db.prepare("INSERT INTO space_members (space_id, user_id, role, created_at) VALUES ('club', 'u-sam', 'owner', ?)").run(LATER);
+      addApp(db, "club", "checklist", "u-sam");
+      expect(all(db, "SELECT s.assistant AS level, a.assistant AS included FROM spaces s JOIN space_apps a ON a.space_id = s.id WHERE s.id = 'club'")).toEqual([
+        { level: "none", included: 1 },
+      ]);
     } finally {
       db.close();
     }

@@ -104,7 +104,7 @@ class FakeServer {
     return {
       user: { ...me, locale: this.locale, theme: "light" },
       spaces: [
-        { id: PERSONAL, kind: "personal", name: "", role: "owner", canAddApps: true, members: [{ id: me.id, name: me.name, role: "owner" }] },
+        { id: PERSONAL, kind: "personal", name: "", role: "owner", canAddApps: true, assistant: "none", members: [{ id: me.id, name: me.name, role: "owner" }] },
         ...mine.map((group) => {
           const mine = group.members.find((member) => member.id === me.id)!;
           return {
@@ -113,6 +113,7 @@ class FakeServer {
             name: group.name,
             role: mine.role,
             canAddApps: mine.role === "owner" || mine.canAddApps,
+            assistant: "none" as const,
             members: group.members.map((member) => ({ id: member.id, name: this.person(member.id).name, role: member.role })),
           };
         }),
@@ -126,7 +127,7 @@ class FakeServer {
 
   ownersList(group: Group): SpaceApps {
     return {
-      apps: group.apps.map((install) => ({ ...install, rowCount: 0 })),
+      apps: group.apps.map((install) => ({ ...install, rowCount: 0, assistant: true })),
       members: group.members.map((member) => ({ ...member, name: this.person(member.id).name, email: this.person(member.id).email })),
       invitations: group.invitations,
     };

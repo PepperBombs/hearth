@@ -10,8 +10,8 @@ import { Shell } from "../shell/shell";
 const session: Session = {
   user: { id: "u1", email: "sam@example.com", name: "Sam Example", locale: "en", theme: "light" },
   spaces: [
-    { id: "p", kind: "personal", name: "", role: "owner", canAddApps: true, members: [{ id: "u1", name: "Sam Example", role: "owner" }] },
-    { id: "f", kind: "group", name: "Family", role: "owner", canAddApps: true, members: [{ id: "u1", name: "Sam Example", role: "owner" }] },
+    { id: "p", kind: "personal", name: "", role: "owner", canAddApps: true, assistant: "none", members: [{ id: "u1", name: "Sam Example", role: "owner" }] },
+    { id: "f", kind: "group", name: "Family", role: "owner", canAddApps: true, assistant: "none", members: [{ id: "u1", name: "Sam Example", role: "owner" }] },
   ],
   apps: [
     {

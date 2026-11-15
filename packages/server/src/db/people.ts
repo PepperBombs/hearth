@@ -81,13 +81,13 @@ export function createUserWithPersonalSpace(
 export function listSpacesForUser(db: Db, userId: string): Space[] {
   const spaces = db
     .prepare(
-      `SELECT s.id, s.kind, s.name, m.role, m.can_add_apps AS canAddApps
+      `SELECT s.id, s.kind, s.name, s.assistant, m.role, m.can_add_apps AS canAddApps
          FROM space_members m
          JOIN spaces s ON s.id = m.space_id
         WHERE m.user_id = ?
         ORDER BY CASE s.kind WHEN 'personal' THEN 0 ELSE 1 END, s.created_at, s.id`,
     )
-    .all(userId) as (Pick<Space, "id" | "kind" | "name" | "role"> & { canAddApps: 0 | 1 })[];
+    .all(userId) as (Pick<Space, "id" | "kind" | "name" | "role" | "assistant"> & { canAddApps: 0 | 1 })[];
 
   // Only the members of spaces this person is in: the join starts from their own memberships.
   const members = db
@@ -111,6 +111,7 @@ export function listSpacesForUser(db: Db, userId: string): Space[] {
     members: members
       .filter((member) => member.spaceId === space.id)
       .map(({ id, name, role }) => ({ id, name, role })),
+    assistant: space.assistant,
   }));
 }
 
