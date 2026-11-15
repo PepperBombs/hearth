@@ -453,8 +453,8 @@ section F of `docs/mini-app-contract.md`.
 5. **Keep changes behind your yes.** In Claude, under the connector's tool
    permissions, keep Hearth's write and delete tools at "Needs approval",
    never "Always allow". In Claude's Manual mode it then asks before every
-   change; in Auto mode, the default on the Pro, Max and Team plans, Claude
-   decides itself when to ask. Two of Claude's ways of working never ask:
+   change; in Auto mode, the default on Claude's paid plans other than
+   Enterprise, Claude decides itself when to ask. Two of Claude's ways of working never ask:
    **Research** uses a connector's tools without asking, and **"Skip all
    approvals"**, where Claude offers it, approves every tool that is not
    "Blocked". Research also reads the open web, and what it reads there, or
@@ -480,6 +480,9 @@ If Claude cannot connect:
   connection; Security, Events in Cloudflare's dashboard shows it.
 - Give Claude your server's address exactly as you open Hearth, followed by
   `/mcp`, on port 443.
+- Claude never comes from your own computer or phone, also not from the
+  desktop app: an Access policy that asks for more than who the person is
+  (a country, a device, the Cloudflare One client) refuses it.
 - Cloudflare's Managed OAuth is still a beta. Two public reports (June and
   September 2026) describe claude.ai failing against it, and one (November
   2026) describes it working. Claude Code connects through it too, with

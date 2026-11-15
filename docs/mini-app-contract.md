@@ -1767,8 +1767,8 @@ data too; and `hearth-spaces` says why a space offers nothing.
    it again.
 5. **Asking first.** In Claude's settings for the connector, keep Hearth's
    write tools at "Needs approval", never "Always allow". Claude asks before
-   every change in its Manual mode; in Auto mode, the default on the Pro,
-   Max and Team plans, it decides itself when to ask. Two of Claude's ways
+   every change in its Manual mode; in Auto mode, the default on Claude's
+   paid plans other than Enterprise, it decides itself when to ask. Two of Claude's ways
    of working never ask: Research uses a connector's tools without asking,
    and "Skip all approvals" approves every tool that is not "Blocked".
    Before either, the person switches Hearth off for that chat, or sets
@@ -1854,6 +1854,11 @@ data too; and `hearth-spaces` says why a space offers nothing.
   Hearth refusing a request that carries a bearer token anywhere but
   `/mcp`, which is a limit only if Access passes that header on, and
   Cloudflare does not say whether it does.
+- Marking every mutation so that Claude Code asks at each call whatever
+  its mode (`_meta["anthropic/requiresUserInteraction"]`, which Claude
+  Code's documentation describes and claude.ai's does not): it would take
+  "don't ask again" away from someone who wants it, so it is the owner's
+  to decide.
 - Resources, prompts, subscriptions and list-changed notifications; jobs and
   settings as tools; a log of what Claude changed.
 - Any change to the SDK or to a mini-app (decision 17).

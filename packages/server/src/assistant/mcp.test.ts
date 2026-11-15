@@ -85,6 +85,13 @@ const shapesServer = shapes.routes({
   forest: shapes.query({ description: "Takes a tree inside something.", input: z.object({ root: Tree }) }, () => null),
   names: shapes.query({ description: "Takes one kind of name twice.", input: z.object({ first: PersonName, last: PersonName }) }, () => null),
   when: shapes.query({ description: "Takes a date, which JSON has no word for.", input: z.object({ when: z.date(), note: z.string() }) }, () => null),
+  twice: shapes.query(
+    {
+      description: "Gives two different things one name, which no schema can say.",
+      input: z.object({ text: z.string().meta({ id: "Same" }), count: z.number().meta({ id: "Same" }) }),
+    },
+    () => null,
+  ),
 });
 const SHAPES: BundledApp = { id: "shapes", manifest: shapesManifest, hasPage: false, server: shapesServer };
 
@@ -366,7 +373,7 @@ describe.each<Era>(["legacy", "modern"])("over MCP (%s)", (era) => {
       group("noasfamily", "Family", world.noa.id, "2026-02-01T00:00:00.000Z");
       const client = await connect(NOA, era);
       expect(await spacesOf(client, "checklist_add")).toEqual(["Family"]);
-      // Sam adds Noa to his older Family, which nobody asks her about.
+      // Sam adds Noa to Sam's older Family, which nobody asks Noa about.
       const added = await api(SAM, "POST", `/api/spaces/${world.family}/members`, { email: NOA });
       expect([added.status, await added.json()]).toEqual([200, { outcome: "added" }]);
       // Claude still holds the list it was given, and asks by the name it knows.
@@ -375,7 +382,7 @@ describe.each<Era>(["legacy", "modern"])("over MCP (%s)", (era) => {
         failed: true,
       });
       expect([checklistRowsIn(world.family), checklistRowsIn("noasfamily")]).toEqual([0, 0]);
-      // By the name it has now, the change goes where she means it.
+      // By the name it has now, the change goes where Noa means it.
       expect(await spacesOf(client, "checklist_add")).toEqual(["Family (id family)", "Family (id noasfa)"]);
       expect((await call(client, "checklist_add", { space: "Family (id noasfa)", input: { name: "Present for Sam" } })).failed).toBe(false);
       expect([checklistRowsIn(world.family), checklistRowsIn("noasfamily")]).toEqual([0, 1]);
@@ -405,7 +412,7 @@ describe.each<Era>(["legacy", "modern"])("over MCP (%s)", (era) => {
         });
       }
       expect([checklistRowsIn(world.family), checklistRowsIn("linsfamily")]).toEqual([0, 0]);
-      // The only Family she is in now.
+      // The only Family Lin is in now.
       expect((await call(client, "checklist_add", { space: "Family", input: { name: "Milk" } })).failed).toBe(false);
       expect([checklistRowsIn(world.family), checklistRowsIn("linsfamily")]).toEqual([0, 1]);
     });
@@ -501,7 +508,7 @@ describe.each<Era>(["legacy", "modern"])("over MCP (%s)", (era) => {
     });
 
     it("runs the app as the assistant: its handler is told what the assistant may do, not what the person may", async () => {
-      // Sam owns the family and may change everything in it himself.
+      // Sam owns the family, and may change everything in it as a person.
       const client = await connect(SAM, era);
       expect(await call(client, "lab_access", { space: "Family" })).toEqual({ text: '"edit"', failed: false });
       setLevel(world.family, "view");
@@ -643,13 +650,15 @@ describe("the limit on calls", () => {
       text: `Too many calls: Hearth takes at most ${CALLS_PER_MINUTE} a minute from each person. Try again in ${seconds} seconds.`,
       failed: true,
     });
+    // Asking what the assistant may use is not a call of an app: it takes none of the minute's calls.
+    for (let i = 0; i < 5; i += 1) expect((await call(sam, SPACES_TOOL)).failed).toBe(false);
     // One call every tenth of a second: the first at 1.0 s, the last at 6.9 s.
     for (let i = 0; i < CALLS_PER_MINUTE; i += 1) {
       expect((await echo()).failed).toBe(false);
       at += 100;
     }
     expect(await echo()).toEqual(refused(54));
-    // Asking what the assistant may use is not a call of an app, before the limit or after it.
+    // Nor is it held back once the limit is reached.
     for (let i = 0; i < 3; i += 1) expect((await call(sam, SPACES_TOOL)).failed).toBe(false);
     expect(await echo()).toEqual(refused(54));
     // A moment before the first call is a minute old, and then at that moment.
@@ -780,8 +789,12 @@ describe("the catalog of tools", () => {
       properties: { when: {}, note: { type: "string" } },
       required: ["when", "note"],
     });
+    // An input that cannot be written at all takes anything, and the route still checks it.
+    expect(schemaOf("shapes_twice").properties.input).toEqual({});
+    expect(takes("shapes_twice", { space: "Family", input: { whatever: true } })).toBe(true);
     expect(withShapes.warnings.filter((warning) => warning.includes('"shapes"'))).toEqual([
       'Mini-app "shapes": a part of the input of the query "when" cannot be written as JSON Schema (Date cannot be represented in JSON Schema), so assistants are told it takes anything; the route still checks it.',
+      'Mini-app "shapes": the input of the query "twice" cannot be written as JSON Schema, so assistants are told it takes anything; the route still checks it.',
     ]);
   });
 });
