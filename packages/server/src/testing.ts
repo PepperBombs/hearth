@@ -67,6 +67,8 @@ export type TestAppOptions = {
   /** "from-config" uses the real login method the configuration names. */
   identify?: Identify | "from-config";
   logError?: AppOptions["logError"];
+  /** What the server says at start-up. Defaults to collecting it in `warnings`. */
+  warn?: AppOptions["warn"];
   /** What the routes call to wake the scheduler, which no test server has. */
   wakeJobs?: AppOptions["wakeJobs"];
 };
@@ -74,6 +76,7 @@ export type TestAppOptions = {
 export function testApp(options: TestAppOptions = {}) {
   const db = options.db ?? testDatabase();
   const errors: unknown[] = [];
+  const warnings: string[] = [];
   const app = createApp({
     config: options.config ?? testConfig(),
     db,
@@ -81,9 +84,10 @@ export function testApp(options: TestAppOptions = {}) {
     identify:
       options.identify === "from-config" ? undefined : (options.identify ?? identifyFromTestHeader),
     logError: options.logError ?? ((error) => errors.push(error)),
+    warn: options.warn ?? ((message) => warnings.push(message)),
     wakeJobs: options.wakeJobs,
   });
-  return { app, db, errors };
+  return { app, db, errors, warnings };
 }
 
 /** Headers for a request from the given person. */

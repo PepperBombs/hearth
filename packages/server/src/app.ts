@@ -11,7 +11,9 @@ import { listAppsForUser } from "./apps/installs";
 import { requestGapFor } from "./apps/jobs";
 import { createRegistry, type BundledApp } from "./apps/registry";
 import { registerAppRoutes } from "./apps/routes";
+import { asksForMcp, createMcpEndpoint, methodNotAllowed } from "./assistant/mcp";
 import { registerAssistantRoutes } from "./assistant/routes";
+import { createToolCatalog } from "./assistant/tools";
 import { identifyFromConfig, type Identify } from "./auth";
 import type { Config } from "./config";
 import type { Db } from "./db/database";
@@ -37,6 +39,8 @@ export type AppOptions = {
   identify?: Identify;
   /** Receives unexpected errors. Defaults to the console. Nothing of them reaches the client. */
   logError?: (error: unknown) => void;
+  /** Receives what the server says once at start-up about its apps. Defaults to the console. */
+  warn?: (message: string) => void;
   /**
    * Called when a job may have fallen due at once: an app was added to a
    * space or brought back, or someone asked for a run. startServer
@@ -59,6 +63,10 @@ export function createApp(options: AppOptions): Hono<Env> {
   const registry = createRegistry(options.apps);
   const identify = options.identify ?? identifyFromConfig(config.auth);
   const logError = options.logError ?? ((error: unknown) => console.error(error));
+  const warn = options.warn ?? ((message: string) => console.warn(message));
+  // Every route of the build that can be an assistant's tool, made once (section F).
+  const catalog = createToolCatalog(registry);
+  for (const warning of catalog.warnings) warn(warning);
 
   /** Lets members through and puts the user on the context. */
   const requireMember: RequireMember = async (c, next) => {
@@ -131,6 +139,21 @@ export function createApp(options: AppOptions): Hono<Env> {
 
   app.all("/api", (c) => apiError(c, 404, "not_found", NOTHING_HERE));
   app.all("/api/*", (c) => apiError(c, 404, "not_found", NOTHING_HERE));
+
+  // The assistant's MCP endpoint is the server's own address (section F,
+  // "The endpoint"): Cloudflare Access names the host without a path as
+  // the resource Claude signs in to. The web app never posts there, and a
+  // browser's GET of it still gets the web app.
+  const mcp = createMcpEndpoint({ db, registry, catalog, version: config.version, logError });
+  app.post(
+    "/",
+    noStore(),
+    sameOrigin({ allowLoopbackOrigins: config.auth.mode === "dev" }),
+    requireMember,
+    (c) => mcp.fetch(c.req.raw, c.get("user")),
+  );
+  app.delete("/", () => methodNotAllowed());
+  app.get("/", (c, next) => (asksForMcp(c.req.raw) ? methodNotAllowed() : next()));
 
   app.get("*", serveWebApp(config.webDist));
 
