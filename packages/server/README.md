@@ -170,7 +170,7 @@ app.
 | Route | Sign-in | Answer |
 |---|---|---|
 | `GET /api/health` | no | `{ ok: true, version }` |
-| `GET /api/session` | yes | The user; their spaces, each with their role, whether they may add apps, and its members (ID, name and role, no email address); `apps`, every app they can use in every space they are in; `canCreateGroups` and `canInvitePeople`, from `groupRights` (see "Groups and members"); and the version. |
+| `GET /api/session` | yes | The user; their spaces, each with their role, whether they may add apps, its members (ID, name and role, no email address) and `assistant`, what an assistant may do there (`none`, `view` or `edit`); `apps`, every app they can use in every space they are in; `canCreateGroups` and `canInvitePeople`, from `groupRights` (see "Groups and members"); and the version. |
 | `PATCH /api/me` | yes | Takes any of `name`, `locale`, `theme`; answers with the updated user. |
 | `POST /api/spaces` | yes | Creates a group with the caller as its owner. Takes `{ name }`; answers `201` with the space as the session lists it. |
 | `PATCH /api/spaces/:spaceId` | yes | Renames a group: `{ name? }`. Owners only. Answers `204`. |
@@ -178,8 +178,9 @@ app.
 | `PATCH /api/spaces/:spaceId/members/:userId` | yes | A member's `role` or `canAddApps`. Owners only. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/members/:userId` | yes | Removes a member: an owner removing anyone, or anyone leaving. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/invitations` | yes | Takes back an invitation: `{ email }`. Owners only. Answers `204`. |
-| `GET /api/spaces/:spaceId/apps` | yes | The owners' list: every app the space has (removed ones and those without code included) with its row count, what members get and the exceptions; everyone in the space with their address and right to add apps; the invitations. Owners only. |
-| `PUT /api/spaces/:spaceId/apps/:appId/access` | yes | Who can use the app: `{ memberAccess?, members? }`, exceptions by user ID, `null` removing one. Owners only. Answers `204`. |
+| `GET /api/spaces/:spaceId/apps` | yes | The owners' list: every app the space has (removed ones and those without code included) with its row count, what members get, the exceptions and `assistant`, whether an assistant may use it here; everyone in the space with their address and right to add apps; the invitations. Owners only. |
+| `PUT /api/spaces/:spaceId/apps/:appId/access` | yes | Who can use the app: `{ memberAccess?, members?, assistant? }`, exceptions by user ID, `null` removing one; `assistant: false` leaves the app out of what an assistant may use in the space. Owners only. Answers `204`. |
+| `PUT /api/spaces/:spaceId/assistant` | yes | What an assistant may do in the space: `{ level }`, `none` (off, where every space starts), `view` (read only) or `edit` (read and change). Owners only, a personal space's owner included: `404` outside the space, `403` for a member. Answers `204`. |
 | `PUT /api/spaces/:spaceId/apps/:appId` | yes | Adds the app to the space, or brings a removed one back with its data. Takes `{ memberAccess? }`. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/apps/:appId` | yes | Removes the app from the space and keeps its data. Answers `204`. |
 | `POST /api/spaces/:spaceId/apps/:appId/move` | yes | Moves the app with its data to another space: `{ toSpaceId, memberAccess? }`. Owners of the space it is in, into a space they own or may add apps to. Answers `204`. |
@@ -191,6 +192,7 @@ app.
 | `POST /api/spaces/:spaceId/apps/:appId/m/:name` | yes | Runs the app's mutation of that name. Takes `{ input? }`; answers `{ output }`, or `{}` when it returns nothing. Needs edit access. |
 | `GET /api/spaces/:spaceId/apps/:appId/jobs/:job` | yes | How the app's job of that name went in this space: `{ lastStartedAt, lastSucceededAt, lastFailedAt, lastError, nextRunAt, state }`, `state` being `idle`, `requested` or `running`. Needs view access. |
 | `POST /api/spaces/:spaceId/apps/:appId/jobs/:job/run` | yes | Asks for a run now. No body. Answers `202` with the status, as the `GET`. Needs edit access. |
+| `POST /mcp` | yes | The assistant's MCP endpoint (`src/assistant/mcp.ts`, on the official SDK): JSON-RPC, answered as JSON or as an event stream. Its tools are the queries and mutations of the apps the person may use, where the space's level allows an assistant, and `hearth-spaces`; a call runs through `callApp` as the person, `by: "assistant"`. At most 60 calls a minute for each person, and answers of at most 100,000 characters. `GET` and `DELETE` answer `405`. See `docs/mini-app-contract.md`, section F. |
 
 Every failure has the shape `{ error: { code, message } }`. The message is
 English text for logs and network traces; the web app chooses what to show
@@ -643,7 +645,13 @@ does that.
   and must not have passed through a proxy; see "Run it in development".
   Listening on loopback alone would not stop a web page that points its own
   host name at `127.0.0.1` (DNS rebinding), nor a tunnel on the same machine.
-- Answers under `/api` are sent with `Cache-Control: no-store`.
+- `POST /mcp` is held to the same check, with one addition: an `Origin` that
+  is Claude's own site (`ASSISTANT_ORIGINS` in `src/assistant/mcp.ts`) is
+  accepted there, since Claude's servers name it in some of their requests.
+  `/api` accepts it from no one. A page of another site cannot make use of
+  that: the endpoint takes JSON only, which a page cannot send to another
+  site without the server's leave, and the server gives none.
+- Answers under `/api` and from `/mcp` are sent with `Cache-Control: no-store`.
 - Request bodies over 64 KB are refused.
 
 ## Database
@@ -661,7 +669,10 @@ Tables so far, from migration 1: `users`, `spaces`, `space_members`,
 `app_settings`, `app_access`, `app_prefs` and `space_invitations`, plus the
 column `space_members.can_add_apps`. Migration 3 adds `app_jobs`: for each
 job of an app in a space, when it runs next, the run that holds it and how
-its last runs went. The server writes `space_apps`; the
+its last runs went. Migration 4 adds two columns for the assistant:
+`spaces.assistant` (`none`, `view` or `edit`; every space starts at `none`)
+and `space_apps.assistant` (1, or 0 for an app its owners left out), which
+only the level's route and the access route write. The server writes `space_apps`; the
 access route, and adding or moving an app as a member, write `app_access`;
 an app's mutations write `app_rows` through the store, the settings route
 writes `app_settings` and the switch-and-pin route `app_prefs`; all of them

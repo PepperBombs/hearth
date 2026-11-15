@@ -6,12 +6,13 @@
  * Each space's owners choose its level (Off, Read only, Read and change)
  * and may leave single apps out; everyone else sees what they chose. What
  * Claude may then do for a person is worked out on the server (`VISIBLE`),
- * never here.
+ * never here, and so is the name Claude knows a space by
+ * (`assistantSpaceLabels`).
  */
-import type { MemberAccess, Space, SpaceApps } from "@hearth/shared";
+import { assistantSpaceLabels, type MemberAccess, type Space, type SpaceApps } from "@hearth/shared";
 import { Button, Checkbox, Field, Input, Segmented, buttonClass } from "@hearth/sdk/web";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bot } from "lucide-react";
+import { focusManager, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Bot, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Card, CardHeader } from "../components/card";
 import { applied, useAppLabel, type Change } from "../groups/access-table";
@@ -33,11 +34,53 @@ export function addToClaudeLink(address: string): string {
   return `https://claude.ai/customize/connectors?${query.toString()}`;
 }
 
+/** A session read less than this long ago is not read again: opening Settings as the first page asks once. */
+const SESSION_FRESH_MS = 5_000;
+
+/**
+ * Reads the session again when the card comes on screen and whenever the
+ * window is looked at again. The web app loads the session once, and a
+ * space's level may have been changed since, by another owner or on another
+ * device: the card must not go on showing "Off" for a space Claude may now
+ * change, nor the other way round.
+ */
+function useSessionReadAgain(): void {
+  const client = useQueryClient();
+  useEffect(() => {
+    const readAgain = () => {
+      const readAt = client.getQueryState(SESSION_QUERY_KEY)?.dataUpdatedAt ?? 0;
+      if (Date.now() - readAt < SESSION_FRESH_MS) return;
+      // One reading on its way serves, as after an app's `not_found`.
+      void client.invalidateQueries({ queryKey: SESSION_QUERY_KEY }, { cancelRefetch: false });
+    };
+    readAgain();
+    return focusManager.subscribe((focused) => {
+      if (focused) readAgain();
+    });
+  }, [client]);
+}
+
+/**
+ * Where a failure is said. It is on the page before there is anything to
+ * say: a screen reader announces text that comes into a region it already
+ * knows, and often not a region that arrives with its text.
+ */
+function Problem({ children }: { children: string | null }) {
+  return (
+    <p role="status" className="text-xs text-down">
+      {children ? <span className="mt-1 block">{children}</span> : null}
+    </p>
+  );
+}
+
 export function AssistantCard() {
   const { t } = useI18n();
   const session = useSession();
+  useSessionReadAgain();
   // The assistant's MCP endpoint on this server (section F, "The endpoint").
   const address = `${window.location.origin}/mcp`;
+  // What Claude's tools call each space: its name, unless two of the person's spaces share one.
+  const labels = assistantSpaceLabels(session.spaces);
 
   return (
     <Card aria-label={t("assistant.title")}>
@@ -58,7 +101,7 @@ export function AssistantCard() {
             <p className="text-xs text-fg-3">{t("assistant.youAlways")}</p>
           </div>
           {session.spaces.map((space) => (
-            <SpaceLevel key={space.id} space={space} />
+            <SpaceLevel key={space.id} space={space} label={labels.get(space.id) ?? space.name} />
           ))}
         </div>
       </div>
@@ -110,8 +153,9 @@ function Address({ address }: { address: string }) {
               {t("assistant.addToClaude")}
             </a>
           </div>
-          <span role="status" className="text-xs text-down">
-            {status === "failed" ? t("assistant.copyFailed") : ""}
+          {/* The button's own text changes too, which a screen reader does not say of the button it is on. */}
+          <span role="status" className={status === "failed" ? "text-xs text-down" : "sr-only"}>
+            {status === "failed" ? t("assistant.copyFailed") : status === "copied" ? t("assistant.copied") : ""}
           </span>
         </div>
       )}
@@ -119,18 +163,27 @@ function Address({ address }: { address: string }) {
   );
 }
 
-function SpaceLevel({ space }: { space: Space }) {
+function SpaceLevel({ space, label }: { space: Space; label: string }) {
   const { t } = useI18n();
-  const name = space.kind === "personal" ? t("nav.personal") : space.name;
+  const personal = space.kind === "personal";
+  const name = personal ? t("nav.personal") : space.name;
   const change = useGroupChange(space.id, (level: MemberAccess) => setAssistantLevel(space.id, level));
   // What was asked for shows at once; the session says what was saved once it is loaded again.
   const level = change.isPending ? change.variables : space.assistant;
   const levelName = t(LEVELS.find((entry) => entry.value === level)!.label);
+  // Any name fits the card: a long one without a space wraps where it must.
+  const named = (
+    <span className="flex min-w-0 flex-col">
+      <span className="font-medium wrap-anywhere">{name}</span>
+      {/* Claude's approval prompt shows this name, so the person must be able to find it here. */}
+      {label === name ? null : <span className="text-xs text-fg-3 wrap-anywhere">{t("assistant.calledBy", { label })}</span>}
+    </span>
+  );
 
   if (space.role !== "owner") {
     return (
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5" data-testid={`assistant-space-${space.id}`}>
-        <span className="font-medium">{name}</span>
+        {named}
         <span className="flex flex-col items-end">
           <span>{levelName}</span>
           <span className="text-xs text-fg-3">{t("assistant.levelSetBy")}</span>
@@ -141,20 +194,18 @@ function SpaceLevel({ space }: { space: Space }) {
 
   return (
     <div className="flex flex-col gap-2" data-testid={`assistant-space-${space.id}`}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-medium">{name}</span>
-        <Segmented<MemberAccess>
-          label={t("assistant.levelLabel", { space: name })}
-          value={level}
-          onChange={(next) => change.mutate(next)}
-          options={LEVELS.map((entry) => ({ value: entry.value, label: t(entry.label) }))}
-        />
+      <div>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {named}
+          <Segmented<MemberAccess>
+            label={personal ? t("assistant.levelLabelPersonal") : t("assistant.levelLabel", { space: name })}
+            value={level}
+            onChange={(next) => change.mutate(next)}
+            options={LEVELS.map((entry) => ({ value: entry.value, label: t(entry.label) }))}
+          />
+        </div>
+        <Problem>{change.isError ? t("assistant.saveFailed") : null}</Problem>
       </div>
-      {change.isError ? (
-        <p role="status" className="text-xs text-down">
-          {t("assistant.saveFailed")}
-        </p>
-      ) : null}
       {level !== "none" ? <AppChoices space={space} name={name} /> : null}
     </div>
   );
@@ -172,18 +223,33 @@ function AppChoices({ space, name }: { space: Space; name: string }) {
     mutationFn: ({ appId, body }: Change) => setAppAccess(space.id, appId, body),
     onMutate: async (variables) => {
       await client.cancelQueries({ queryKey: key });
+      const before = client.getQueryData<SpaceApps>(key);
       client.setQueryData<SpaceApps>(key, (current) => (current ? applied(current, variables) : current));
+      return { before };
+    },
+    // What was shown ahead of the answer goes back at once: without a connection the list cannot be read again either.
+    onError: (_error, _variables, context) => {
+      if (context?.before) client.setQueryData<SpaceApps>(key, context.before);
     },
     // Whether it was saved or not, the server says what is.
     onSettled: () =>
       Promise.all([client.invalidateQueries({ queryKey: key }), client.invalidateQueries({ queryKey: SESSION_QUERY_KEY })]),
   });
 
-  if (list.isPending) return <p className="text-xs text-fg-3">{t("groups.loading")}</p>;
-  if (list.isError) {
-    return (
-      <p className="text-xs text-down" role="status">
-        {t("assistant.appsLoadFailed")}
+  // The list as it was last read stays on the page when reading it again fails, as the group's own card keeps
+  // its table: the boxes, the focus on one of them and the word that a change was not saved must not go away.
+  if (!list.data) {
+    return list.isError ? (
+      <div className="flex flex-col items-start gap-2" role="alert">
+        <p className="text-xs text-fg-2">{t("assistant.appsLoadFailed")}</p>
+        <Button size="sm" onClick={() => void list.refetch()}>
+          <RefreshCw size={14} aria-hidden="true" />
+          {t("groups.retry")}
+        </Button>
+      </div>
+    ) : (
+      <p className="text-xs text-fg-3" role="status">
+        {t("groups.loading")}
       </p>
     );
   }
@@ -192,8 +258,10 @@ function AppChoices({ space, name }: { space: Space; name: string }) {
   if (apps.length === 0) return <p className="text-xs text-fg-3">{t("assistant.noApps")}</p>;
 
   return (
-    <fieldset className="flex flex-col gap-1.5">
-      <legend className="mb-1 text-xs text-fg-3">{t("assistant.appsLabel", { space: name })}</legend>
+    <fieldset className="flex min-w-0 flex-col gap-1.5">
+      <legend className="mb-1 text-xs text-fg-3 wrap-anywhere">
+        {space.kind === "personal" ? t("assistant.appsLabelPersonal") : t("assistant.appsLabel", { space: name })}
+      </legend>
       {apps.map((app) => (
         <Checkbox
           key={app.id}
@@ -203,11 +271,7 @@ function AppChoices({ space, name }: { space: Space; name: string }) {
           {label(app.id).name}
         </Checkbox>
       ))}
-      {change.isError ? (
-        <p role="status" className="text-xs text-down">
-          {t("assistant.saveFailed")}
-        </p>
-      ) : null}
+      <Problem>{change.isError ? t("assistant.saveFailed") : null}</Problem>
     </fieldset>
   );
 }

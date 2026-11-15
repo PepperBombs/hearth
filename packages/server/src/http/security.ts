@@ -111,6 +111,14 @@ export type SameOriginOptions = {
    * For development, where the web app is served by its own dev server.
    */
   allowLoopbackOrigins?: boolean;
+  /**
+   * Other sites whose requests are accepted, each as an origin
+   * ("https://claude.ai"). Only for an address that such a site's own
+   * servers call, never for one the web app's pages use: `/mcp`, where a
+   * request still has to be JSON, which no page of another site can send
+   * along with someone's sign-in.
+   */
+  allowOrigins?: readonly string[];
 };
 
 /**
@@ -146,6 +154,7 @@ export function sameOrigin(options: SameOriginOptions = {}): MiddlewareHandler {
     const host = (c.req.header("host") ?? new URL(c.req.url).host).toLowerCase();
     if (originUrl.host.toLowerCase() === host) return next();
     if (options.allowLoopbackOrigins && isLoopbackHost(originUrl.hostname)) return next();
+    if (options.allowOrigins?.includes(originUrl.origin)) return next();
     return refuse();
   };
 }

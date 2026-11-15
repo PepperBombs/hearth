@@ -562,15 +562,26 @@ endpoint at `/mcp` (`POST`; `GET` and `DELETE` answer 405).
   schema as JSON Schema, and a `space` argument naming one of the person's
   spaces. Queries are marked as reading only and mutations as changes, so
   that Claude treats them that way; `hearth-spaces` says what Claude may
-  do where.
+  do where. A space is named as the person sees it, and a name means one
+  space: when two of a person's spaces are called alike, each is marked
+  with the start of its own ID (`assistantSpaceLabels` in `@hearth/shared`,
+  which the Assistant card shows too), so that a change approved for one
+  name can never land in another space.
 - **What Claude may do is the person's access, capped by the space.** Each
   space's owners choose Off (where every space starts), Read only or Read
   and change, in Settings, and may leave apps out. `VISIBLE` works out the
   result beside the person's own access, and every call runs through
   `callApp`, which checks it again inside its transaction.
 - **Hearth cannot make Claude ask** before a change: Claude decides from the
-  tools' hints and the person's settings in Claude. Read only is the hard
-  limit.
+  tools' hints and the person's settings in Claude, and its Research and
+  "Skip all approvals" do not ask at all. Read only is the hard limit on
+  what Claude does through `/mcp`.
+- **The sign-in is wider than the endpoint.** Access gives a program a
+  person signs in to their sign-in to the whole application, so all of
+  Hearth, as their browser has. The levels above hold at `/mcp`, which is
+  all Claude calls; they do not narrow what that sign-in could reach
+  elsewhere. Narrowing it is the owner's to decide (section F, "Left out
+  on purpose").
 
 ## Three repositories
 

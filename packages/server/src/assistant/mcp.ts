@@ -27,6 +27,14 @@ export const MAX_REQUEST_BYTES = 64 * 1024;
 /** Tool calls each person may make in any minute. */
 export const CALLS_PER_MINUTE = 60;
 
+/**
+ * The sites whose own servers call the endpoint and may name themselves in
+ * `Origin`. Claude's connector sends its requests from Anthropic's servers,
+ * some with `Origin: https://claude.ai` and some with none; a server that
+ * takes only its own origin answers the first kind with 403.
+ */
+export const ASSISTANT_ORIGINS: readonly string[] = ["https://claude.ai", "https://claude.com"];
+
 /** How long a client may keep a person's list of tools. */
 const TOOLS_TTL_MS = 60_000;
 
@@ -54,6 +62,10 @@ export type McpEndpoint = {
   /** Answers one HTTP request to the endpoint for a person who has signed in. */
   fetch: (request: Request, user: User) => Promise<Response>;
 };
+
+/** What an assistant hears of a failure inside Hearth: as much as the web app's routes say. */
+const SERVER_FAILED = "Something went wrong on the server.";
+const SERVER_FAILED_CALL = "Something went wrong on the server, and nothing was changed.";
 
 const text = (value: string, isError = false): CallToolResult => ({
   content: [{ type: "text", text: value }],
@@ -149,7 +161,7 @@ export function createMcpEndpoint(options: McpEndpointOptions): McpEndpoint {
         const appName = registry.get(tool.appId)?.manifest.name.en ?? tool.appId;
         return text(`The app "${appName}" failed while answering, and nothing was changed.`, true);
       }
-      return text("Something went wrong on the server, and nothing was changed.", true);
+      return text(SERVER_FAILED_CALL, true);
     }
   }
 
@@ -161,14 +173,27 @@ export function createMcpEndpoint(options: McpEndpointOptions): McpEndpoint {
         { name: "hearth", title: "Hearth", version },
         { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
       );
-      server.setRequestHandler("tools/list", async () => ({
-        tools: toolsFor(db, registry, catalog, user).tools,
-        ttlMs: TOOLS_TTL_MS,
-        cacheScope: "private" as const,
-      }));
-      server.setRequestHandler("tools/call", async (request) =>
-        callTool(user, request.params.name, request.params.arguments),
-      );
+      // The SDK answers a handler that throws with the error's own message
+      // and tells no one, so both handlers catch here: what went wrong is
+      // logged, and the assistant is told no more than the web app would be.
+      server.setRequestHandler("tools/list", async () => {
+        try {
+          return { tools: toolsFor(db, registry, catalog, user).tools, ttlMs: TOOLS_TTL_MS, cacheScope: "private" as const };
+        } catch (error) {
+          logError(error);
+          throw new ProtocolError(ProtocolErrorCode.InternalError, SERVER_FAILED);
+        }
+      });
+      server.setRequestHandler("tools/call", async (request) => {
+        try {
+          return callTool(user, request.params.name, request.params.arguments);
+        } catch (error) {
+          // Said on purpose: a tool Hearth has never had.
+          if (error instanceof ProtocolError) throw error;
+          logError(error);
+          return text(SERVER_FAILED_CALL, true);
+        }
+      });
       return server;
     },
     { legacy: "stateless", maxRequestBodySize: MAX_REQUEST_BYTES, onerror: logError },

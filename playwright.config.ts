@@ -22,7 +22,7 @@ import {
 /**
  * End-to-end tests, in ./e2e. Run them with `pnpm e2e`.
  *
- * Two projects:
+ * Three projects:
  *
  * - "web" runs the production build of packages/web, served by `vite preview`.
  *   Every /api request is answered by a stand-in (e2e/fixtures.ts), so each
@@ -30,17 +30,21 @@ import {
  *   a failure. This is where almost every test lives.
  *
  * - "server" runs the few tests in e2e/real-server.spec.ts against the real
- *   server, and "assistant", once they are done, the assistant's in
- *   e2e/assistant.spec.ts (Claude played by the MCP client) on the same one, built and started here with sign-in switched off (HEARTH_AUTH=dev),
- *   serving the same built web app. Three copies run: one that treats every
- *   request as the owner, one as a member of the owner's family and one as a
- *   stranger. The owner's and the member's share a database file in the
- *   system's temporary folder, made afresh when the owner's copy starts, so
- *   that they are two people on one server; the stranger's is in memory.
- *   The owner's and the member's run their apps' jobs, and share one file of
- *   stand-in answers beside the database (STAND_INS), which the tests write,
- *   so that no job reaches the network; the stranger's runs none.
- *   Set HEARTH_E2E_SERVER=0 to leave this project out.
+ *   server, built and started here with sign-in switched off
+ *   (HEARTH_AUTH=dev), serving the same built web app.
+ *
+ * - "assistant" runs e2e/assistant.spec.ts (Claude played by the MCP client)
+ *   against the same server, once the "server" project's tests are done.
+ *
+ * For the last two, three copies of the server run: one that treats every
+ * request as the owner, one as a member of the owner's family and one as a
+ * stranger. The owner's and the member's share a database file in the
+ * system's temporary folder, made afresh when the owner's copy starts, so
+ * that they are two people on one server; the stranger's is in memory.
+ * The owner's and the member's run their apps' jobs, and share one file of
+ * stand-in answers beside the database (STAND_INS), which the tests write,
+ * so that no job reaches the network; the stranger's runs none.
+ * Set HEARTH_E2E_SERVER=0 to leave both of those projects out.
  *
  * Both builds hold the framework's sample apps (packages/fixture-apps):
  * every build command below runs `pnpm apps:sync` first, with

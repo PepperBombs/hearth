@@ -115,6 +115,9 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
         .then(
           () => {
             forgetUnsaved(storage(), patch);
+            // The server has it now. A reading of the session that set out before it did would bring
+            // the old choice back once the note is gone: that one is called off, and the session read anew.
+            void queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY });
             // Forget any earlier failure for the same settings, keep the rest.
             setUnsaved((previous) => {
               if (!previous) return null;
@@ -162,10 +165,13 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
 
   const adopt = useCallback(
     (user: Pick<User, "theme" | "locale">) => {
-      // While a save is on its way the session already shows the new choice,
-      // and the note of it is settled when the answer arrives.
+      // While a save is on its way the note of the choice is still there, and
+      // wins: the session is also read again while a page is open (the
+      // Assistant card does, to show a level that is saved now), and an
+      // answer from before the save must not put the old choice back. The
+      // note is settled when the save's own answer arrives.
       const saving = sending.current > 0;
-      const waiting = saving ? {} : readUnsaved(storage());
+      const waiting = readUnsaved(storage());
       const theme = waiting.theme ?? user.theme;
       const locale = waiting.locale ?? user.locale;
       setThemeState(theme);

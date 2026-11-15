@@ -11,7 +11,7 @@ import { listAppsForUser } from "./apps/installs";
 import { requestGapFor } from "./apps/jobs";
 import { createRegistry, type BundledApp } from "./apps/registry";
 import { registerAppRoutes } from "./apps/routes";
-import { createMcpEndpoint, methodNotAllowed } from "./assistant/mcp";
+import { ASSISTANT_ORIGINS, createMcpEndpoint, methodNotAllowed } from "./assistant/mcp";
 import { registerAssistantRoutes } from "./assistant/routes";
 import { createToolCatalog } from "./assistant/tools";
 import { identifyFromConfig, type Identify } from "./auth";
@@ -150,7 +150,8 @@ export function createApp(options: AppOptions): Hono<Env> {
   app.post(
     MCP_PATH,
     noStore(),
-    sameOrigin({ allowLoopbackOrigins: config.auth.mode === "dev" }),
+    // Claude's servers may name Claude's own site as the origin: here alone, never on /api.
+    sameOrigin({ allowLoopbackOrigins: config.auth.mode === "dev", allowOrigins: ASSISTANT_ORIGINS }),
     requireMember,
     (c) => mcp.fetch(c.req.raw, c.get("user")),
   );

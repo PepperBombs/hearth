@@ -173,19 +173,21 @@ the switches (migration 4, `assistant` in `VISIBLE`, the level's route and
 the endpoint (`POST /mcp` on `@modelcontextprotocol/server`, the tools, their
 calls through `callApp` and the limits); F3, the Assistant card in
 Settings; and F4, the end-to-end test (`e2e/assistant.spec.ts`) and the
-guide (`docs/self-hosting.md`, section 10). All four are built; none is
-reviewed yet, and nothing has talked to the real Claude: that is the
-owner's first try, after the deploy.
+guide (`docs/self-hosting.md`, section 10). All four are built and reviewed
+(the independent review's fixes are in the as-built notes of the steps they
+concern). Nothing has talked to the real Claude or to a real Access
+application with Managed OAuth: that is the owner's first try, after the
+deploy, and section 10 of the guide is marked as untried until then.
 
 ## Layout and commands
 
 | Folder | Holds |
 |---|---|
-| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. Every route of the mini-app contract's section A8 is built, and a job's two routes of section C. Besides schemas it holds one function, `jobStateOf`: what a job's status means to the people who see the app. |
+| `packages/shared` | Types and schemas shared by server and web: the API contract. Change it first, then both sides. Every route of the mini-app contract's section A8 is built, and a job's two routes of section C. Besides schemas it holds two functions: `jobStateOf`, what a job's status means to the people who see the app, and `assistantSpaceLabels`, the name an assistant's tools take for each of a person's spaces, which the server's tools and the web app's Assistant card both read. |
 | `packages/sdk` | `@hearth/sdk`, what mini-apps are written against: `defineApp`, the manifest types, the lists of icon and colour names, `SDK_VERSION`. `@hearth/sdk/web` (`src/web`) is the UI kit, which the shell is built from too, and `appHooks` (`src/web/hooks.ts`), the hooks a widget or page is written with (`useApp`, `useQuery`, `useMutation`, `useJob`). `@hearth/sdk/web/scope` is the React context those hooks read, which the shell fills; for the framework only. `@hearth/sdk/server` (`src/server.ts`) is what an app's `server.ts` is written with: `defineServer` (queries, mutations and jobs), `AppError`, `FetchError`, `z`, the types of a handler's `ctx` and those of a job's (`JobCtx`, `FetchInit`, `FetchResponse`); it holds no logic. `@hearth/sdk/testing` (`src/testing.ts`) is what an app's tests are written with: `testApp`, whose people call the app's routes and read and ask for its jobs (`job`, `requestRun`) and whose world runs a job with stand-ins for what it fetches (`runJob`), `AppCallError` and their types; it holds no logic, only the hand-over to what the framework installs through `@hearth/sdk/testing/host` (`src/testing-host.ts`, for the framework only). `src/routes.ts` holds the types that name an app's routes and jobs (`QueryName`, `MutationName`, `JobName`) and `JobState`, what `useJob` gives, shared by the hooks and the tests and exported from `@hearth/sdk/web`. `@hearth/sdk/manifest-schema` is the run-time check of a manifest and of a setting's value (`settingValueProblems`), for the framework only. `bin/hearth-apps.mjs` and `tools` are the `hearth-apps` command, plain JavaScript: `sync.mjs` (finds the apps, the version handshake, writes the generated lists), `import-scan.mjs` (what a file of an app may import), `default-export.mjs` (whether `widget.tsx`, `page.tsx` and `server.ts` have the default export the generated lists import), `check.mjs`, `test.mjs` (runs the apps' tests, in a time zone 8 hours from UTC), `dev.mjs` (the dev servers with the apps in), `new.mjs` (a new app, copied from the sample checklist), `eslint-boundary.mjs`. `@hearth/sdk/eslint` (`eslint.js`) and `tsconfig.app.json` are the ESLint and TypeScript configuration of a mini-apps repository. Imports no other Hearth package. |
 | `packages/server` | Hono server: config, SQLite and migrations (`src/db`), identity, membership, `/api` routes, static files. `src/main.ts` hands the build's list of apps to `serveHearth` (`src/serve.ts`): the process (settings and apps checked before the database opens, migrations, signals, a rejected promise nothing handled logged instead of ending it) around `startServer`, which makes the scheduler when jobs are on, its way out, the application and the listening socket, and stops them in order; `src/test-process.ts` is such a process with a made-up app, for `serve.test.ts`. `src/apps` is everything about mini-apps: `registry.ts` (the apps this build holds, checked at start-up), `definition.ts` (the check of an app's server file, its jobs included), `installs.ts` (who may use which app where; add, remove, bring back, move to another space, delete data, each person's switch and pin), `calls.ts` (runs one query or mutation: access check, input, `ctx`, handler, all in one transaction), `store.ts` (`ctx.db` and the `db` a job's work gets, and the only SQL for `app_rows` and `app_settings`), `settings.ts` (an app's settings in a space: the two routes' work and what `ctx.settings` holds, a handler's and a job's), `fetch.ts` (`ctx.fetch`: the rules, the pace, Node's transport and the stand-in file; `outboundFor` picks the last two from the settings), `jobs.ts` (running a job: `claimRun`, the run (`runClaimed`), `recordRun`, and `runOnce`, which does the three; `nextJob`, which job falls due first; `requestRun` and `jobStatus`; the only SQL for `app_jobs`), `scheduler.ts` (the scheduler: due jobs one at a time, through `runOnce`; `start`, `wake` and `stop`; only `startServer` makes one), `routes.ts` (every route about apps in a space, a job's status and a run asked for among them), `registry.generated.d.ts` (the types of the list of apps the build writes, which only `main.ts` imports), `check-bundle.ts` (run by `hearth-apps check`, not by the server), `test-world.ts` and `test-clock.ts` (a world of people, spaces and apps, and a clock that moves only when told, for the server's tests), and `app-testing.ts` with `app-testing.setup.ts` (the implementation of `testApp` for an app's own tests, its jobs' runs and statuses included, which `vitest.apps.config.ts` at the package's root installs; not part of the server). `installs.ts` also holds the owners' list of a space's apps (`listSpaceApps`) and the access route's work (`setAppAccess`). `src/groups` is groups and their people: `policy.ts` (`groupRights`: who may create groups and invite), `members.ts` (create, rename, add or invite, change, remove or leave, take an invitation back) and `routes.ts`. `src/assistant` is the assistant of section F: `level.ts` (`setAssistantLevel`, a space's level, owners only), `routes.ts`, `tools.ts` (the catalog of tools made once from the build's apps, and each person's tools at each request) and `mcp.ts` (the MCP endpoint at `POST /mcp`, on the official SDK's `createMcpHandler`). `src/http` holds what routes share: `Refusal`, `readBody`, the security middleware. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, in the shape of a mini-apps repository (it declares SDK `^0.1.1`). Tests run against them, and the end-to-end tests build with them. `checklist` has a manifest, a server file, a widget, a page and tests of its own (`checklist.test.ts`, written with `testApp`), and is the template `hearth-apps new` copies; `feed` a manifest and a widget, no server file; `headlines` a manifest that names one host (`feeds.example.com`), a server file with a query and a job (`refresh`, every hour), a widget that reads `useJob`, and tests of its own that run the job with stand-ins. |
-| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card, the avatar and `LinkedText` in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes, settings and jobs' statuses, a run asked for, and adding, removing, moving, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, moving, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page, with the dialogs that add, move and remove an app; the one that adds names the hosts an app's manifest lists in `network`. `src/groups` is the groups' cards in Settings: `groups.tsx` (the cards, creating, renaming, leaving), `people.tsx` (the people, adding, the dialog for one person, invitations), `access-table.tsx` (the member-by-app table), `api.ts` and `queries.ts`. `src/assistant/assistant-card.tsx` is the Assistant card in Settings (section F): the address to give Claude, "Add to Claude", and each space's level and apps. |
+| `packages/web` | React app: shell, pages, quick switcher, themes, `src/i18n` (English and Chinese), `src/styles` (the design tokens and the Tailwind theme). Its buttons, inputs, dialogs and so on come from `@hearth/sdk/web`; the card, the avatar and `LinkedText` in `src/components` are the shell's own. `src/apps` is everything about mini-apps in the browser: the list the build wrote (types in `registry.generated.d.ts`, imported by `main.tsx` only), `bundled.tsx` (the provider the shell reads it from), `api.ts` (the calls to an app's routes, settings and jobs' statuses, a run asked for, and adding, removing, moving, switch and pin), `scope.tsx` (`<AppScope>`: what `appHooks` reads, with fetching, polling and the session reload on `not_found`), `app-view.tsx` (`<AppView>`: one app's widget or page with its skeleton, failed state, change notice and "Reload to update"), `manage.tsx` (adding, removing, moving, switch and pin, and the settings button) and `settings-dialog.tsx` (the settings form drawn from a manifest). `src/pages/apps.tsx` is the Apps page, with the dialogs that add, move and remove an app; the one that adds names the hosts an app's manifest lists in `network`. `src/groups` is the groups' cards in Settings: `groups.tsx` (the cards, creating, renaming, leaving), `people.tsx` (the people, adding, the dialog for one person, invitations), `access-table.tsx` (the member-by-app table), `api.ts` and `queries.ts`. `src/assistant/assistant-card.tsx` is the Assistant card in Settings (section F): the address to give Claude, "Add to Claude", and each space's level and apps, with the name Claude knows a space by where that is not the name on the page. |
 | `e2e` | Playwright end-to-end tests (`playwright.config.ts` at the root). `servers.ts` holds the addresses, the people, the command that starts a copy of the built server (`realServerCommand`), and the file of stand-in answers the owner's and Lin's copies share (`STAND_INS`, and `MINI_APPS_STAND_INS` for those of `pnpm e2e:mini-apps`), which tests write with `writeStandIns`. `e2e/mini-apps` holds the tests of mini-apps from another repository, one file per app named after its ID (`grocery.spec.ts`, `trending.spec.ts`, `ideas.spec.ts`), which `playwright.mini-apps.config.ts` runs against Hearth built with them. `assistant.spec.ts` is the assistant end to end, Claude played by the MCP SDK's client against the owner's and Lin's copies, in a project of its own (`assistant`) that runs after the `server` project's tests. |
 | `deploy` | Pull-based deploy script, systemd units, polkit rule, example config. Each release is built with the mini-apps of `APPS_REPO` at the same moment, copied in beside the framework and linked to its SDK. The copy of the script installed on a server is a starter: it hands each run over to the deploy script of the newest framework commit (`SELF_UPDATE`, on unless `deploy.conf` says off), so it is installed once. The systemd units and the polkit rule are still installed by hand, from the running release (`current/hearth/deploy`): the deploy only fetches into the checkouts it builds from, whose files stay as cloned. Run on one real server: the whole guide with the releases up to the grocery list, before jobs existed, and since then the hand-over on its ordinary path (the one-time install, and one release handed to its own script and deployed by it); what it does when something is wrong (a broken script, a failed fetch, `SELF_UPDATE=off`) has run only in its tests. GitHub Trending's job runs on that server too and reaches GitHub; how a real host's rate limits and slow or partial answers are handled has run only against stand-ins. `deploy/tests` runs the script against stand-ins for git, pnpm and systemctl, and once against the real git. |
 | `.github/workflows` | `ci.yml`: the framework by itself (`check`), end to end with the sample apps (`e2e`), and with `main` of `hearth-stones` checked out beside it, checked, built and end to end (`mini-apps`). |
@@ -733,19 +735,72 @@ Things that bite:
   `hearth-spaces`, Hearth's own, has none at all), at most 64 characters
   (longer ones are left out with a start-up warning through `createApp`'s
   `warn`), each taking `{ space, input }` with `space` an enum of the
-  person's spaces by name ("Personal" for their own). Each person's list
+  person's spaces by name. Each person's list
   is made at each request from `listAssistantInstalls`, and every call
   goes through `callApp` with `by: "assistant"`, which checks again: never
   run an app's route for the assistant any other way. Calls are limited to
   60 a minute per person and answers to 100,000 characters.
+- A space's name in a tool must mean one space for as long as an assistant
+  may hold it: a person approves a change by the name Claude shows them.
+  `assistantSpaceLabels` (`@hearth/shared`) decides the names, for the
+  server's tools and for the Assistant card alike: "Personal" for the
+  person's own space, a group's name while no other space of theirs is
+  called alike (whatever the capitals), and otherwise every such group
+  marked with the start of its own ID, "Family (id 7f3k2q)", none of them
+  bare. Never number spaces by their place in a list (" (2)"): the first
+  version did, and a change approved for "Family" landed in another family
+  once the person was added to an older group of that name. A name that no
+  longer holds is refused with the names that do. The words that describe
+  `space` are the same for everyone and name no space, and every tool's
+  description ends with `DATA_NOTE` (what it answers is data, never
+  instructions): claude.ai does not hand a server's `instructions` to the
+  model, so what the model must know is in the tools.
+- The SDK answers a request handler that throws with the error's own
+  message, and calls no `onerror` for it. Both handlers in
+  `src/assistant/mcp.ts` therefore catch for themselves: log, and answer no
+  more than `/api` would ("Something went wrong on the server."). Keep
+  every new handler that way; a test renames a table and reads what Claude
+  is told.
+- `/mcp` alone also takes requests whose `Origin` is Claude's own site
+  (`ASSISTANT_ORIGINS` in `mcp.ts`, given to `sameOrigin` as
+  `allowOrigins`): Claude's servers name it in some requests and send none
+  in others. `/api` takes it from no one; a test holds both.
+- A tool's input schema is written by zod from the object the tool takes
+  (`{ space, input }`), not from the route's input by itself, so that the
+  definitions (`$defs`) and a type that holds itself land at the tool's
+  root, where a client looks for them. The test reads each tool's schema
+  with the SDK's own validator (`@modelcontextprotocol/server/validators/ajv`).
 - The assistant's end-to-end test (`e2e/assistant.spec.ts`) runs in the
   Playwright project `assistant`, which depends on `server`, so that it
   starts only once `real-server.spec.ts` is done: those tests count on
   what the owner sees, and this one adds an app to a group of the owner's.
-  It works in a group made for the run and switches it Off at the end;
-  never use the owner's personal space there (the move test counts on it).
+  It works in a group made for the run, which it leaves Off, without its
+  app and without Lin (`leaveBehind`): an app or a member left there stays
+  in the owner's and Lin's sessions, and the real-server tests of the next
+  run on servers that were kept count the owner's apps. Never use the
+  owner's personal space there (the move test counts on it).
   Its MCP client keeps a tool list for the minute Hearth allows (`ttlMs`),
-  so it lists tools with `cacheMode: "refresh"` after each change.
+  so it lists tools with `cacheMode: "refresh"` after each change. The card
+  shows a level or a box as chosen before the server has saved it, so a
+  step that then asks the server waits with `expect.poll` on what Claude's
+  list or a call says, never on the card.
+- The web app loads the session once. The Assistant card reads it again
+  when it comes on screen and when the window is looked at again
+  (`useSessionReadAgain`, not within 5 seconds of the last reading), since
+  a space's level may have been changed by another owner or on another
+  device, and a card that shows an old level turns an owner's next press
+  into its opposite. Because the session is now read while a page is open,
+  `adopt` in `session/preferences.tsx` lets the note of an unsaved theme or
+  language win also while its save is on its way, and a save that went
+  through reads the session anew: an answer from before the save must not
+  put the old choice back. Do not reload the session after a save that
+  failed: `adopt` sends an unsaved choice again whenever a session arrives,
+  and the two would go round.
+- In development the web app comes from Vite's dev server, which hands the
+  server's own addresses on: `/api`, and `/mcp` as an exact match
+  (`"^/mcp$"` in `packages/web/vite.config.ts`; a plain `"/mcp"` would hand
+  on every path that begins like it). `packages/web/tests/dev-proxy.test.ts`
+  holds it, so that the address the Assistant card shows works there too.
 
 - Who may create a group and who may invite someone who is not on the
   server yet is `groupRights` in `packages/server/src/groups/policy.ts`, read
