@@ -10,9 +10,10 @@ has run there too, on its ordinary path: the one-time install, and one
 release that was handed to its own script and deployed by it. What it does
 when something is wrong (a commit whose script is broken, a fetch that
 fails, `SELF_UPDATE=off`) has run only in its tests. Scheduled jobs and
-what they fetch from outside (GitHub Trending) also came later, and have
-not run on a real server yet. Expect details to differ on yours, and
-correct them here.
+what they fetch from outside also came later, and run there too: GitHub
+Trending's job runs on that server and reaches GitHub. How a real host's
+rate limits and slow or partial answers are handled has run only against
+stand-ins. Expect details to differ on yours, and correct them here.
 
 Everything personal (your domain, email address, secrets) stays on the server
 and never goes into a repository.
