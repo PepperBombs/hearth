@@ -30,7 +30,8 @@ import {
  *   a failure. This is where almost every test lives.
  *
  * - "server" runs the few tests in e2e/real-server.spec.ts against the real
- *   server, built and started here with sign-in switched off (HEARTH_AUTH=dev),
+ *   server, and "assistant", once they are done, the assistant's in
+ *   e2e/assistant.spec.ts (Claude played by the MCP client) on the same one, built and started here with sign-in switched off (HEARTH_AUTH=dev),
  *   serving the same built web app. Three copies run: one that treats every
  *   request as the owner, one as a member of the owner's family and one as a
  *   stranger. The owner's and the member's share a database file in the
@@ -59,6 +60,10 @@ const buildEnv = { HEARTH_APPS_DIR: APPS_DIR };
 /** The tests of mini-apps from another repository, which playwright.mini-apps.config.ts runs. */
 const MINI_APPS_TESTS = /[\\/]e2e[\\/]mini-apps[\\/]/;
 
+/** The tests that run against the real server: the web app's own, and the assistant's over MCP. */
+const REAL_SERVER_TESTS = /real-server\.spec\.ts$/;
+const ASSISTANT_TESTS = /assistant\.spec\.ts$/;
+
 export default defineConfig({
   testDir: "./e2e",
   testIgnore: MINI_APPS_TESTS,
@@ -80,8 +85,14 @@ export default defineConfig({
     screenshot: "off",
   },
   projects: [
-    { name: "web", testIgnore: [/real-server\.spec\.ts$/, MINI_APPS_TESTS], use: { baseURL: WEB_URL } },
-    ...(WITH_REAL_SERVER ? [{ name: "server", testMatch: /real-server\.spec\.ts$/, use: { baseURL: OWNER_URL } }] : []),
+    { name: "web", testIgnore: [REAL_SERVER_TESTS, ASSISTANT_TESTS, MINI_APPS_TESTS], use: { baseURL: WEB_URL } },
+    ...(WITH_REAL_SERVER
+      ? [
+          { name: "server", testMatch: REAL_SERVER_TESTS, use: { baseURL: OWNER_URL } },
+          // After the tests above, on the same server: they count on what the owner sees, which these change.
+          { name: "assistant", testMatch: ASSISTANT_TESTS, dependencies: ["server"], use: { baseURL: OWNER_URL } },
+        ]
+      : []),
   ],
   webServer: [
     {

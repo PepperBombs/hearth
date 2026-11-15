@@ -36,8 +36,8 @@ export function addToClaudeLink(address: string): string {
 export function AssistantCard() {
   const { t } = useI18n();
   const session = useSession();
-  // The server's own address is its MCP endpoint (section F, "The endpoint").
-  const address = window.location.origin;
+  // The assistant's MCP endpoint on this server (section F, "The endpoint").
+  const address = `${window.location.origin}/mcp`;
 
   return (
     <Card aria-label={t("assistant.title")}>

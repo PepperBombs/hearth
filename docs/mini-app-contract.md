@@ -1552,20 +1552,23 @@ PUT /api/spaces/:spaceId/apps/:appId/access   adds "assistant": true | false to 
 
 ### The endpoint
 
-Claude reaches Hearth at the server's own address, `https://<the server>`,
-with no path: the MCP endpoint is `POST /`.
+Claude reaches Hearth at `https://<the server>/mcp`: the MCP endpoint is
+`POST /mcp`.
 
-- **Why the root.** Cloudflare Access, with Managed OAuth on, answers a
+- **Why that address.** Cloudflare Access, with Managed OAuth on, answers a
   request without a sign-in with `401` and a `WWW-Authenticate` header whose
-  `resource_metadata` names its own document
-  (`/.well-known/cloudflare-access-protected-resource/`), and that document
-  gives `"resource": "https://<the server>"`, the host alone. Claude requires
-  that value to equal the address the person typed, path included, and sends
-  it as the RFC 8707 `resource` when it signs in. So the address the person
-  types is the server's, and the endpoint is the root. The web app is not
-  disturbed: it never posts to `/`, and a browser's `GET /` (it accepts
-  `text/html`) still gets the web app. A `GET` or `DELETE` that asks for an
-  event stream and not for a page is MCP's, and answers `405`, as below.
+  `resource_metadata` names a document of its own for the path asked for
+  (`/.well-known/cloudflare-access-protected-resource/mcp`), and that
+  document gives `"resource": "https://<the server>/mcp"`: a live probe of
+  an Access application with Managed OAuth showed both. Claude requires that
+  value to equal the address the person typed, path included, and sends it
+  as the RFC 8707 `resource` when it signs in. Access serves every discovery
+  document itself, so Hearth serves none. (The first design put the
+  endpoint at the server's root, after Cloudflare's own example, which names
+  the host alone; whether the root's document then ends in a slash, which a
+  strict comparison would refuse, is not known, and `/mcp` is the usual
+  path.) `GET` and `DELETE` answer `405`, as below; the web app never uses
+  the address.
 - **The protocol** is the SDK's: `createMcpHandler` from
   `@modelcontextprotocol/server` (2.x, which implements MCP 2026-07-28 and
   depends on nothing but zod 4) with a server made for each request. It
@@ -1701,13 +1704,13 @@ the person's own, and `hearth-spaces` says why a space offers nothing.
    its discovery document, and a browser as before; the web app's own
    requests after its sign-in has run out get that `401` too, which it
    already shows as "sign in again".
-2. **Check** from any computer: a `POST` to the server's address answers
-   `401` with `resource_metadata` in `WWW-Authenticate`, and that document
-   names `"resource": "https://<the server>"`.
+2. **Check** from any computer: a `POST` to `https://<the server>/mcp`
+   answers `401` with `resource_metadata` in `WWW-Authenticate`, and that
+   document names `"resource": "https://<the server>/mcp"`.
 3. **Hearth.** Settings, Assistant: set the personal space to Read and
    change, or Read only.
 4. **Claude** (on the web or the desktop app): Customize, Connectors, add a
-   custom connector named Hearth with the server's address (the card's "Add
+   custom connector named Hearth with the address `https://<the server>/mcp` (the card's "Add
    to Claude" opens that dialog with both filled in), with "Register
    automatically" for its OAuth client if Claude does not detect it;
    connect, and sign in through Access in the browser window it opens. The
@@ -1726,8 +1729,14 @@ the person's own, and `hearth-spaces` says why a space offers nothing.
 8. **If Claude cannot connect**: Cloudflare must let Anthropic's servers
    through (they come from `160.79.104.0/21` and `153.61.208.0/20`, as
    `Claude-User`), so a bot or AI-crawler rule on the zone must not block
-   them; the server's address must be the one Hearth answers on, on port
-   443; and Access's Managed OAuth must list Claude's callback.
+   them; the address must be the one Hearth answers on, with `/mcp`, on
+   port 443; and Access's Managed OAuth must list Claude's callback.
+   Managed OAuth is still a beta of Cloudflare's: two public reports (June
+   and September 2026) describe claude.ai failing against it, closed
+   without a cause, and one (November 2026) describes it working. Claude
+   Code connects through it too (`claude mcp add --transport http hearth
+   https://<the server>/mcp`, with localhost clients allowed), which is the
+   fallback while claude.ai does not.
 
 ### Testing
 
@@ -1785,13 +1794,14 @@ Each step is one pull request into `main` of `hearth`; `pnpm check` passes at th
   - **`listAssistantInstalls`** (`installs.ts`) lists for F2, in the session's order, the installs an assistant may use for a person: switched on by them, with what it may do there.
   - **The level's route** is in `src/assistant/routes.ts`, its work in `src/assistant/level.ts` (`setAssistantLevel`); the request is `assistantLevelRequestSchema` in `@hearth/shared`, and a level that is not one, or a property more, is 400.
   - **The tests** are `src/assistant/switches.test.ts`, and the migration's in `src/db/apps-schema.test.ts`, which also takes the older migrations' tests up to their own migration only (today's code reads their rows once the later migrations ran).
-- **F2. The endpoint** *Built.* (`hearth`). `POST /` and the `405`s; the tools and `hearth-spaces`; calls through `callApp`; the limits and the refusal of other sites' pages; `@modelcontextprotocol/server` as a dependency of the server, `@modelcontextprotocol/client` as a dev dependency.
-  *Testable:* with the SDK's client over `app.fetch`, in both revisions: the tools of an owner, of a member with view (queries only), of someone whose spaces are all Off (only `hearth-spaces`), with an app switched off by the person, left out by an owner, removed, or without code; `space` as an enum of names, two groups with one name; a call that adds a row which the web app's route then reads; a refused call for a space the tool does not offer, for input that does not fit, for an app that `AppError`s, and for one that throws (logged); an answer too long; the 61st call in a minute; `GET /` with `text/html` gets the web app and with only `text/event-stream` gets `405`; a page of another site gets `403`; no sign-in `401`, not a member `403`; a body of 65 KiB `413`; a JSON-RPC error for an unknown tool.
+- **F2. The endpoint** *Built.* (`hearth`). `POST /mcp` and the `405`s; the tools and `hearth-spaces`; calls through `callApp`; the limits and the refusal of other sites' pages; `@modelcontextprotocol/server` as a dependency of the server, `@modelcontextprotocol/client` as a dev dependency.
+  *Testable:* with the SDK's client over `app.fetch`, in both revisions: the tools of an owner, of a member with view (queries only), of someone whose spaces are all Off (only `hearth-spaces`), with an app switched off by the person, left out by an owner, removed, or without code; `space` as an enum of names, two groups with one name; a call that adds a row which the web app's route then reads; a refused call for a space the tool does not offer, for input that does not fit, for an app that `AppError`s, and for one that throws (logged); an answer too long; the 61st call in a minute; `GET` and `DELETE` get `405`; a page of another site gets `403`; no sign-in `401`, not a member `403`; a body of 65 KiB `413`; a JSON-RPC error for an unknown tool.
   *As built:*
-  - **Two files** in `packages/server/src/assistant`: `tools.ts` (`createToolCatalog`, made once in `createApp` from the build's apps; `toolsFor`, a person's tools at each request; `labelSpaces`; `spacesReport`, what `hearth-spaces` answers) and `mcp.ts` (`createMcpEndpoint`, `asksForMcp`, `methodNotAllowed` and the limits). `createApp` wires `POST /` (no-store, `sameOrigin`, `requireMember`, then the endpoint), `DELETE /` (405) and the `GET /` that `asksForMcp` (405), before the web app's catch-all.
+  - **Two files** in `packages/server/src/assistant`: `tools.ts` (`createToolCatalog`, made once in `createApp` from the build's apps; `toolsFor`, a person's tools at each request; `labelSpaces`; `spacesReport`, what `hearth-spaces` answers) and `mcp.ts` (`createMcpEndpoint`, `methodNotAllowed` and the limits). `createApp` wires `POST /mcp` (`MCP_PATH` in `app.ts`: no-store, `sameOrigin`, `requireMember`, then the endpoint), and `GET` and `DELETE` of it (405), before the web app's catch-all.
   - **The person reaches the server the SDK makes for the request** as `authInfo.extra.user`, which only `requireMember` sets; `createMcpHandler` passes it on and never reads it from a header.
   - **Pages of other sites** are refused by the same `sameOrigin` as `/api`'s: `Origin` must name this host (or, with `HEARTH_AUTH=dev`, a loopback one), and without `Origin` a `Sec-Fetch-Site` other than `same-origin` or `none` is refused, `same-site` too.
-  - **`GET /` is MCP's** when it names an `MCP-Protocol-Version` or accepts `text/event-stream` but not `text/html`; it, and `DELETE /`, answer 405 with `Allow: POST` and a JSON-RPC error without an ID, before any sign-in check, since they do nothing. `PUT /` and other paths still answer 404.
+  - **`GET` and `DELETE` of `/mcp`** answer 405 with `Allow: POST` and a JSON-RPC error without an ID, before any sign-in check, since they do nothing. `POST /` and other paths still answer 404.
+  - **The address moved from the root to `/mcp` while F4 was built**, once the research saw Access's discovery documents name the path asked for (`"resource": "https://<host>/mcp"`), the exact form Claude requires; the root's form was the uncertain one. See "The endpoint".
   - **The SDK** answers 415 for a body that is not JSON and 413 above 64 KiB (`maxRequestBodySize`), and its `onerror` goes to the application's `logError`. `tools/list` gives `ttlMs` (a minute) and `cacheScope: "private"` in both eras.
   - **A tool's description** is the route's own sentence, then `It belongs to the app "<name>": <description>`, in English. Queries are also `idempotentHint: true`; mutations `false`.
   - **A call is refused, as `isError`**, for an argument the tool does not take (`hearth-spaces` takes none), and for a tool the catalog has that is offered to the person in no space now ("Hearth offers ... in no space now"); a name the catalog lacks is the JSON-RPC error `-32602`.
@@ -1806,7 +1816,12 @@ Each step is one pull request into `main` of `hearth`; `pnpm check` passes at th
   - **The apps an owner may leave out** show while the level is not Off, from the owners' list (`useSpaceApps`), now read for a personal space too: one check box each, for the apps that are there and have code, saved through the access route with `{ assistant }`. The access table's `applied` and `useAppLabel` are shared for that, and `applied` now applies `assistant` too.
   - **The tests** (`assistant-card.test.tsx`) draw the whole web app against a stand-in for the server: the address and the link, copying, an owner switching a space on and leaving an app out (the requests as sent), a member's view, a change turned down, and Chinese. The phone's edge waits for F4's end-to-end test.
   - **The server's refusal of a tool not offered now** also says that Claude keeps a connector's list of tools for a while and that the person can refresh it.
-- **F4. End to end and the guide** (`hearth`). `e2e/assistant.spec.ts`; the section of `docs/self-hosting.md` above, `docs/architecture.md`, the server's README and `AGENTS.md`.
+- **F4. End to end and the guide** *Built.* (`hearth`). `e2e/assistant.spec.ts`; the section of `docs/self-hosting.md` above, `docs/architecture.md`, the server's README and `AGENTS.md`.
   *Testable:* the end-to-end test above passes against the built server and fails when the endpoint offers a tool the level forbids.
+  *As built:*
+  - **`e2e/assistant.spec.ts`** runs as a project of its own, `assistant`, which Playwright starts once the `server` project's tests are done, on the same copies of the server: the real-server tests count on what the owner sees (an empty dashboard first), and these add an app to a group of the owner's. Everything happens in a group made for the run, never in the owner's personal space, and the group is switched Off again at the end.
+  - **Claude is played by the SDK's `Client`**, in the test's own process, at the owner's and Lin's copies (`OWNER_URL/mcp`, `MEMBER_URL/mcp`), which sign everyone in as them. The client keeps a person's tool list for the minute Hearth's `ttlMs` allows, as Claude keeps its own; the test asks again with `cacheMode: "refresh"`, as "Refresh tools list" does in Claude.
+  - **What it holds**: an Off group offers nothing and `hearth-spaces` says why; the card gives the endpoint's address; the owner's Read and change in Settings lets the owner's Claude add to the checklist, as the owner, which the web app then reads; Lin, who may only view, gets the queries alone and is refused the change; Read only takes the owner's changes away; leaving the app out takes the rest. A second test holds the card to a phone's screen. With mutations offered to whoever may view, the first test fails (tried).
+  - **The address moved to `/mcp`** during this step (see F2's notes), and the guide is section 10 of `docs/self-hosting.md`, with `docs/architecture.md` ("The assistant") and the server's README beside it.
 
 After F4 is merged and deployed, the owner sets up Cloudflare and Claude by the guide and tries it; what that shows goes into the as-built notes.

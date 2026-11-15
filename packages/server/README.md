@@ -2,7 +2,10 @@
 
 The Hearth server: a small [Hono](https://hono.dev) application on Node that
 answers the JSON API under `/api` and serves the built web app for every other
-path. It keeps its data in one SQLite file.
+path. It keeps its data in one SQLite file. `POST /mcp` is the assistant's MCP
+endpoint, through which Claude reads and changes the
+apps' data as the person who connected it, where a space's owners allow it
+(`src/assistant`; `docs/self-hosting.md`, section 10).
 
 It is the app shell plus most of mini-apps: the server is built with a
 list of apps; an app can be added to a space, removed, brought back, moved

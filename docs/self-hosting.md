@@ -383,10 +383,92 @@ replicas before upload. Older releases could (with `age` keys); that has not
 been confirmed for the current one. Until it is, do not rely on this section,
 and keep your own copy of the database file.
 
+## 10. Use Hearth from Claude
+
+Each person can add Hearth to their own Claude (on the web, in the desktop
+app or on a phone) and ask it to read and change their apps' data: "What
+is on our shopping list?", "Write down an idea: ...". Claude acts as that
+person, with their access, and only in the spaces whose owners allow it.
+Nothing changes for anyone who does not connect Claude. The design is
+section F of `docs/mini-app-contract.md`.
+
+1. **Let Claude sign in through Access.** In Cloudflare Zero Trust, go to
+   Access controls, Applications, edit Hearth's application, and under
+   Advanced settings turn on **Managed OAuth**. In its settings:
+   - add `https://claude.ai/api/mcp/auth_callback` to **Allowed redirect
+     URIs** (Claude registers itself and comes back there);
+   - turn on localhost and loopback clients only if you will use Claude
+     Code;
+   - an **Access token lifetime** of 15 minutes and a **Grant session
+     duration** of two weeks: each person signs in once every two weeks,
+     and Access checks its policies again at every refresh.
+
+   Browsers sign in as before. A program without a sign-in now gets `401`
+   and Access's discovery document instead of the sign-in page. So does the
+   web app's own request once its sign-in has run out, which it already
+   shows as "sign in again".
+2. **Check it** from any computer:
+
+   ```bash
+   curl -si -X POST https://hearth.example.com/mcp -H 'content-type: application/json' -d '{}' | grep -iE '^HTTP|www-authenticate'
+   ```
+
+   It answers `401` with a `www-authenticate` header that names
+   `resource_metadata`, and that document names your address:
+
+   ```bash
+   curl -s https://hearth.example.com/.well-known/cloudflare-access-protected-resource/mcp
+   ```
+
+   gives `"resource": "https://hearth.example.com/mcp"`. Claude must find
+   exactly the address you give it there.
+3. **In Hearth**, Settings, Assistant: set your personal space to Read only
+   or Read and change. A group is its owners' to switch.
+4. **In Claude**, on the web or in the desktop app: press "Add to Claude"
+   on the Assistant card, or open Customize, Connectors and add a custom
+   connector named Hearth with your server's address followed by `/mcp`
+   (`https://hearth.example.com/mcp`). If Claude asks which
+   OAuth client to use, choose "Register automatically". Connect, and sign
+   in with your email in the window that opens. The connector then works
+   in Claude's phone apps too. A free Claude account can add one custom
+   connector.
+5. **Keep changes behind your yes.** In Claude, under the connector's tool
+   permissions, keep Hearth's write and delete tools at "Needs approval",
+   never "Always allow". In Claude's Manual mode it then asks before every
+   change; in Auto mode, the default on paid plans, Claude decides itself
+   when to ask. Hearth cannot make Claude ask. For a space where Claude must
+   never change anything, choose Read only.
+6. **Refresh** Claude's list of tools after you change a level or add an
+   app: Claude keeps it for an hour or more. The connector's menu in Claude
+   has "Refresh tools list".
+
+Each family member does steps 4 to 6 with their own Claude account.
+
+If Claude cannot connect:
+
+- Anthropic's servers must get through Cloudflare: they come from
+  `160.79.104.0/21` and `153.61.208.0/20`, as `Claude-User`. A bot,
+  AI-crawler or WAF rule on the zone that blocks them breaks the
+  connection; Security, Events in Cloudflare's dashboard shows it.
+- Give Claude your server's address exactly as you open Hearth, followed by
+  `/mcp`, on port 443.
+- Cloudflare's Managed OAuth is still a beta. Two public reports (June and
+  September 2026) describe claude.ai failing against it, and one (November
+  2026) describes it working. Claude Code connects through it too, with
+  localhost clients allowed in step 1:
+  `claude mcp add --transport http hearth https://hearth.example.com/mcp`.
+- Managed OAuth must be on for Hearth's Access application, with Claude's
+  callback among its allowed redirect URIs.
+
+On your own computer, `pnpm dev` answers the same way at
+`http://localhost:4310/mcp`, with sign-in switched off, for the MCP Inspector
+(`npx @modelcontextprotocol/inspector`). Claude itself cannot reach it: it
+connects from Anthropic's servers.
+
 ## What the server connects to
 
 Nothing connects to the server from outside: the tunnel carries every
-request to it. It makes these connections itself:
+request to it, Claude's too (section 10). It makes these connections itself:
 
 - **Cloudflare Access**, for the public keys that sign each request's
   identity (`https://your-team.cloudflareaccess.com/cdn-cgi/access/certs`).

@@ -136,19 +136,19 @@ afterEach(() => {
 });
 
 describe("the Assistant card", () => {
-  it("shows this server's address, and a link that opens Claude's dialog with it filled in", async () => {
+  it("shows the address of this server's endpoint, and a link that opens Claude's dialog with it filled in", async () => {
     start(new FakeServer());
     const card = await assistantCard();
-    expect((within(card).getByRole("textbox", { name: "Address for Claude" }) as HTMLInputElement).value).toBe(window.location.origin);
+    expect((within(card).getByRole("textbox", { name: "Address for Claude" }) as HTMLInputElement).value).toBe(`${window.location.origin}/mcp`);
     const link = within(card).getByRole("link", { name: "Add to Claude" });
-    expect(link.getAttribute("href")).toBe(addToClaudeLink(window.location.origin));
+    expect(link.getAttribute("href")).toBe(addToClaudeLink(`${window.location.origin}/mcp`));
     expect(link.getAttribute("target")).toBe("_blank");
     const url = new URL(link.getAttribute("href")!);
     expect(url.origin + url.pathname).toBe("https://claude.ai/customize/connectors");
     expect(Object.fromEntries(url.searchParams)).toEqual({
       modal: "add-custom-connector",
       connectorName: "Hearth",
-      connectorUrl: window.location.origin,
+      connectorUrl: `${window.location.origin}/mcp`,
     });
   });
 
@@ -159,7 +159,7 @@ describe("the Assistant card", () => {
     const card = await assistantCard();
     fireEvent.click(within(card).getByRole("button", { name: "Copy" }));
     await within(card).findByRole("button", { name: "Copied" });
-    expect(writeText).toHaveBeenCalledWith(window.location.origin);
+    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/mcp`);
   });
 
   it("lets an owner switch a space on, and leave one of its apps out", async () => {

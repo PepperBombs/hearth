@@ -89,7 +89,7 @@ async function connect(who: string, era: Era = "legacy"): Promise<Client> {
     { name: "hearth-test", version: "1.0.0" },
     era === "modern" ? { versionNegotiation: { mode: { pin: "2026-07-28" } } } : {},
   );
-  const transport = new StreamableHTTPClientTransport(new URL(`${BASE}/`), {
+  const transport = new StreamableHTTPClientTransport(new URL(`${BASE}/mcp`), {
     fetch: async (url, init) => {
       const request = new Request(url, init);
       request.headers.set("x-test-identity", who);
@@ -117,7 +117,7 @@ async function call(client: Client, name: string, args: Record<string, unknown> 
 
 /** A raw POST to the endpoint, for what the client would never send. */
 function post(body: unknown, headers: Record<string, string> = {}) {
-  return server.app.request(`${BASE}/`, {
+  return server.app.request(`${BASE}/mcp`, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers },
     body: typeof body === "string" ? body : JSON.stringify(body),
@@ -407,18 +407,15 @@ describe("the limit on calls", () => {
 });
 
 describe("the endpoint over HTTP", () => {
-  it("leaves a browser's GET of the address to the web app, and answers MCP's with 405", async () => {
-    const page = await server.app.request(`${BASE}/`, { headers: as(SAM, { accept: "text/html,application/xhtml+xml,*/*" }) });
-    expect(page.status).not.toBe(405);
-    const asks: Record<string, string>[] = [{ accept: "text/event-stream" }, { "mcp-protocol-version": "2025-11-25", accept: "*/*" }];
-    for (const headers of asks) {
-      const response = await server.app.request(`${BASE}/`, { headers: as(SAM, headers) });
-      expect(response.status).toBe(405);
+  it("answers GET and DELETE with 405, since it keeps no session to stream or to end", async () => {
+    for (const method of ["GET", "DELETE"]) {
+      const response = await server.app.request(`${BASE}/mcp`, { method, headers: as(SAM, { accept: "text/event-stream" }) });
+      expect(response.status, method).toBe(405);
       expect(response.headers.get("allow")).toBe("POST");
       expect(await response.json()).toEqual({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null });
     }
-    const deleted = await server.app.request(`${BASE}/`, { method: "DELETE", headers: as(SAM) });
-    expect(deleted.status).toBe(405);
+    // Only that address: the web app's own root takes no POST.
+    expect((await server.app.request(`${BASE}/`, { method: "POST", headers: as(SAM, { "content-type": "application/json" }), body: JSON.stringify(INITIALIZE) })).status).toBe(404);
   });
 
   it("needs a sign-in and a member, as /api does", async () => {

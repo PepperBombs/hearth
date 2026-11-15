@@ -180,17 +180,6 @@ export function createMcpEndpoint(options: McpEndpointOptions): McpEndpoint {
   };
 }
 
-/**
- * Whether a `GET` of the server's root is MCP's, which answers 405, rather
- * than a browser's, which gets the web app: it asks for an event stream and
- * not for a page, or names an MCP protocol version.
- */
-export function asksForMcp(request: Request): boolean {
-  if (request.headers.has("mcp-protocol-version")) return true;
-  const accept = request.headers.get("accept") ?? "";
-  return accept.includes("text/event-stream") && !accept.includes("text/html");
-}
-
 /** The answer to a method the endpoint does not take, with what it does take. */
 export function methodNotAllowed(): Response {
   return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null }), {

@@ -11,7 +11,7 @@ import { listAppsForUser } from "./apps/installs";
 import { requestGapFor } from "./apps/jobs";
 import { createRegistry, type BundledApp } from "./apps/registry";
 import { registerAppRoutes } from "./apps/routes";
-import { asksForMcp, createMcpEndpoint, methodNotAllowed } from "./assistant/mcp";
+import { createMcpEndpoint, methodNotAllowed } from "./assistant/mcp";
 import { registerAssistantRoutes } from "./assistant/routes";
 import { createToolCatalog } from "./assistant/tools";
 import { identifyFromConfig, type Identify } from "./auth";
@@ -53,6 +53,9 @@ export type AppOptions = {
 };
 
 const MAX_BODY_BYTES = 64 * 1024;
+
+/** Where the assistant's MCP endpoint is: the address to give Claude is the server's own with this path. */
+export const MCP_PATH = "/mcp";
 
 /**
  * Builds the application without listening, so tests can call it directly.
@@ -140,20 +143,19 @@ export function createApp(options: AppOptions): Hono<Env> {
   app.all("/api", (c) => apiError(c, 404, "not_found", NOTHING_HERE));
   app.all("/api/*", (c) => apiError(c, 404, "not_found", NOTHING_HERE));
 
-  // The assistant's MCP endpoint is the server's own address (section F,
-  // "The endpoint"): Cloudflare Access names the host without a path as
-  // the resource Claude signs in to. The web app never posts there, and a
-  // browser's GET of it still gets the web app.
+  // The assistant's MCP endpoint (section F, "The endpoint"). Cloudflare
+  // Access names this address, path included, as the resource Claude signs
+  // in to, which is the form Claude requires.
   const mcp = createMcpEndpoint({ db, registry, catalog, version: config.version, logError });
   app.post(
-    "/",
+    MCP_PATH,
     noStore(),
     sameOrigin({ allowLoopbackOrigins: config.auth.mode === "dev" }),
     requireMember,
     (c) => mcp.fetch(c.req.raw, c.get("user")),
   );
-  app.delete("/", () => methodNotAllowed());
-  app.get("/", (c, next) => (asksForMcp(c.req.raw) ? methodNotAllowed() : next()));
+  // Only POST: no session is kept, so there is no stream to open and nothing to end.
+  app.on(["GET", "DELETE"], MCP_PATH, () => methodNotAllowed());
 
   app.get("*", serveWebApp(config.webDist));
 
