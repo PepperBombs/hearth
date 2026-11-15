@@ -103,7 +103,10 @@ export function createMcpEndpoint(options: McpEndpointOptions): McpEndpoint {
     if (!tool) throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown tool: ${name}`);
     const offered = toolsFor(db, registry, catalog, user).offers.get(name);
     if (!offered) {
-      return text(`Hearth offers ${name} to this person in no space now. ${SPACES_TOOL} says what the assistant may use.`, true);
+      return text(
+        `Hearth offers ${name} to this person in no space now. ${SPACES_TOOL} says what the assistant may use. Claude keeps a connector's list of tools for a while: after a change in Hearth's Settings, the person can refresh it in the connector's menu.`,
+        true,
+      );
     }
 
     const takes = tool.input ? ["space", "input"] : ["space"];

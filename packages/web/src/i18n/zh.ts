@@ -230,6 +230,33 @@ export const zh: Dictionary = {
   "groups.loadFailed": "未能加载群组的详细信息。",
   "groups.retry": "重试",
 
+  "assistant.title": "AI 助手",
+  "assistant.intro":
+    "在网页、电脑或手机上的 Claude 里使用 Hearth：问问清单上有什么、往里添东西，或者记下一个想法。Claude 以你的身份、按你的权限办事，而且只在下面允许它的空间里。",
+  "assistant.address": "给 Claude 的地址",
+  "assistant.addressHint": "在 Claude 里把 Hearth 添加为自定义连接器时，填这个地址。",
+  "assistant.copy": "复制",
+  "assistant.copied": "已复制",
+  "assistant.copyFailed": "无法复制。请选中地址后自己复制。",
+  "assistant.addToClaude": "添加到 Claude",
+  "assistant.step1": "先在下面选择 Claude 在每个空间里可以做什么。",
+  "assistant.step2":
+    "在 Claude 里添加一个名为 Hearth 的自定义连接器，填上这个地址，或者点“添加到 Claude”。Claude 要求登录时，像登录这里一样用你的邮箱登录。",
+  "assistant.step3":
+    "然后问 Claude，比如：“我们的购物清单上有什么？”在 Claude 里把 Hearth 的写入工具保持为 “Needs approval”（需要批准）；如果希望它每次改动前都先问你，请使用 Claude 的 Manual（手动）模式。",
+  "assistant.refreshNote": "在这里做了改动之后，请在 Claude 里该连接器的菜单中选择 “Refresh tools list”（刷新工具列表）。",
+  "assistant.spacesTitle": "Claude 可以做什么",
+  "assistant.youAlways": "Claude 能做的不会超过你：你只能查看的应用，它也只能读取。",
+  "assistant.levelLabel": "Claude 在{space}里可以做什么",
+  "assistant.levelNone": "关闭",
+  "assistant.levelView": "只读",
+  "assistant.levelEdit": "读写",
+  "assistant.levelSetBy": "由群组的所有者设置。",
+  "assistant.appsLabel": "Claude 在{space}里可以使用的应用",
+  "assistant.noApps": "这里还没有应用。",
+  "assistant.appsLoadFailed": "应用列表没能加载。请重新加载页面再试。",
+  "assistant.saveFailed": "这项改动没能保存。请重试。",
+
   "save.failed": "你的选择没能保存到服务器，但已在这台设备上生效。",
   "save.retry": "重试",
   "save.dismiss": "关闭提示",

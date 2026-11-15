@@ -341,7 +341,7 @@ describe.each<Era>(["legacy", "modern"])("over MCP (%s)", (era) => {
       await expect(client.callTool({ name: "nothing_here", arguments: {} })).rejects.toMatchObject({ code: -32602 });
       setLevel(world.family, "view");
       expect(await call(client, "lab_note", { space: "Family", input: { text: "x" } })).toEqual({
-        text: `Hearth offers lab_note to this person in no space now. ${SPACES_TOOL} says what the assistant may use.`,
+        text: expect.stringMatching(new RegExp(`^Hearth offers lab_note to this person in no space now\\. ${SPACES_TOOL} says what the assistant may use\\. Claude keeps a connector's list of tools for a while`)),
         failed: true,
       });
     });
