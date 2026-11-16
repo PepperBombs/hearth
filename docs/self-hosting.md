@@ -61,6 +61,48 @@ no setting for it in `hearth.env`: an older one may still have a
 `APPS_REPO` empty, releases hold no mini-apps: they disappear from the site,
 and their data stays in the database until they come back.
 
+### Mini-apps from other repositories
+
+Mini-apps need not live in `hearth-stones`. Any repository shaped like it
+(`packages/sdk/README.md`, "A repository of mini-apps") can be built in
+beside it: a private one of your own, or one that somebody else wrote. Clone
+it next to the others and name it in `APPS_REPO`, after a colon:
+
+```sh
+sudo -u hearth git clone https://github.com/SOMEONE/more-apps.git /opt/hearth/repos/more-apps
+```
+
+```
+APPS_REPO=/opt/hearth/repos/hearth-stones:/opt/hearth/repos/more-apps
+```
+
+The next run builds a release that holds the apps of every repository named,
+and from then on a push to `main` of any of them is deployed like a push to
+`hearth-stones`. The apps are added to a space on the Apps page like any
+other. Take a repository out of the line and the next release is built
+without its apps; their data stays in the database, as above.
+
+- **Name only repositories you trust.** A mini-app's code runs inside the
+  Hearth server and can do whatever the service can: the checks of the build
+  catch mistakes, not ill will. And the deploy follows `main`, so whoever
+  may push there changes what your server runs within a minute. For a
+  repository that is not yours, clone a fork of your own, and merge its
+  author's changes into the fork once you have read them.
+- **No two apps may have the same ID**, which is the name of an app's
+  folder, in all the repositories together: the build stops, and the release
+  that runs stays.
+- **Every repository must fit the framework's SDK** (`hearth.sdk` in its
+  `package.json`). One that lags behind holds every release back ("When a
+  deployment fails", below): update it, or take it out of `APPS_REPO` until
+  it is.
+- A private repository needs a deploy key that lets the `hearth` user read
+  it. Every clone is fetched from the same `REMOTE` and `BRANCH`.
+- In a release, the first repository of the line lies in the folder
+  `hearth-stones`, the second in `hearth-stones-2`, and so on: those are the
+  names an error of the build uses. With `SELF_UPDATE=off`, install the
+  deploy script again (step 5) before naming a second repository: a copy
+  from before this takes the whole line for one clone.
+
 ## 4. Write the settings
 
 ```sh
@@ -288,9 +330,12 @@ build output is in `/opt/hearth/logs`.
   `hearth-stones` (in either order): the same commits are not built again,
   and the next commit of either repository is built at once. To deploy a
   framework fix before the two match, empty `APPS_REPO` in `deploy.conf`
-  for a while, at the cost described in step 3.
+  for a while, or take out of it the one repository that lags, at the cost
+  described in step 3.
 - **The mini-apps cannot be linked to the SDK.** `pnpm install --offline`
-  failed in the release's copy of `hearth-stones`, for example because its
+  failed in the release's copy of a mini-apps repository (the error names
+  the folder: `hearth-stones` is the first of `APPS_REPO`), for example
+  because its
   `pnpm-lock.yaml` is out of date or names a package the server does not
   already have: it must hold nothing but the link to the SDK. Fix it there.
   The running release is untouched, and the same commits are tried again

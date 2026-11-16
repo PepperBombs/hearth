@@ -63,9 +63,10 @@ ends at once and its job is due again at the next start, then the server and
 the database, which is closed within 5 seconds whatever holds things up.
 
 On a server, `deploy/hearth-deploy.sh` does this for each release: it links
-the release's copy of `hearth-stones` to the release's SDK
+the release's copy of each mini-apps repository (`hearth-stones`, and any
+other that `APPS_REPO` names) to the release's SDK
 (`pnpm install --frozen-lockfile --offline` there), builds with
-`HEARTH_APPS_DIR` naming that copy, tries the result on a spare port and
+`HEARTH_APPS_DIR` naming those copies, tries the result on a spare port and
 then switches systemd's service to it. Mini-apps written for another SDK
 version stop the build with status 3, and the release that runs stays. The
 script that does this is the one of the release's own framework commit: the

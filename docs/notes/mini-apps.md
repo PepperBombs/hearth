@@ -8,8 +8,9 @@ Notes for whoever changes this part, people and agents alike. They are read when
   `HEARTH_APPS_DIR` at that moment: one folder, or several separated like
   `PATH`, a relative one read from the root of this repository. The running
   server reads no apps folder. A plain `pnpm build` holds none. The deploy
-  script passes the release's own copy of the mini-apps
-  (`releases/<time>/hearth-stones`, from `APPS_REPO`), after linking it to
+  script passes the release's own copies of the mini-apps, one for each
+  clone `APPS_REPO` names (`releases/<time>/hearth-stones`, then
+  `hearth-stones-2` and so on), after linking each to
   the release's SDK with `pnpm install --frozen-lockfile --offline`; it logs
   what the build holds from sync's line "this build holds ...".
 - `hearth-apps sync` writes three files that are not in Git:

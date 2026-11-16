@@ -185,3 +185,4 @@ Notes for whoever changes this part, people and agents alike. They are read when
   builds nothing, and
   `deploy` waits a second first, because releases are named after the
   second.
+- `APPS_REPO` names one clone of mini-apps or several separated by colons. A release holds them as `hearth-stones`, `hearth-stones-2`, ... in that order, and `apps=` in `RELEASE` (so the key in `state/failed` too) is their commits joined by "+": with one repository it is the bare commit it always was, which is why nothing changed for a server that names one. Adding or taking out a repository changes that key, so it is built at once. An installed copy from before this that must do the work itself takes the line for one clone and stops at its fetch ("git cannot use"), after the leftovers and a pending restart.

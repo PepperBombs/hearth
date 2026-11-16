@@ -619,6 +619,28 @@ ESLint, vitest and React's types come with the SDK. Leave out a
 `packageManager` field: pnpm would first fetch the version it names, which
 an offline install cannot.
 
+### A repository of your own
+
+Mini-apps need not live in `hearth-stones`. Anyone can keep a repository of
+them, and a server builds in as many repositories as its owner names
+(`docs/self-hosting.md`, step 3). To start one, beside a checkout of
+`hearth` in which `pnpm install` has run, make a folder with the three small
+files above (`package.json` under a name of its own, `tsconfig.json` and
+`eslint.config.js`; `hearth-stones` has them to copy) and a `.gitignore`
+that names `node_modules/`. Then, in it:
+
+```sh
+pnpm install        # links the SDK and writes pnpm-lock.yaml; downloads nothing
+pnpm new weather    # a first app, as a copy of the sample checklist
+pnpm check          # what the build will check, and the app's tests
+pnpm dev            # Hearth on this machine, with the apps of this folder
+```
+
+Commit `pnpm-lock.yaml`: a server installs from it, offline. An app's ID
+must differ from that of every other app a server builds in, those of
+`hearth-stones` among them. A public repository can carry the topic
+`hearth-mini-apps` on GitHub, for others to find it by.
+
 ### What a file of an app may import
 
 | Import | Where |

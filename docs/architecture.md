@@ -75,8 +75,8 @@ three files that are not in Git:
 With no folder named, a folder missing or a folder without apps, the three
 say "no apps" and the framework builds alone. The running server reads no
 apps folder: what a release holds was decided when it was built. On the
-server, the deploy names the copy of `hearth-stones` that lies beside the
-framework in each release.
+server, the deploy names the copies of the mini-apps repositories that lie
+beside the framework in each release.
 
 Before it writes anything, sync refuses what must not be built in, and
 writes nothing then:
@@ -589,12 +589,21 @@ endpoint at `/mcp` (`POST`; `GET` and `DELETE` answer 405).
 and `hearth-data` (private, the owner's content) are checked out side by side
 on the server. The database file and secrets live in none of them.
 
+Mini-apps need not live in `hearth-stones`. A mini-app is written against
+the SDK alone, and its repository says which SDK version it was written for,
+so any repository of that shape can be built in beside it, the owner's or
+anyone's: the deploy's `APPS_REPO` names each clone, and a release holds the
+apps of all of them (`docs/self-hosting.md`, step 3). The list is the
+server's own, in no repository. Hearth has no index of such repositories
+and installs nothing by itself: an app's code runs inside the server, so
+which repositories to trust is the owner's decision.
+
 ## Deployment
 
 A timer on the server runs `deploy/hearth-deploy.sh` every minute. It fetches
-`main` of the framework and the mini-apps, and only when something changed
-builds a fresh release: both repositories at their new commits, side by side
-in a folder of their own. The mini-apps are linked to the SDK of that
+`main` of the framework and of every mini-apps repository, and only when
+something changed builds a fresh release: all of them at their new commits,
+side by side in a folder of their own. The mini-apps are linked to the SDK of that
 release with an offline install, since their lockfile holds nothing but that
 link, and the framework is built with them in. The script then tries the
 release on a spare port against a copy of the database, with the mini-apps'

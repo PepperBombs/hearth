@@ -11,9 +11,10 @@
 #
 # The copy that does the work:
 #
-#   1. fetches the main branch of the mini-apps repository, and of the
+#   1. fetches the main branch of every mini-apps repository (APPS_REPO
+#      names one clone, or several separated by colons), and of the
 #      framework repository unless that was fetched to find this copy;
-#   2. stops there, silently, if neither has a new commit;
+#   2. stops there, silently, if none has a new commit;
 #   3. otherwise builds a fresh release in a new folder named after the time:
 #      the framework, with the mini-apps of the same moment built in. The
 #      mini-apps are first linked to the SDK of the framework beside them,
@@ -160,13 +161,17 @@
 #   - a release is a folder releases/<time>, named as is_release_name says,
 #     and a finished one holds the file RELEASE with the lines framework=,
 #     apps= and version=. Such a copy DELETES every folder with a name like
-#     that and no RELEASE, unless "current" points at it;
+#     that and no RELEASE, unless "current" points at it. With several
+#     mini-apps repositories apps= holds their commits joined by "+", in
+#     the order of APPS_REPO: one word still, which such a copy only
+#     compares;
 #   - "current" is a link to releases/<time>;
 #   - while state/restart-pending exists (it holds the number of tries so
 #     far, or nothing), such a copy restarts SERVICE, up to three times,
 #     until LIVE_URL/api/health reports the version of current/RELEASE;
 #   - state/failed is one line, "<stage> <framework commit> <apps commit>",
-#     the stage being build, sdk or live. Such a copy reads it, and writes
+#     the stage being build, sdk or live, and the apps commit what apps=
+#     holds. Such a copy reads it, and writes
 #     "build ..." for the commits whose deploy script it could not start;
 #   - beside DATABASE, such a copy deletes hearth-deploy-trial-*.db (with
 #     -wal and -shm) and DATABASE.restoring;
@@ -181,6 +186,8 @@
 #       hearth/                       the framework at one commit, built
 #       hearth-stones/                the mini-apps at one commit, linked to
 #                                     hearth/packages/sdk and built into it
+#       hearth-stones-2/              the same for the second repository of
+#                                     APPS_REPO, if it names one, and so on
 #       RELEASE                       which commits, and when
 #       release.env                   HEARTH_VERSION for the service
 #   current -> releases/...           the release the service runs
@@ -260,6 +267,7 @@ redact() {
 
 # State shared with die() and the exit handler.
 attempt_key=""      # "<framework commit> <apps commit>" once a build starts
+apps_repos=()       # the clones APPS_REPO names, set by check_settings
 attempt_stage=build # "sdk" when the mini-apps were written for another SDK
 #                     version; "live" once the running service has been touched
 new_release=""      # folder of the release being built
@@ -413,7 +421,13 @@ starter_setting() {
 
 # The settings only the copy that does the work needs.
 check_settings() {
-  [[ -z $APPS_REPO || $APPS_REPO == /* ]] || die "APPS_REPO must be an absolute path, or empty."
+  # One clone of mini-apps, or several separated by colons, as in PATH.
+  local repo
+  apps_repos=()
+  [[ -z $APPS_REPO ]] || IFS=: read -r -a apps_repos <<<"$APPS_REPO"
+  for repo in "${apps_repos[@]}"; do
+    [[ $repo == /* ]] || die "APPS_REPO must be an absolute path, or several separated by colons, or empty."
+  done
   # The build finds the mini-apps through HEARTH_APPS_DIR, a list of folders
   # separated by colons: a colon here would silently build a release without them.
   [[ -z $APPS_REPO || $HEARTH_BASE != *:* ]] ||
@@ -936,11 +950,21 @@ elif [[ $framework_fetch != "done" ]]; then
   try_fetch "$FRAMEWORK_REPO" "framework repository" || fetch_failed
   framework_commit=$fetched_commit
 fi
-apps_commit=none
-if [[ -n $APPS_REPO ]]; then
-  try_fetch "$APPS_REPO" "mini-apps repository" || fetch_failed
-  apps_commit=$fetched_commit
-fi
+# apps_commit is what RELEASE and state/failed hold: the one repository's
+# commit, or every repository's joined by "+". apps_short is the same for
+# reading, 12 characters of each.
+apps_commit=none apps_short=none apps_commits=()
+for repo in "${apps_repos[@]}"; do
+  label="mini-apps repository"
+  ((${#apps_repos[@]} == 1)) || label+=" $repo"
+  try_fetch "$repo" "$label" || fetch_failed
+  apps_commits+=("$fetched_commit")
+  if ((${#apps_commits[@]} == 1)); then
+    apps_commit=$fetched_commit apps_short=${fetched_commit:0:12}
+  else
+    apps_commit+=+$fetched_commit apps_short+=+${fetched_commit:0:12}
+  fi
+done
 
 deployed_framework=$(release_value "$HEARTH_BASE/current/RELEASE" framework)
 deployed_apps=$(release_value "$HEARTH_BASE/current/RELEASE" apps)
@@ -970,7 +994,7 @@ if [[ -e $failed_file ]]; then
     retry_note="Trying again $RETRY_AFTER_MINUTES minutes after that attempt, or at once after a new commit, or after deleting $failed_file."
   fi
   if [[ -n $retry_note ]]; then
-    log "ERROR: the newest commits (framework ${framework_commit:0:12}, mini-apps ${apps_commit:0:12}) failed to deploy earlier. $retry_note" >&2
+    log "ERROR: the newest commits (framework ${framework_commit:0:12}, mini-apps $apps_short) failed to deploy earlier. $retry_note" >&2
     [[ -z $pending_failure ]] || die_pending
     exit 1
   fi
@@ -996,7 +1020,7 @@ if [[ -n $script_problem ]]; then
   # Found before the hand-over, and said here so that it counts as a build
   # that failed: tried again after a while, not on every run.
   [[ -z $script_problem_lines ]] || printf '%s\n' "$script_problem_lines" | sed 's/^/    /' >&2
-  die "The newest commits (framework ${framework_commit:0:12}, mini-apps ${apps_commit:0:12}) are not deployed: the deploy script of that framework commit cannot carry out the run, because $script_problem. $script_remedy; or deploy them with the installed copy of the script, which may be much older than they are: read \"When a deployment fails\" in docs/self-hosting.md before you set SELF_UPDATE=off in $config_file."
+  die "The newest commits (framework ${framework_commit:0:12}, mini-apps $apps_short) are not deployed: the deploy script of that framework commit cannot carry out the run, because $script_problem. $script_remedy; or deploy them with the installed copy of the script, which may be much older than they are: read \"When a deployment fails\" in docs/self-hosting.md before you set SELF_UPDATE=off in $config_file."
 fi
 new_release=$HEARTH_BASE/releases/$stamp
 build_log=$HEARTH_BASE/logs/$stamp.log
@@ -1004,7 +1028,7 @@ build_log=$HEARTH_BASE/logs/$stamp.log
 mkdir -- "$new_release"
 : >"$build_log"
 
-log "New commits: framework ${framework_commit:0:12}, mini-apps ${apps_commit:0:12}. Building release $stamp (version $version)."
+log "New commits: framework ${framework_commit:0:12}, mini-apps $apps_short. Building release $stamp (version $version)."
 # The one line by which the journal shows that a run was handed over: the
 # hand-over itself writes nothing, and a build the installed copy does
 # itself has no such line.
@@ -1014,13 +1038,19 @@ log "New commits: framework ${framework_commit:0:12}, mini-apps ${apps_commit:0:
 export_commit "$FRAMEWORK_REPO" "$framework_commit" "$new_release/hearth" >>"$build_log" 2>&1 ||
   die "Could not copy the framework's files into the release."
 # The mini-apps lie beside the framework, as hearth-stones does beside hearth
-# on a developer's machine: they link the SDK as ../hearth/packages/sdk.
-apps_dir=""
-if [[ -n $APPS_REPO ]]; then
+# on a developer's machine: they link the SDK as ../hearth/packages/sdk. The
+# first repository of APPS_REPO lies in hearth-stones whatever its clone is
+# called, the second in hearth-stones-2, and so on.
+apps_dirs=()
+for i in "${!apps_repos[@]}"; do
   apps_dir=$new_release/hearth-stones
-  export_commit "$APPS_REPO" "$apps_commit" "$apps_dir" >>"$build_log" 2>&1 ||
-    die "Could not copy the mini-apps' files into the release."
-fi
+  ((i == 0)) || apps_dir+=-$((i + 1))
+  ((${#apps_repos[@]} == 1)) ||
+    log "Mini-apps in ${apps_dir##*/}: ${apps_repos[i]} at ${apps_commits[i]:0:12}."
+  export_commit "${apps_repos[i]}" "${apps_commits[i]}" "$apps_dir" >>"$build_log" 2>&1 ||
+    die "Could not copy the mini-apps' files into the release (from ${apps_repos[i]})."
+  apps_dirs+=("$apps_dir")
+done
 
 log "Installing dependencies (pnpm install --frozen-lockfile)."
 (cd -- "$new_release/hearth" &&
@@ -1031,18 +1061,20 @@ log "Installing dependencies (pnpm install --frozen-lockfile)."
 # network, and --offline makes sure it uses none. A mini-apps repository
 # without a package.json holds no apps yet, and has nothing to install.
 # See docs/mini-app-contract.md, section A7, "SDK only".
-if [[ -n $apps_dir && -f $apps_dir/package.json ]]; then
+for apps_dir in "${apps_dirs[@]}"; do
+  [[ -f $apps_dir/package.json ]] || continue
   log "Linking the mini-apps to the release's SDK (pnpm install --frozen-lockfile --offline)."
   (cd -- "$apps_dir" &&
     clean_env pnpm install --frozen-lockfile --offline --store-dir "$HEARTH_BASE/pnpm-store") >>"$build_log" 2>&1 ||
-    die "Could not link the mini-apps to the SDK (pnpm install --frozen-lockfile --offline in hearth-stones). Their pnpm-lock.yaml must be up to date and hold nothing but the link to ../hearth/packages/sdk; see the lines below."
-fi
+    die "Could not link the mini-apps to the SDK (pnpm install --frozen-lockfile --offline in ${apps_dir##*/}). Their pnpm-lock.yaml must be up to date and hold nothing but the link to ../hearth/packages/sdk; see the lines below."
+done
 
 # Which mini-apps a release holds is decided now: pnpm build first runs
-# hearth-apps sync, which reads HEARTH_APPS_DIR. The running server reads no
-# apps folder. Without APPS_REPO the release holds no mini-apps.
+# hearth-apps sync, which reads HEARTH_APPS_DIR, the folders separated by
+# colons. The running server reads no apps folder. Without APPS_REPO the
+# release holds no mini-apps.
 build_env=(HEARTH_VERSION="$version")
-[[ -z $apps_dir ]] || build_env+=(HEARTH_APPS_DIR="$apps_dir")
+((${#apps_dirs[@]} == 0)) || build_env+=(HEARTH_APPS_DIR="$(IFS=:; printf '%s' "${apps_dirs[*]}")")
 log "Building (pnpm build)."
 build_status=0
 (cd -- "$new_release/hearth" && clean_env "${build_env[@]}" pnpm build) >>"$build_log" 2>&1 ||
@@ -1051,7 +1083,7 @@ if ((build_status == 3)); then
   # hearth-apps sync ends with status 3 for one thing only, and pnpm passes
   # it on: mini-apps written for another version of the SDK than this one.
   attempt_stage=sdk
-  die "The mini-apps (commit ${apps_commit:0:12}) were written for another version of the SDK than the framework (commit ${framework_commit:0:12}) holds; the lines below name both. This is expected between merging a new SDK version into one repository and the matching change into the other. These commits are not built again: the next commit of either repository is built at once."
+  die "The mini-apps (commit $apps_short) were written for another version of the SDK than the framework (commit ${framework_commit:0:12}) holds; the lines below name both. This is expected between merging a new SDK version into one repository and the matching change into the other. These commits are not built again: the next commit of either repository is built at once."
 fi
 ((build_status == 0)) || die "pnpm build failed."
 

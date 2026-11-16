@@ -12,7 +12,8 @@ server; later their family uses it too. This repository is the framework and
 its SDK: public, AGPL-3.0. Three repositories are checked out side by side on
 the server: `hearth` (this one), `hearth-stones` (public, the mini-apps, one
 folder each) and `hearth-data` (private, the owner's content). The database
-file and secrets live in none of them.
+file and secrets live in none of them. Mini-apps need not live in
+`hearth-stones`: the server's `APPS_REPO` may name more repositories of them.
 
 ## Rules that must not be broken
 
@@ -35,7 +36,7 @@ file and secrets live in none of them.
 - The look is "A · Clean": blue-grey surfaces, white cards with a hairline border, one blue accent, one icon colour per app.
 - Cloudflare Access signs people in. The app has no login page; it verifies the signed identity header, behind one small interface.
 - Adding an app to a space is a saved setting, with no redeploy.
-- Deployment is pull-based: a timer on the server builds `main` of `hearth` and `hearth-stones` and switches over only if the build succeeds.
+- Deployment is pull-based: a timer on the server builds `main` of `hearth` and of every mini-apps repository it names (`hearth-stones` first) and switches over only if the build succeeds.
 - On phones the tab bar is Home, Apps, Search, Me.
 
 ## Where it stands
