@@ -269,7 +269,7 @@ case \$folder:\$1 in
     # What the real "pnpm build" does first: pnpm apps:sync.
     exec node packages/sdk/bin/hearth-apps.mjs sync
     ;;
-  hearth-stones:install)
+  hearth-stones*:install)
     if [[ " \$* " == *" --frozen-lockfile "* && ! -f pnpm-lock.yaml ]]; then
       echo 'ERR_PNPM_NO_LOCKFILE  Cannot install with "frozen-lockfile" because pnpm-lock.yaml is absent' >&2
       exit 1
@@ -707,6 +707,10 @@ NO_APPS=1111111111111111111111111111111111111111
 NO_LOCKFILE=2222222222222222222222222222222222222222
 FOR_SDK_1=3333333333333333333333333333333333333333
 FOR_SDK_2=4444444444444444444444444444444444444444
+# Of a second repository of mini-apps.
+MORE_1=5555555555555555555555555555555555555555
+MORE_2=6666666666666666666666666666666666666666
+AG=a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5
 
 USERS='{"id":1,"name":"users","sql":"CREATE TABLE users (name TEXT NOT NULL)"}'
 LISTS='{"id":2,"name":"lists","sql":"CREATE TABLE lists (title TEXT NOT NULL)"}'
@@ -1864,6 +1868,47 @@ expect_live f4f4f4f
 expect_started ""
 expect_output "$(do_not_install)"
 expect_no_output "Install the new one"
+write_config 5
+end_test
+
+# ---------------------------------------------------------------------------
+start_test "APPS_REPO may name several repositories of mini-apps: each is fetched, linked and built in, and a commit of any is deployed"
+MORE=$T/more-stones
+mkdir -p "$MORE/commits"
+STONES=$MORE make_apps_commit $MORE_1 "^0.2.0" "" recipes
+make_commit $AG "[$USERS,$LISTS]" "" 0.2.0
+first_apps=$(<"$STONES/main")
+APPS=$STONES:$MORE
+write_config 5
+deploy
+expect_status 0
+expect_output "New commits: framework ${AG:0:12}, mini-apps ${first_apps:0:12}+${MORE_1:0:12}."
+expect_output "Mini-apps in hearth-stones-2: $MORE at ${MORE_1:0:12}."
+expect_output "The build holds 2 mini-apps (notes, recipes)."
+expect_live a5a5a5a
+release_two=$(current_release)
+[[ $(fetches_of "$STONES") == 1 && $(fetches_of "$MORE") == 1 ]] || fail "not every repository of mini-apps was fetched once"
+expect_pnpm_call "hearth-stones: install --frozen-lockfile --offline --store-dir $BASE/pnpm-store"
+expect_pnpm_call "hearth-stones-2: install --frozen-lockfile --offline --store-dir $BASE/pnpm-store"
+expect_pnpm_call "hearth: build HEARTH_APPS_DIR=$BASE/releases/$release_two/hearth-stones:$BASE/releases/$release_two/hearth-stones-2"
+[[ $(sed -n 's/^apps=//p' "$BASE/current/RELEASE") == "$first_apps+$MORE_1" ]] || fail "RELEASE does not name the commit of every repository: $(sed -n 's/^apps=//p' "$BASE/current/RELEASE")"
+# Nothing new in any of them: nothing is built.
+run
+expect_status 0
+expect_output "Nothing new: main is already deployed."
+# A commit of the second repository alone is a new release.
+STONES=$MORE make_apps_commit $MORE_2 "^0.2.0" "" recipes films
+deploy
+expect_status 0
+expect_output "The build holds 3 mini-apps (notes, films, recipes)."
+[[ $(current_release) != "$release_two" ]] || fail "\"current\" did not move"
+[[ $(sed -n 's/^apps=//p' "$BASE/current/RELEASE") == "$first_apps+$MORE_2" ]] || fail "RELEASE does not name the second repository's new commit"
+# One that git cannot use is named, and nothing is built.
+rm -r "$MORE/commits"
+run
+expect_status 1
+expect_output "ERROR: git cannot use $MORE (the mini-apps repository $MORE)."
+APPS=$STONES
 write_config 5
 end_test
 
