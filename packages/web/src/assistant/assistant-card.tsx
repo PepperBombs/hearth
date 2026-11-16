@@ -218,18 +218,25 @@ function AppChoices({ space, name }: { space: Space; name: string }) {
   const list = useSpaceApps(space);
   const label = useAppLabel();
   const key = spaceAppsKey(space.id);
+  // Kept here, not read off the mutation: with two choices on their way it only knows of the later one.
+  const [failed, setFailed] = useState(false);
 
   const change = useMutation({
     mutationFn: ({ appId, body }: Change) => setAppAccess(space.id, appId, body),
     onMutate: async (variables) => {
+      setFailed(false);
       await client.cancelQueries({ queryKey: key });
-      const before = client.getQueryData<SpaceApps>(key);
+      const was = client.getQueryData<SpaceApps>(key)?.apps.find((app) => app.id === variables.appId)?.assistant;
       client.setQueryData<SpaceApps>(key, (current) => (current ? applied(current, variables) : current));
-      return { before };
+      return { was };
     },
-    // What was shown ahead of the answer goes back at once: without a connection the list cannot be read again either.
-    onError: (_error, _variables, context) => {
-      if (context?.before) client.setQueryData<SpaceApps>(key, context.before);
+    // What was shown ahead of the answer goes back at once: without a connection the list cannot be read again
+    // either. Only this app's own box goes back, so that another choice on its way keeps what it shows.
+    onError: (_error, { appId }, context) => {
+      setFailed(true);
+      const was = context?.was;
+      if (was === undefined) return;
+      client.setQueryData<SpaceApps>(key, (current) => (current ? applied(current, { appId, body: { assistant: was } }) : current));
     },
     // Whether it was saved or not, the server says what is.
     onSettled: () =>
@@ -271,7 +278,7 @@ function AppChoices({ space, name }: { space: Space; name: string }) {
           {label(app.id).name}
         </Checkbox>
       ))}
-      <Problem>{change.isError ? t("assistant.saveFailed") : null}</Problem>
+      <Problem>{failed ? t("assistant.saveFailed") : null}</Problem>
     </fieldset>
   );
 }

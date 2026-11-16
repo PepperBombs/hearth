@@ -98,8 +98,13 @@ const LABEL_ID_LENGTH = 6;
 /** How a marked label ends. A group whose own name ends so is always marked itself. */
 const MARKED_LABEL = / \(id [^()\s]+\)$/;
 
-/** Names that read alike count as one name: "Family", "family" and a full-width "Ｆａｍｉｌｙ". */
-const foldedName = (name: string) => name.normalize("NFKC").toLowerCase();
+/**
+ * Names that read alike count as one name: "Family", "family", a full-width
+ * "Ｆａｍｉｌｙ", and one with characters nobody sees (a zero-width space) or
+ * with other spacing. Letters of another script that look the same do not.
+ */
+const foldedName = (name: string) =>
+  name.normalize("NFKC").replace(/\p{Default_Ignorable_Code_Point}/gu, "").replace(/\s+/gu, " ").trim().toLowerCase();
 
 /**
  * The name an assistant's tools take for each of one person's spaces, by
@@ -109,12 +114,15 @@ const foldedName = (name: string) => name.normalize("NFKC").toLowerCase();
  * start of their own ID, "Family (id 7f3k2q)", and none of them keeps the
  * bare name.
  *
- * A label must never come to mean another space while an assistant still
- * holds it: a person approves a change by the name they are shown. A bare
- * name is one no other of their spaces has, and a marked one carries the
- * ID of its own space, so a label that stops being true is refused instead
- * of landing elsewhere. The server (the tools) and the web app (the
- * Assistant card) both read the labels here, never by a rule of their own.
+ * A person approves a change by the name they are shown, so no single
+ * change (someone joining or leaving a group, or one rename) may make a
+ * label mean another space while an assistant still holds it: a bare name
+ * is one no other of their spaces has, and a marked one carries the ID of
+ * its own space, so a label that stops being true is refused instead of
+ * landing elsewhere. Only a name that one group gave up and another took
+ * (two renames) follows the name, as it does everywhere in Hearth. The
+ * server (the tools) and the web app (the Assistant card) both read the
+ * labels here, never by a rule of their own.
  */
 export function assistantSpaceLabels(spaces: readonly Pick<Space, "id" | "kind" | "name">[]): Map<string, string> {
   const named = spaces.map((space) => ({ space, name: space.kind === "personal" ? PERSONAL_SPACE_LABEL : space.name }));

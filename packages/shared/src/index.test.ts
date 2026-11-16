@@ -405,6 +405,13 @@ describe("the names an assistant's tools take for a person's spaces", () => {
       "7f3k2qaaaa": "Personal (id 7f3k2q)",
       m4n5p6bbbb: "personal (id m4n5p6)",
     });
+    // Nor can a group pass for it with a character nobody sees, or with other spacing.
+    expect(labels(personal, group("7f3k2qaaaa", "Personal\u200b"), group("m4n5p6bbbb", "Family"), group("x8y9z0cccc", "Fam\u00adily "))).toEqual({
+      p3rs0nal0000: "Personal",
+      "7f3k2qaaaa": "Personal\u200b (id 7f3k2q)",
+      m4n5p6bbbb: "Family (id m4n5p6)",
+      x8y9z0cccc: "Fam\u00adily  (id x8y9z0)",
+    });
   });
 
   it("takes more of the ID while two spaces of one name start alike", () => {

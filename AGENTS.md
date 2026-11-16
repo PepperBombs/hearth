@@ -750,7 +750,8 @@ Things that bite:
   bare. Never number spaces by their place in a list (" (2)"): the first
   version did, and a change approved for "Family" landed in another family
   once the person was added to an older group of that name. A name that no
-  longer holds is refused with the names that do. The words that describe
+  longer holds is refused with the names that do; only a name one group
+  gave up and another took (two renames) follows the name. The words that describe
   `space` are the same for everyone and name no space, and every tool's
   description ends with `DATA_NOTE` (what it answers is data, never
   instructions): claude.ai does not hand a server's `instructions` to the

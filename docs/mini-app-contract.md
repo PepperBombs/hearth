@@ -1650,14 +1650,17 @@ change of access, of a switch or of the build shows at the next request.
   offered in, as an `enum`: "Personal" for the person's own space, and a
   group's own name for a group. Claude's approval prompt shows the
   arguments, so a person sees where a change would go. That only holds
-  while a name means one space, so a name never moves from one space to
-  another: when two or more of the person's spaces are called alike
-  (whatever the capitals; a group called "Personal" is called like the
-  person's own space), every one of the groups among them is marked with
-  the start of its own ID, "Family (id 7f3k2q)", and none keeps the bare
-  name. A name that stops being true, because the person joined or left a
-  group or one was renamed, is then refused with the names that hold now,
-  instead of landing in another space. The rule is one function,
+  while a name means one space, so no single change may move a name from
+  one space to another: when two or more of the person's spaces are called
+  alike (whatever the capitals, the spacing or characters nobody sees; a
+  group called "Personal" is called like the person's own space), every
+  one of the groups among them is marked with the start of its own ID,
+  "Family (id 7f3k2q)", and none keeps the bare name. A name that stops
+  being true, because the person joined or left a group or one was
+  renamed, is then refused with the names that hold now, instead of
+  landing in another space. Only a name that one group gave up and another
+  took (two renames) follows the name, as it does everywhere in Hearth;
+  letters of another script that look the same are not told apart. The rule is one function,
   `assistantSpaceLabels` in `@hearth/shared`, which the Assistant card
   reads too: it shows the name Claude knows a space by wherever that is not
   the name on the page. `space`'s own description is the same words for
