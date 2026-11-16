@@ -136,6 +136,7 @@ test.describe("groups in Settings", () => {
           name: "Family",
           role: "member",
           canAddApps: false,
+          assistant: "none",
           members: [
             { id: LIN.id, name: LIN.name, role: "owner" },
             { id: session.user.id, name: session.user.name, role: "member" },

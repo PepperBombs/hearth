@@ -34,10 +34,10 @@ const LEVELS: readonly { value: MemberAccess; label: PlainMessageKey; asEveryone
 /** The value of a member's cell that means "no exception": they get what everyone gets. */
 const AS_EVERYONE = "everyone";
 
-type Change = { appId: string; body: AppAccessRequest };
+export type Change = { appId: string; body: AppAccessRequest };
 
 /** The owners' list with a change applied, to show it before the server has answered. */
-function applied(list: SpaceApps, { appId, body }: Change): SpaceApps {
+export function applied(list: SpaceApps, { appId, body }: Change): SpaceApps {
   return {
     ...list,
     apps: list.apps.map((app) => {
@@ -47,13 +47,13 @@ function applied(list: SpaceApps, { appId, body }: Change): SpaceApps {
         if (level === null) delete members[memberId];
         else members[memberId] = level;
       }
-      return { ...app, memberAccess: body.memberAccess ?? app.memberAccess, members };
+      return { ...app, memberAccess: body.memberAccess ?? app.memberAccess, members, assistant: body.assistant ?? app.assistant };
     }),
   };
 }
 
 /** The name and icon of an app as this browser knows it: from the session, else the build, else its ID. */
-function useAppLabel(): (appId: string) => { name: string; icon: string; color: string } {
+export function useAppLabel(): (appId: string) => { name: string; icon: string; color: string } {
   const session = useSession();
   const bundled = useBundledApps();
   const { locale } = useI18n();

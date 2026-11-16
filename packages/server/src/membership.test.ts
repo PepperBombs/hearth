@@ -57,6 +57,7 @@ describe("resolveMember", () => {
         name: "",
         role: "owner",
         canAddApps: true,
+        assistant: "none",
         members: [{ id: user!.id, name: "owner", role: "owner" }],
       },
     ]);
@@ -98,6 +99,7 @@ describe("resolveMember", () => {
         name: "",
         role: "owner",
         canAddApps: true,
+        assistant: "none",
         // Their own space holds them alone: the owner of the server is not in it.
         members: [{ id: lin.id, name: "lin", role: "owner" }],
       },

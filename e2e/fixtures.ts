@@ -67,6 +67,7 @@ export function emptySession(overrides: Partial<Session["user"]> = {}): Session 
         name: "",
         role: "owner",
         canAddApps: true,
+        assistant: "none",
         members: [{ id: user.id, name: user.name, role: "owner" }],
       },
     ],
@@ -122,6 +123,7 @@ export function sessionWithApps(overrides: Partial<Session["user"]> = {}): Sessi
         name: "Family",
         role: "owner",
         canAddApps: true,
+        assistant: "none",
         members: [
           { id: session.user.id, name: session.user.name, role: "owner" },
           { id: "user-2", name: "Lin Example", role: "member" },
@@ -342,10 +344,10 @@ export class FakeApi {
         if (!listed) this.setSession({ ...this.current, apps: [...this.current.apps, sampleApp(appId as SampleAppId, spaceId)] });
         const entry = owners?.apps.find((candidate) => candidate.id === appId);
         if (owners && !entry) {
-          owners.apps.push({ id: appId, hasCode: true, removedAt: null, rowCount: 0, memberAccess: parsed.data.memberAccess ?? "none", members: {} });
+          owners.apps.push({ id: appId, hasCode: true, removedAt: null, rowCount: 0, memberAccess: parsed.data.memberAccess ?? "none", members: {}, assistant: true });
         }
         // A removed app comes back with its data, and who can use it starts afresh, as on the server.
-        if (entry && entry.removedAt !== null) Object.assign(entry, { removedAt: null, memberAccess: parsed.data.memberAccess ?? "none", members: {} });
+        if (entry && entry.removedAt !== null) Object.assign(entry, { removedAt: null, memberAccess: parsed.data.memberAccess ?? "none", members: {}, assistant: true });
         return route.fulfill({ status: 204 });
       }
       if (method === "DELETE" && listed) {
@@ -416,6 +418,7 @@ export class FakeApi {
         name: parsed.data.name,
         role: "owner" as const,
         canAddApps: true,
+        assistant: "none" as const,
         members: [{ id: me.id, name: me.name, role: "owner" as const }],
       };
       this.setSession({ ...this.current, spaces: [...this.current.spaces, space] });
@@ -529,7 +532,7 @@ export class FakeApi {
     return {
       apps: this.current.apps
         .filter((app) => app.spaceId === space.id)
-        .map((app) => ({ id: app.id, hasCode: true, removedAt: null, rowCount: 0, memberAccess: "none" as const, members: {} })),
+        .map((app) => ({ id: app.id, hasCode: true, removedAt: null, rowCount: 0, memberAccess: "none" as const, members: {}, assistant: true })),
       members: space.members.map((member) => {
         const known = member.id === me.id ? me : this.people.find((person) => person.id === member.id);
         return { ...member, email: known?.email ?? `${member.id}@example.com`, canAddApps: false };
@@ -569,6 +572,8 @@ export class FakeApi {
       memberAccess: parsed.data.memberAccess ?? "none",
       // Someone who is not an owner there keeps edit for themselves, as when they add an app.
       members: to.role === "owner" ? {} : { [this.current.user.id]: "edit" },
+      // What an assistant may do with it starts afresh too, as on the server.
+      assistant: true,
     });
     // The mover can always use it where it went: as an owner, or by that exception.
     this.setSession({ ...this.current, apps: this.current.apps.map((app) => (app === listed ? { ...app, spaceId: to.id, access: "edit" } : app)) });
@@ -665,6 +670,7 @@ export function ownAFamily(api: FakeApi, user: Partial<Session["user"]> = {}): v
         name: "Family",
         role: "owner",
         canAddApps: true,
+        assistant: "none",
         members: [
           { id: me.id, name: me.name, role: "owner" },
           { id: LIN.id, name: LIN.name, role: "member" },
@@ -675,7 +681,7 @@ export function ownAFamily(api: FakeApi, user: Partial<Session["user"]> = {}): v
     apps: [sampleApp("checklist", FAMILY_SPACE)],
   });
   api.groups[FAMILY_SPACE] = {
-    apps: [{ id: "checklist", hasCode: true, removedAt: null, rowCount: 3, memberAccess: "view", members: { [KIM.id]: "edit" } }],
+    apps: [{ id: "checklist", hasCode: true, removedAt: null, rowCount: 3, memberAccess: "view", members: { [KIM.id]: "edit" }, assistant: true }],
     members: [
       { ...me, role: "owner", canAddApps: false },
       { ...LIN, role: "member", canAddApps: false },

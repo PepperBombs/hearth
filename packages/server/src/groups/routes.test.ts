@@ -118,6 +118,7 @@ describe("creating a group", () => {
       role: "owner",
       canAddApps: true,
       members: [{ id: world.sam.id, name: world.sam.name, role: "owner" }],
+      assistant: "none",
     });
     // Groups come after the personal space, oldest first.
     expect((await sessionOf(SAM)).spaces.map((entry) => entry.name)).toEqual(["", "Family", "Book club"]);

@@ -12,6 +12,7 @@ import {
   type AddMemberRequest,
   type AddMemberResponse,
   type AppAccessRequest,
+  type MemberAccess,
   type MemberPatch,
   type Space,
   type SpaceApps,
@@ -83,5 +84,14 @@ export async function setAppAccess(spaceId: string, appId: string, body: AppAcce
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
+  });
+}
+
+/** PUT .../assistant: what an assistant may do in the space (docs/mini-app-contract.md, section F). Owners only. */
+export async function setAssistantLevel(spaceId: string, level: MemberAccess): Promise<void> {
+  await request(spaceAddress(spaceId, "assistant"), {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ level }),
   });
 }

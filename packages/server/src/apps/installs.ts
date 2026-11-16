@@ -27,6 +27,9 @@ import { notFound, Refusal } from "../http/errors";
 import type { Registry } from "./registry";
 import { countRows, deleteAllData, deleteOwnSettingsOfOthers } from "./store";
 
+/** What a person may do with an install: "edit" for an owner of the space, else their exception or every member's level. */
+const ACCESS = `CASE WHEN m.role = 'owner' THEN 'edit' ELSE coalesce(x.level, a.member_access) END`;
+
 /**
  * The installs a person can reach and what they may do with each: one row
  * for every app that is in a space they belong to and has not been removed.
@@ -34,12 +37,22 @@ import { countRows, deleteAllData, deleteOwnSettingsOfOthers } from "./store";
  * made for them, or else what the app gives every member; that may be
  * "none". Their own switch and pin come along, defaulting to on and unpinned.
  *
+ * `assistant` is what an assistant may do with the app for them
+ * (docs/mini-app-contract.md, section F): the lesser of their access and
+ * what the space's owners allow an assistant there, and "none" for an app
+ * the owners left out.
+ *
  * Callers add conditions and an order, and drop apps the server has no code for.
  */
 const VISIBLE = `
   SELECT a.space_id AS spaceId,
          a.app_id AS appId,
-         CASE WHEN m.role = 'owner' THEN 'edit' ELSE coalesce(x.level, a.member_access) END AS access,
+         ${ACCESS} AS access,
+         CASE
+           WHEN a.assistant = 0 OR s.assistant = 'none' OR ${ACCESS} = 'none' THEN 'none'
+           WHEN s.assistant = 'view' OR ${ACCESS} = 'view' THEN 'view'
+           ELSE 'edit'
+         END AS assistant,
          coalesce(p.enabled, 1) AS enabled,
          coalesce(p.pinned, 0) AS pinned
     FROM space_members m
@@ -55,18 +68,28 @@ type VisibleRow = {
   spaceId: string;
   appId: string;
   access: MemberAccess;
+  assistant: MemberAccess;
   enabled: 0 | 1;
   pinned: 0 | 1;
 };
 
 /**
+ * Who is asking: the person themselves, through the web app or an app's
+ * own tests, or an assistant acting for them (docs/mini-app-contract.md,
+ * section F), which may do no more than the space's owners allow it.
+ */
+export type Caller = "person" | "assistant";
+
+/**
  * What a person may do with an app in a space: "view", "edit", or null.
+ * With `by: "assistant"`, what an assistant may do with it for them.
  *
  * Null means the app is not there for them, whatever the reason: they are
  * not in the space, the space does not have the app, the app was removed
- * from it, the server holds no code for it, or their access is "none".
- * Every route about one app answers 404 `not_found` for null, so that none
- * of those reasons can be told apart.
+ * from it, the server holds no code for it, or their access is "none"; for
+ * an assistant also that the space's owners allow it nothing there, or left
+ * the app out. Every route about one app answers 404 `not_found` for null,
+ * so that none of those reasons can be told apart.
  */
 export function resolveInstall(
   db: Db,
@@ -74,13 +97,39 @@ export function resolveInstall(
   userId: string,
   spaceId: string,
   appId: string,
+  by: Caller = "person",
 ): AccessLevel | null {
   if (!registry.has(appId)) return null;
   const row = db
     .prepare(`${VISIBLE} AND a.space_id = @spaceId AND a.app_id = @appId`)
     .get({ userId, spaceId, appId }) as VisibleRow | undefined;
-  if (!row || row.access === "none") return null;
-  return row.access;
+  const level = row === undefined ? "none" : by === "assistant" ? row.assistant : row.access;
+  return level === "none" ? null : level;
+}
+
+/** One app in one space that an assistant may use for a person, and what it may do there. */
+export type AssistantInstall = { spaceId: string; appId: string; access: AccessLevel };
+
+/**
+ * Every install an assistant may use for a person: in the order of the
+ * session's apps, those the person has switched on for themselves, with
+ * what the assistant may do with each. Apps the server holds no code for
+ * are left out.
+ */
+export function listAssistantInstalls(db: Db, registry: Registry, userId: string): AssistantInstall[] {
+  const rows = db
+    .prepare(
+      `${VISIBLE}
+        ORDER BY CASE s.kind WHEN 'personal' THEN 0 ELSE 1 END, s.created_at, s.id,
+                 a.created_at, a.app_id`,
+    )
+    .all({ userId }) as VisibleRow[];
+  const installs: AssistantInstall[] = [];
+  for (const row of rows) {
+    if (row.assistant === "none" || row.enabled !== 1 || !registry.has(row.appId)) continue;
+    installs.push({ spaceId: row.spaceId, appId: row.appId, access: row.assistant });
+  }
+  return installs;
 }
 
 /**
@@ -209,7 +258,7 @@ export function addApp(
       // Only an owner gets here: a removed app is visible to nobody else.
       db.prepare("DELETE FROM app_access WHERE space_id = ? AND app_id = ?").run(spaceId, appId);
       db.prepare(
-        `UPDATE space_apps SET removed_at = NULL, member_access = ?
+        `UPDATE space_apps SET removed_at = NULL, assistant = 1, member_access = ?
           WHERE space_id = ? AND app_id = ?`,
       ).run(request.memberAccess ?? "none", spaceId, appId);
       return "restored";
@@ -264,12 +313,12 @@ export function listSpaceApps(db: Db, registry: Registry, request: { userId: str
       }
       const installs = db
         .prepare(
-          `SELECT app_id AS id, member_access AS memberAccess, removed_at AS removedAt
+          `SELECT app_id AS id, member_access AS memberAccess, removed_at AS removedAt, assistant
              FROM space_apps
             WHERE space_id = ?
             ORDER BY created_at, app_id`,
         )
-        .all(spaceId) as Pick<InstalledApp, "id" | "memberAccess" | "removedAt">[];
+        .all(spaceId) as (Pick<InstalledApp, "id" | "memberAccess" | "removedAt"> & { assistant: 0 | 1 })[];
       const exceptions = db
         .prepare("SELECT app_id AS appId, user_id AS userId, level FROM app_access WHERE space_id = ? ORDER BY user_id")
         .all(spaceId) as { appId: string; userId: string; level: MemberAccess }[];
@@ -283,6 +332,7 @@ export function listSpaceApps(db: Db, registry: Registry, request: { userId: str
           members: Object.fromEntries(
             exceptions.filter((exception) => exception.appId === install.id).map((exception) => [exception.userId, exception.level]),
           ),
+          assistant: install.assistant === 1,
         }),
       );
       return { apps, members: listMemberDetails(db, spaceId), invitations: listInvitations(db, spaceId) };
@@ -317,6 +367,13 @@ export function setAppAccess(db: Db, registry: Registry, request: AppRequest & {
     if (change.memberAccess !== undefined) {
       db.prepare("UPDATE space_apps SET member_access = ? WHERE space_id = ? AND app_id = ?").run(
         change.memberAccess,
+        spaceId,
+        appId,
+      );
+    }
+    if (change.assistant !== undefined) {
+      db.prepare("UPDATE space_apps SET assistant = ? WHERE space_id = ? AND app_id = ?").run(
+        change.assistant ? 1 : 0,
         spaceId,
         appId,
       );
@@ -423,7 +480,8 @@ export function moveApp(
     ).run({ spaceId, appId, toSpaceId });
     deleteOwnSettingsOfOthers(db, spaceId, appId, toSpaceId);
 
-    db.prepare("UPDATE space_apps SET space_id = ?, member_access = ? WHERE space_id = ? AND app_id = ?").run(
+    // Access starts afresh where the app goes, and so does what an assistant may do with it.
+    db.prepare("UPDATE space_apps SET space_id = ?, member_access = ?, assistant = 1 WHERE space_id = ? AND app_id = ?").run(
       toSpaceId,
       request.memberAccess ?? "none",
       spaceId,

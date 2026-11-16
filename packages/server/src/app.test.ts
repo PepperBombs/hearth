@@ -144,6 +144,7 @@ describe("GET /api/session", () => {
           name: "",
           role: "owner",
           canAddApps: true,
+          assistant: "none",
           members: [{ id: session.user.id, name: "owner", role: "owner" }],
         },
       ],
@@ -400,9 +401,12 @@ describe("unknown routes and errors", () => {
     await expectError(await app.request(`${BASE}${path}`, { method }), 404, "not_found");
   });
 
-  it("answers 404 to writes outside /api", async () => {
+  it("answers 404 to writes outside /api, but for the assistant's endpoint", async () => {
     const { app } = testApp();
     await expectError(await app.request(`${BASE}/`, { method: "POST" }), 404, "not_found");
+    await expectError(await app.request(`${BASE}/apps`, { method: "POST" }), 404, "not_found");
+    // The MCP endpoint (src/assistant/mcp.ts) needs a sign-in, as /api does.
+    await expectError(await app.request(`${BASE}/mcp`, { method: "POST" }), 401, "unauthenticated");
   });
 
   it("never leaks what went wrong", async () => {

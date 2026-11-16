@@ -32,10 +32,10 @@ const me = { id: "u1", name: "Sam Example", role: "owner" as const };
 const session: Session = {
   user: { id: "u1", email: "sam@example.com", name: "Sam Example", locale: "en", theme: "light" },
   spaces: [
-    { id: "p", kind: "personal", name: "", role: "owner", canAddApps: true, members: [me] },
-    { id: "f", kind: "group", name: "Family", role: "owner", canAddApps: true, members: [me] },
-    { id: "b", kind: "group", name: "Book club", role: "owner", canAddApps: true, members: [me] },
-    { id: "w", kind: "group", name: "Work", role: "owner", canAddApps: true, members: [me] },
+    { id: "p", kind: "personal", name: "", role: "owner", canAddApps: true, assistant: "none", members: [me] },
+    { id: "f", kind: "group", name: "Family", role: "owner", canAddApps: true, assistant: "none", members: [me] },
+    { id: "b", kind: "group", name: "Book club", role: "owner", canAddApps: true, assistant: "none", members: [me] },
+    { id: "w", kind: "group", name: "Work", role: "owner", canAddApps: true, assistant: "none", members: [me] },
   ],
   apps: [
     // The personal space has a widget and nothing to open.

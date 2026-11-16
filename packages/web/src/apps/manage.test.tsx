@@ -97,13 +97,14 @@ function sessionWith(apps: AppSummary[], options: { locale?: "en" | "zh"; family
   return {
     user: me,
     spaces: [
-      { id: PERSONAL, kind: "personal", name: "", role: "owner", canAddApps: true, members: [{ id: me.id, name: me.name, role: "owner" }] },
+      { id: PERSONAL, kind: "personal", name: "", role: "owner", canAddApps: true, assistant: "none", members: [{ id: me.id, name: me.name, role: "owner" }] },
       {
         id: FAMILY,
         kind: "group",
         name: "Family",
         role,
         canAddApps: options.canAdd ?? role === "owner",
+        assistant: "none",
         members: [
           { id: me.id, name: me.name, role },
           { id: "u2", name: "Lin Example", role: role === "owner" ? "member" : "owner" },
@@ -215,6 +216,7 @@ class FakeServer {
       rowCount,
       memberAccess: "none" as const,
       members: {},
+      assistant: true,
     });
     return {
       apps: [

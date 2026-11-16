@@ -259,6 +259,8 @@ describe("GET /api/spaces/:spaceId/apps", () => {
     install(world.db, world.family, "retired", world.sam.id, { memberAccess: "edit", createdAt: "2026-01-07T00:00:00.000Z" });
     grant(world.db, world.family, "checklist", world.lin.id, "edit", world.sam.id);
     grant(world.db, world.family, "checklist", world.kim.id, "none", world.sam.id);
+    // Left out of what an assistant may use.
+    world.db.prepare("UPDATE space_apps SET assistant = 0 WHERE space_id = ? AND app_id = 'retired'").run(world.family);
     for (const name of ["Milk", "Bread"]) {
       expect((await mutate(SAM, world.family, "checklist", "add", { name })).status).toBe(200);
     }
@@ -278,9 +280,10 @@ describe("GET /api/spaces/:spaceId/apps", () => {
           rowCount: 2,
           memberAccess: "view",
           members: { [world.lin.id]: "edit", [world.kim.id]: "none" },
+          assistant: true,
         },
-        { id: "journal", hasCode: true, removedAt: NOW, rowCount: 0, memberAccess: "none", members: {} },
-        { id: "retired", hasCode: false, removedAt: null, rowCount: 0, memberAccess: "edit", members: {} },
+        { id: "journal", hasCode: true, removedAt: NOW, rowCount: 0, memberAccess: "none", members: {}, assistant: true },
+        { id: "retired", hasCode: false, removedAt: null, rowCount: 0, memberAccess: "edit", members: {}, assistant: false },
       ],
       members: [
         { id: world.sam.id, name: "owner", role: "owner", email: SAM, canAddApps: false },
@@ -302,7 +305,7 @@ describe("GET /api/spaces/:spaceId/apps", () => {
   it("works for a personal space too, whose one member is its owner", async () => {
     install(world.db, world.linsSpace, "checklist", world.lin.id, { removedAt: NOW });
     expect(await listOf(LIN, world.linsSpace)).toEqual({
-      apps: [{ id: "checklist", hasCode: true, removedAt: NOW, rowCount: 0, memberAccess: "none", members: {} }],
+      apps: [{ id: "checklist", hasCode: true, removedAt: NOW, rowCount: 0, memberAccess: "none", members: {}, assistant: true }],
       members: [{ id: world.lin.id, name: "lin", role: "owner", email: LIN, canAddApps: false }],
       invitations: [],
     });

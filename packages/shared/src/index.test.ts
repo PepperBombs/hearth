@@ -6,12 +6,14 @@ import {
   addMemberResponseSchema,
   apiErrorSchema,
   appAccessRequestSchema,
+  assistantLevelRequestSchema,
   appCallRequestSchema,
   appCallResponseSchema,
   appPrefsPatchSchema,
   appSettingsPatchSchema,
   appSettingsSchema,
   appSummarySchema,
+  assistantSpaceLabels,
   createSpaceRequestSchema,
   deleteAppDataRequestSchema,
   JOB_STATES,
@@ -19,6 +21,7 @@ import {
   jobStatusSchema,
   memberPatchSchema,
   moveAppRequestSchema,
+  PERSONAL_SPACE_LABEL,
   sessionSchema,
   spaceAppsSchema,
   spacePatchSchema,
@@ -50,6 +53,7 @@ const space: Session["spaces"][number] = {
   name: "Family",
   role: "member",
   canAddApps: false,
+  assistant: "none",
   members: [
     { id: "user-1", name: "Sam Example", role: "owner" },
     { id: "user-2", name: "Lin Example", role: "member" },
@@ -103,7 +107,7 @@ describe("the session", () => {
     expect(accepts(appSummarySchema, { ...app, widgetSize: "huge" })).toBe(false);
   });
 
-  it.each(["canAddApps", "members", "role"] as const)("needs %s on every space", (key) => {
+  it.each(["canAddApps", "members", "role", "assistant"] as const)("needs %s on every space", (key) => {
     expect(accepts(spaceSchema, without(space, key))).toBe(false);
   });
 
@@ -148,6 +152,7 @@ describe("request bodies", () => {
       [deleteAppDataRequestSchema, { confirm: "checklist" }],
       [moveAppRequestSchema, { toSpaceId: "space-2" }],
       [appAccessRequestSchema, { memberAccess: "edit" }],
+      [assistantLevelRequestSchema, { level: "view" }],
       [appPrefsPatchSchema, { pinned: true }],
       [appSettingsPatchSchema, { user: { hideDone: true } }],
       [appCallRequestSchema, { input: { id: "row-1" } }],
@@ -210,6 +215,18 @@ describe("request bodies", () => {
     expect(accepts(appAccessRequestSchema, { memberAccess: null })).toBe(false);
   });
 
+  it("leave an app out of what an assistant may use, and set what it may do in a space", () => {
+    expect(appAccessRequestSchema.parse({ assistant: false })).toEqual({ assistant: false });
+    expect(accepts(appAccessRequestSchema, { assistant: "no" })).toBe(false);
+    expect(accepts(appAccessRequestSchema, { assistant: null })).toBe(false);
+    for (const level of ["none", "view", "edit"]) {
+      expect(assistantLevelRequestSchema.parse({ level })).toEqual({ level });
+    }
+    for (const body of [{}, { level: "admin" }, { level: null }, { level: true }]) {
+      expect(accepts(assistantLevelRequestSchema, body), JSON.stringify(body)).toBe(false);
+    }
+  });
+
   it("need the typed confirmation to delete an app's data", () => {
     expect(accepts(deleteAppDataRequestSchema, {})).toBe(false);
     expect(accepts(deleteAppDataRequestSchema, { confirm: true })).toBe(false);
@@ -243,8 +260,8 @@ describe("request bodies", () => {
 describe("what the owners of a space see", () => {
   const view = {
     apps: [
-      { id: "checklist", hasCode: true, removedAt: null, rowCount: 12, memberAccess: "view", members: { "user-2": "edit" } },
-      { id: "retired", hasCode: false, removedAt: "2026-01-01T00:00:00.000Z", rowCount: 0, memberAccess: "none", members: {} },
+      { id: "checklist", hasCode: true, removedAt: null, rowCount: 12, memberAccess: "view", members: { "user-2": "edit" }, assistant: true },
+      { id: "retired", hasCode: false, removedAt: "2026-01-01T00:00:00.000Z", rowCount: 0, memberAccess: "none", members: {}, assistant: false },
     ],
     members: [
       { id: "user-1", name: "Sam Example", role: "owner", email: "sam@example.com", canAddApps: false },
@@ -338,5 +355,85 @@ describe("what a job's status means to the people who see the app", () => {
     expect(jobStateOf({ ...status, state: "running" }).running).toBe(true);
     expect(jobStateOf({ ...status, state: "requested" }).running).toBe(true);
     expect(jobStateOf({ ...status, state: "idle" }).running).toBe(false);
+  });
+});
+
+describe("the names an assistant's tools take for a person's spaces", () => {
+  const personal = { id: "p3rs0nal0000", kind: "personal" as const, name: "" };
+  const group = (id: string, name: string) => ({ id, kind: "group" as const, name });
+  const labels = (...spaces: { id: string; kind: "personal" | "group"; name: string }[]) =>
+    Object.fromEntries(assistantSpaceLabels(spaces));
+
+  it("calls the person's own space Personal, and a group by its name", () => {
+    expect(PERSONAL_SPACE_LABEL).toBe("Personal");
+    expect(labels(personal, group("7f3k2qaaaa", "Family"), group("m4n5p6bbbb", "Hiking club"))).toEqual({
+      p3rs0nal0000: "Personal",
+      "7f3k2qaaaa": "Family",
+      m4n5p6bbbb: "Hiking club",
+    });
+  });
+
+  it("marks every space of a name two share with the start of its own ID, and leaves none of them bare", () => {
+    expect(labels(personal, group("7f3k2qaaaa", "Family"), group("m4n5p6bbbb", "Family"), group("x8y9z0cccc", "Home"))).toEqual({
+      p3rs0nal0000: "Personal",
+      "7f3k2qaaaa": "Family (id 7f3k2q)",
+      m4n5p6bbbb: "Family (id m4n5p6)",
+      x8y9z0cccc: "Home",
+    });
+  });
+
+  it("gives a space the same label whichever other spaces are listed before or after it", () => {
+    const older = group("7f3k2qaaaa", "Family");
+    const newer = group("m4n5p6bbbb", "Family");
+    expect(assistantSpaceLabels([older, newer]).get("m4n5p6bbbb")).toBe("Family (id m4n5p6)");
+    expect(assistantSpaceLabels([newer, older]).get("m4n5p6bbbb")).toBe("Family (id m4n5p6)");
+    // Alone again, it is the only Family the person has.
+    expect(assistantSpaceLabels([newer]).get("m4n5p6bbbb")).toBe("Family");
+  });
+
+  it("counts names that read alike as one name", () => {
+    expect(labels(group("7f3k2qaaaa", "Family"), group("m4n5p6bbbb", "family"), group("x8y9z0cccc", "Ｆａｍｉｌｙ"))).toEqual({
+      "7f3k2qaaaa": "Family (id 7f3k2q)",
+      m4n5p6bbbb: "family (id m4n5p6)",
+      x8y9z0cccc: "Ｆａｍｉｌｙ (id x8y9z0)",
+    });
+  });
+
+  it("keeps Personal for the person's own space when a group is called that", () => {
+    expect(labels(personal, group("7f3k2qaaaa", "Personal"), group("m4n5p6bbbb", "personal"))).toEqual({
+      p3rs0nal0000: "Personal",
+      "7f3k2qaaaa": "Personal (id 7f3k2q)",
+      m4n5p6bbbb: "personal (id m4n5p6)",
+    });
+    // Nor can a group pass for it with a character nobody sees, or with other spacing.
+    expect(labels(personal, group("7f3k2qaaaa", "Personal\u200b"), group("m4n5p6bbbb", "Family"), group("x8y9z0cccc", "Fam\u00adily "))).toEqual({
+      p3rs0nal0000: "Personal",
+      "7f3k2qaaaa": "Personal\u200b (id 7f3k2q)",
+      m4n5p6bbbb: "Family (id m4n5p6)",
+      x8y9z0cccc: "Fam\u00adily  (id x8y9z0)",
+    });
+  });
+
+  it("takes more of the ID while two spaces of one name start alike", () => {
+    expect(labels(group("7f3k2qaaaa", "Family"), group("7f3k2qabbb", "Family"), group("m4n5p6bbbb", "Family"))).toEqual({
+      "7f3k2qaaaa": "Family (id 7f3k2qaa)",
+      "7f3k2qabbb": "Family (id 7f3k2qab)",
+      m4n5p6bbbb: "Family (id m4n5p6)",
+    });
+    // A short ID is used whole.
+    expect(labels(group("ab", "Family"), group("cd", "Family"))).toEqual({ ab: "Family (id ab)", cd: "Family (id cd)" });
+  });
+
+  it("marks a group whose own name ends like a mark, so that no name can pass for another space's label", () => {
+    // Someone renames their group to what another of the person's spaces was called by the assistant.
+    expect(labels(group("7f3k2qaaaa", "Family (id m4n5p6)"), group("m4n5p6bbbb", "Family"))).toEqual({
+      "7f3k2qaaaa": "Family (id m4n5p6) (id 7f3k2q)",
+      m4n5p6bbbb: "Family",
+    });
+    // An ordinary bracket is a name like any other.
+    expect(labels(group("7f3k2qaaaa", "Trip (2026)"), group("m4n5p6bbbb", "Family (summer)"))).toEqual({
+      "7f3k2qaaaa": "Trip (2026)",
+      m4n5p6bbbb: "Family (summer)",
+    });
   });
 });

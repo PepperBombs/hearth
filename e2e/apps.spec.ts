@@ -34,6 +34,7 @@ test.describe("the Apps page", () => {
           name: "Family",
           role: "owner",
           canAddApps: true,
+          assistant: "none",
           members: [
             { id: session.user.id, name: session.user.name, role: "owner" },
             { id: "user-2", name: "Lin Example", role: "member" },
@@ -60,7 +61,7 @@ test.describe("the Apps page", () => {
 
   test("says, before an app the family removed is added again, that its data comes back with it", async ({ page, api }) => {
     ownAFamily(api);
-    api.groups[FAMILY_SPACE]!.apps.push({ id: "feed", hasCode: true, removedAt: "2026-11-01T08:00:00.000Z", rowCount: 4, memberAccess: "view", members: {} });
+    api.groups[FAMILY_SPACE]!.apps.push({ id: "feed", hasCode: true, removedAt: "2026-11-01T08:00:00.000Z", rowCount: 4, memberAccess: "view", members: {}, assistant: true });
     await page.goto("/apps");
 
     await spaceCard(page, "Family").getByRole("button", { name: "Add an app" }).click();

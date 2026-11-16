@@ -230,4 +230,20 @@ export const MIGRATIONS: readonly Migration[] = [
       ) STRICT;
     `,
   },
+  {
+    // The assistant (docs/mini-app-contract.md, section F, "The switches").
+    // What it may do is worked out in VISIBLE (src/apps/installs.ts).
+    id: 4,
+    name: "assistant",
+    sql: `
+      -- What an assistant may do in the space, for the people in it: nothing, read, or read and
+      -- change. Its owners choose; every space starts with nothing.
+      ALTER TABLE spaces ADD COLUMN assistant TEXT NOT NULL DEFAULT 'none'
+        CHECK (assistant IN ('none', 'view', 'edit'));
+
+      -- 0 when the space's owners left the app out: an assistant gets nothing of it there.
+      ALTER TABLE space_apps ADD COLUMN assistant INTEGER NOT NULL DEFAULT 1
+        CHECK (assistant IN (0, 1));
+    `,
+  },
 ];
