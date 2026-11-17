@@ -45,10 +45,11 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
 .box { min-height: 76px; max-height: 320px; padding: 8px 10px; resize: vertical; field-sizing: content; }
 .input::placeholder, .box::placeholder { color: var(--hearth-text-3); opacity: 1; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* A chip grows with a long tag that wraps (30 Chinese characters do on a phone) rather than spill out of it. */
 .chip {
-  display: inline-flex; align-items: center; height: 28px; padding: 0 10px;
-  border: 1px solid var(--hearth-line); border-radius: 999px; background: transparent;
-  color: var(--hearth-text-2); font-size: 13px;
+  display: inline-flex; align-items: center; min-height: 28px; padding: 2px 10px;
+  border: 1px solid var(--hearth-line); border-radius: 14px; background: transparent;
+  color: var(--hearth-text-2); font-size: 13px; line-height: 20px; text-align: start; overflow-wrap: anywhere;
 }
 .chip[aria-pressed="true"] { border-color: var(--hearth-accent); background: var(--hearth-accent-soft); color: var(--hearth-accent-text); font-weight: 500; }
 .chip-count { margin-left: 6px; font-size: 12px; color: var(--hearth-text-3); }
@@ -61,7 +62,7 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
   .btn.sm { height: 44px; padding: 0 12px; }
   .input { height: 44px; font-size: 16px; }
   .box { font-size: 16px; }
-  .chip { height: 36px; padding: 0 14px; }
+  .chip { min-height: 36px; padding: 2px 14px; border-radius: 18px; }
   .seg button { height: 40px; padding: 0 16px; }
   .row { min-height: 44px; }
   .shortcut { display: none; }
@@ -78,12 +79,13 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
 .timeline { display: flex; flex-direction: column; gap: 10px; }
 .idea { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--hearth-line); border-radius: 8px; }
 .idea-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.tag { padding: 0; border: 0; border-radius: 4px; background: none; color: var(--hearth-accent-text); }
+.tag { padding: 0; border: 0; border-radius: 4px; background: none; color: var(--hearth-accent-text); text-align: start; }
 .tag[aria-pressed="true"] { font-weight: 500; }
 @media (hover: hover) { .tag:hover { text-decoration: underline; } }
 .idea-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-width: 0; font-size: 12px; line-height: 20px; color: var(--hearth-text-3); }
 .pinned { display: inline-flex; align-items: center; gap: 4px; font-weight: 500; color: var(--hearth-text-2); }
+.author { min-width: 0; overflow-wrap: anywhere; }
 .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-left: auto; }
 .confirm { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; background: var(--hearth-surface-2); }
 .confirm-title { font-weight: 600; }
@@ -128,6 +130,13 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
   const CAN_EDIT = H.access === "edit";
   const PAGE = H.view === "page";
   document.documentElement.lang = ZH ? "zh-CN" : "en";
+  /** In a group, an idea names who wrote it: the members' names, by their IDs (a name is never translated). */
+  const GROUP = !!H.space && H.space.kind === "group";
+  const NAMES = new Map(
+    (GROUP && Array.isArray(H.space.members) ? H.space.members : [])
+      .filter((member) => member && typeof member.id === "string" && typeof member.name === "string")
+      .map((member) => [member.id, member.name]),
+  );
 
   /* ---------------------------------------------------------------------
    * Every interface string, in English and Chinese. What people write is
@@ -176,6 +185,7 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
       changeFailed: "The idea could not be changed.",
       deleteFailed: "The idea could not be deleted.",
       gone: "That idea is gone: someone deleted it.",
+      pinArchived: "An archived idea cannot be pinned. Bring it back first.",
       full: "This space holds 5000 ideas, as many as it can. Delete some of them first.",
       tooLong: "An idea holds at most 4000 characters.",
       dismiss: "Dismiss",
@@ -228,6 +238,7 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
       changeFailed: "无法修改这个想法。",
       deleteFailed: "无法删除这个想法。",
       gone: "这个想法已经被别人删除了。",
+      pinArchived: "已归档的想法不能置顶。请先恢复它。",
       full: "这个空间已经有 5000 个想法，不能再多了。请先删除一些。",
       tooLong: "一个想法最多 4000 个字。",
       dismiss: "关闭",
@@ -240,6 +251,7 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
     },
   };
   const WORDS = ZH ? TEXT.zh : TEXT.en;
+  document.title = ZH ? "想法" : "Ideas";
   function t(key, values) {
     const text = WORDS[key] ?? TEXT.en[key] ?? key;
     return values === undefined ? text : text.replace(/\{(\w+)\}/g, (whole, name) => (name in values ? String(values[name]) : whole));
@@ -278,7 +290,10 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
   const tagsOf = (text) => [...new Set(findTags(text).map((found) => found.tag))];
   /** The words of a search, folded. Nothing typed, or spaces alone, is no word: everything matches. */
   const searchWords = (search) => fold(search).split(/\s+/).filter((word) => word !== "");
-  /** Whether a text contains every one of the words, wherever each stands in it. */
+  /**
+   * Whether a text contains every one of the words, wherever each stands in it.
+   * The page asks `matches`, the same question of the folded text it keeps for each idea.
+   */
   function containsWords(text, words) {
     if (words.length === 0) return true;
     const folded = fold(text);
@@ -389,6 +404,7 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
     return {
       id: row.id,
       text,
+      createdBy: String(row.createdBy ?? ""),
       createdAt: String(row.createdAt ?? ""),
       updatedAt: String(row.updatedAt ?? ""),
       archived,
@@ -399,6 +415,7 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
       folded: cached.folded,
     };
   }
+  /** `containsWords(idea.text, words)`, without folding all of a space's ideas again at every key. */
   const matches = (idea, words) => words.length === 0 || words.every((word) => idea.folded.includes(word));
   const signatureOf = (ideas) => ideas.map((idea) => `${idea.id}@${idea.updatedAt}`).join("\n");
   const find = (id) => state.all.find((idea) => idea.id === id);
@@ -431,8 +448,9 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
           else readAgain = true;
         },
         (error) => {
-          // Once the ideas are shown they stay; the next reading tries again.
-          if (!state.loaded) {
+          // Once the ideas are shown they stay; the next reading tries again. Until then the failure is
+          // said once, and not again at every reading that fails the same way behind it.
+          if (!state.loaded && state.loadError === null) {
             state.loadError = reasonOf(error);
             render();
           }
@@ -459,10 +477,15 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
     // An idea someone else deleted while this page had something to say about it.
     if (state.alert && state.alert.at !== "page" && state.alert.at !== "composer" && !ids.has(state.alert.at)) {
       setAlert("page", t("gone"));
+      wantFocus(...AFTER_LEAVING);
     }
     render();
   }
-  const reasonOf = (error) => (error instanceof Error ? error.message : String(error));
+  /**
+   * Why a call failed, as Hearth says it: in English alone, so a page in Chinese gives its own words and
+   * leaves the reason out.
+   */
+  const reasonOf = (error) => (ZH ? "" : error instanceof Error ? error.message : String(error));
 
   /* ---------------------------------------------------------------------
    * Changing the ideas. What the store answers goes into the timeline at
@@ -549,9 +572,19 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
     const pinned = !idea.pinned;
     change(
       idea.id,
-      () => H.update("ideas", idea.id, { pinned }),
-      (row) => {
+      async () => {
+        const row = await H.update("ideas", idea.id, { pinned });
+        // Archived elsewhere meanwhile: an archived idea is never pinned (the old app's server refused it).
+        if (pinned && row && row.archived === true) return { row: await H.update("ideas", idea.id, { pinned: false }), refused: true };
+        return { row, refused: false };
+      },
+      ({ row, refused }) => {
         replaceRow(row);
+        if (refused) {
+          setAlert(idea.id, t("pinArchived"));
+          wantFocus(...AFTER_LEAVING);
+          return;
+        }
         announce(t(pinned ? "pinnedOne" : "unpinnedOne"));
         // A pinned idea moves to the top, and its button with it: the focus follows.
         wantFocus(keyed("pin", idea.id));
@@ -611,7 +644,7 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
   }
   function askDelete(idea) {
     clearAlert();
-    state.editing = null;
+    // Another idea's box stays open, with what is typed in it.
     state.deleting = idea.id;
     render();
     focusFirst([keyed("confirm-cancel", idea.id)]);
@@ -754,7 +787,7 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
   };
   const showUsed = (element, value) => {
     element.hidden = value.length < COUNT_FROM;
-    element.textContent = `${value.length}/${LONGEST_IDEA}`;
+    setText(element, element.hidden ? "" : `${value.length}/${LONGEST_IDEA}`);
   };
   /** Ctrl+Enter or ⌘+Enter, never while an input method is composing. */
   const savesOn = (event) => !event.isComposing && event.key === "Enter" && (event.ctrlKey || event.metaKey);
@@ -794,14 +827,22 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
       render();
       read();
     };
+    const again = h("button", { type: "button", class: "btn sm", "data-key": "retry", onclick: retry }, t("retry"));
     root.append(
       h(
         "div",
         { class: "alert", role: "alert" },
-        h("p", { class: "alert-text" }, h("span", { class: "alert-lead" }, t("loadFailed")), " ", h("span", { class: "alert-reason" }, state.loadError)),
-        h("button", { type: "button", class: "btn sm", onclick: retry }, t("retry")),
+        h(
+          "p",
+          { class: "alert-text" },
+          h("span", { class: "alert-lead" }, t("loadFailed")),
+          state.loadError ? [" ", h("span", { class: "alert-reason" }, state.loadError)] : null,
+        ),
+        again,
       ),
     );
+    // Failed again after "Try again": the keyboard stays on "Try again".
+    if (document.hasFocus() && lost()) again.focus();
   }
 
   function build() {
@@ -810,7 +851,7 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
     root.removeAttribute("aria-busy");
     if (CAN_EDIT) root.append(buildComposer());
     if (PAGE) {
-      search = h("input", { class: "input", type: "search", maxlength: 200, placeholder: t("search"), "aria-label": t("search"), "data-key": "search", autocomplete: "off" });
+      search = h("input", { id: "search-field", class: "input", type: "search", maxlength: 200, placeholder: t("search"), "data-key": "search", autocomplete: "off" });
       const typed = () => {
         state.typed = search.value;
         render();
@@ -823,7 +864,14 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
       const segment = (value) =>
         h("button", { type: "button", "data-key": `view:${value}`, "data-view": value, onclick: () => ((state.view = value), render()) });
       segments = [segment("active"), segment("archived")];
-      controls = h("div", { class: "controls" }, search, chips, h("div", { class: "seg", role: "group", "aria-label": t("view") }, segments));
+      controls = h(
+        "div",
+        { class: "controls" },
+        h("label", { class: "sr-only", for: "search-field" }, t("search")),
+        search,
+        chips,
+        h("div", { class: "seg", role: "group", "aria-label": t("view") }, segments),
+      );
       // Not a stop for Tab: the focus is put here when the idea that had it left the timeline.
       timeline = h("ul", { class: "timeline", tabindex: "-1", "data-ideas": "" });
       emptyBox = h("div", { class: "empty" });
@@ -839,13 +887,14 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
   /** The box an idea is written in, and "Save": one line on the card (Enter saves), several on the page (Ctrl/⌘+Enter). */
   function buildComposer() {
     const field = PAGE
-      ? h("textarea", { class: "box", rows: 3, maxlength: LONGEST_IDEA, placeholder: t("placeholder"), "aria-label": t("write"), "data-composer": "", "data-key": "composer" })
-      : h("input", { class: "input", type: "text", maxlength: LONGEST_IDEA, placeholder: t("write"), "aria-label": t("write"), autocomplete: "off", "data-composer": "", "data-key": "composer" });
+      ? h("textarea", { id: "composer-field", class: "box", rows: 3, maxlength: LONGEST_IDEA, placeholder: t("placeholder"), "data-composer": "", "data-key": "composer" })
+      : h("input", { id: "composer-field", class: "input", type: "text", maxlength: LONGEST_IDEA, placeholder: t("write"), autocomplete: "off", "data-composer": "", "data-key": "composer" });
+    const label = h("label", { class: "sr-only", for: "composer-field" }, t("write"));
     const save = h("button", { type: "submit", class: PAGE ? "btn primary push" : "btn primary", "data-key": "composer-save" }, t("save"));
     const used = PAGE ? h("p", { class: "used num", hidden: true }) : null;
     const form = PAGE
-      ? h("form", { class: "composer" }, field, h("div", { class: "composer-foot" }, h("p", { class: "hint shortcut" }, t("shortcut")), used, save))
-      : h("form", { class: "quick" }, field, save);
+      ? h("form", { class: "composer" }, label, field, h("div", { class: "composer-foot" }, h("p", { class: "hint shortcut" }, t("shortcut")), used, save))
+      : h("form", { class: "quick" }, label, field, save);
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       addIdea();
@@ -949,15 +998,17 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
     }
   }
 
-  /** The pinned mark and when it was written. */
+  /** The pinned mark, when it was written and, on the page in a group, by whom. */
   function fillMeta(item, idea, card) {
     const when = whenText(idea.createdAt, state.now);
-    const signature = `${idea.pinned}|${when}|${idea.createdAt}`;
+    const author = card ? undefined : NAMES.get(idea.createdBy);
+    const signature = `${idea.pinned}|${when}|${idea.createdAt}|${author ?? ""}`;
     if (item.metaSignature === signature) return;
     item.metaSignature = signature;
     item.meta.textContent = "";
     if (idea.pinned) item.meta.append(card ? icon(BOOKMARK, 12, t("pinned")) : h("span", { class: "pinned" }, icon(BOOKMARK, 12), t("pinned")));
     item.meta.append(h("time", { datetime: idea.createdAt, title: dateAndTime(idea.createdAt) }, when));
+    if (author !== undefined) item.meta.append(h("span", { class: "author" }, author));
   }
 
   /* The card's rows. */
@@ -1057,12 +1108,14 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
   /** The idea's text in a box of its own, in its place, with "Save" and "Cancel" (Ctrl/⌘+Enter and Escape). */
   function editForm(idea) {
     const id = idea.id;
-    const area = h("textarea", { class: "box", maxlength: LONGEST_IDEA, "aria-label": t("editing"), "data-key": keyOf("edit-box", id) });
+    const areaId = `edit-field-${++ids}`;
+    const area = h("textarea", { id: areaId, class: "box", maxlength: LONGEST_IDEA, "data-key": keyOf("edit-box", id) });
     area.value = idea.text;
     const used = h("p", { class: "used num", hidden: true });
     const cancel = h("button", { type: "button", class: "btn sm", "data-key": keyOf("edit-cancel", id), onclick: () => stopEdit(id) }, t("cancel"));
     const save = h("button", { type: "submit", class: "btn sm primary", "data-key": keyOf("edit-save", id) }, t("save"));
-    const form = h("form", { class: "edit" }, area, h("div", { class: "edit-foot" }, used, cancel, save));
+    const label = h("label", { class: "sr-only", for: areaId }, t("editing"));
+    const form = h("form", { class: "edit" }, label, area, h("div", { class: "edit-foot" }, used, cancel, save));
     const sync = () => {
       sizeBox(area);
       showUsed(used, area.value);
@@ -1236,8 +1289,6 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
     if (state.loaded) render();
     read();
   });
-  // Unused, but kept with the rest of text.ts, which a model reading this page may want.
-  void containsWords;
 })();
 </script>
 </body>

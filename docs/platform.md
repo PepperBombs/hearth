@@ -207,6 +207,16 @@ data.
   refresh is more than an hour old, or on "Refresh now". A row in
   `refreshes` marks a refresh in progress, so that two pages do not run one
   at the same time.
+- **What changed with the move.** The rules the build's apps kept on the
+  server now live in their pages: the grocery list's one row per name, Ideas'
+  #tags and its 5000 ideas, GitHub Trending's searches and deny-list. A page
+  checks them against what it last read, so two people acting in the same
+  second can still both add the same item, and a page reads every row of its
+  collection again every 15 seconds (Ideas up to 5000). A refresh of GitHub
+  Trending runs in the page that started it: leaving that page stops it, and
+  the next page to open waits until the refresh has not moved for a minute
+  before it starts its own. Claude over MCP does not see made apps yet (see
+  "Not built yet").
 - The build's own copies of these apps are still compiled in, hidden from
   the Add dialog, until their pipeline is deleted.
 
@@ -228,7 +238,9 @@ trying the web app without a real model.
   changing it to fit.
 - **Developers' path** (answer 3): uploading an app written by hand.
 - **Jobs for made apps** (a scheduled fetch the platform runs for an app).
-- **Made apps over MCP**: Claude through the connector does not see them yet.
+- **Made apps over MCP**: Claude through the connector does not see them yet,
+  so since the move it no longer sees the grocery list, Ideas or GitHub
+  Trending; the chat with each person's own model does.
 - **Sign-in for a public platform**: Cloudflare Access is fine while the
   platform is invitation-only.
 - **Deleting the old way of building apps in**: the three apps of

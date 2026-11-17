@@ -16,3 +16,6 @@ Notes for whoever changes this part, people and agents alike. They are read when
 - A made field that is `required` only has to be there: an empty text passes. A page that needs text checks it itself.
 - `hearth.fetch` shares the jobs' pace (one request to a host every 6.5 s): a page that makes several waits for each in turn, and shows its progress.
 - A page can be tried without a server: render it with `frameDocument` in an iframe whose parent answers the bridge from memory, checking rows with `collectionSchemas`. The built-in pages were checked that way.
+- `frame.tsx` tells an app's other frames to read again after a write alone (`WRITES`): after a read too, two frames of one app on screen (a card and the chat's) would wake each other for ever.
+- A rule across rows that a page keeps (one grocery item per name) holds only against what the page last read: the server checks each row by itself, and two people in the same second can both add.
+

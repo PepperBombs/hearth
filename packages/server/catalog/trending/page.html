@@ -1,1 +1,1315 @@
-<!doctype html><html><head><title>trending</title></head><body><p>Coming.</p></body></html>
+<!doctype html>
+<html>
+<head>
+<title>GitHub Trending</title>
+<style>
+/*
+ * GitHub Trending, as an app made in Hearth: the new repositories on GitHub
+ * with the most stars, created in the last day, week or month. Its card
+ * shows the first five of each person's own range; its page every list, by
+ * range and by the languages the space follows, with the Hide list.
+ * Colours come from Hearth's variables only, so that both themes fit.
+ */
+*, *::before, *::after { box-sizing: border-box; }
+/* Room for the focus ring of a control at the edge: the frame cuts off whatever lies outside it. */
+body { padding: 4px; -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--hearth-accent); outline-offset: 2px; }
+button { font: inherit; color: inherit; margin: 0; }
+button:not([aria-disabled="true"]) { cursor: pointer; }
+h2, h3, p, ul { margin: 0; }
+ul { padding: 0; list-style: none; }
+a { color: inherit; text-decoration: none; }
+a:hover { text-decoration: underline; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.num { font-variant-numeric: tabular-nums; }
+svg { flex: none; }
+
+/* A long name wraps rather than reaching past the edge of a narrow card or phone. */
+.app { overflow-wrap: anywhere; }
+/* The page's parts lie 16px apart; one with nothing in it (no message, nothing hidden) takes no room. */
+.page > :not(:empty):not([hidden]) ~ :not(:empty):not([hidden]) { margin-top: 16px; }
+
+/* When the lists were fetched and "Refresh now"; a banner in its place when the last refresh failed. */
+.top {
+  display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 8px; min-height: 28px;
+  font-size: 12px; line-height: 20px; color: var(--hearth-text-3);
+}
+.top-text { min-width: 0; flex: 1 1 auto; }
+.top .warn { display: none; }
+.top.banner {
+  padding: 8px 12px; border: 1px solid var(--hearth-line); border-radius: 8px; background: var(--hearth-surface-2);
+  color: var(--hearth-text); font-size: 13px; line-height: 1.57;
+}
+.top.banner .warn { display: block; color: var(--hearth-text-2); }
+.top.banner .top-text { flex-basis: 224px; }
+.top-status, .top .btn { margin-left: auto; }
+
+.btn {
+  display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 6px; height: 34px; padding: 0 12px;
+  border: 1px solid var(--hearth-line); border-radius: 8px; background: var(--hearth-surface); color: var(--hearth-text);
+  font-weight: 500; line-height: 1; white-space: nowrap; user-select: none; -webkit-user-select: none;
+}
+.btn:hover:not([aria-disabled="true"]) { background: var(--hearth-surface-2); }
+.btn[aria-disabled="true"] { cursor: not-allowed; opacity: .55; }
+.btn.small { height: 28px; padding: 0 8px; font-size: 12px; }
+
+/* The range, one of three, and the languages the space follows. */
+.controls { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 2px; max-width: 100%; padding: 2px; border-radius: 8px; background: var(--hearth-surface-2); }
+.seg button {
+  height: 28px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--hearth-text-2);
+  font-size: 13px; line-height: 1; white-space: nowrap;
+}
+.seg button[aria-pressed="true"] { background: var(--hearth-surface); color: var(--hearth-text); font-weight: 500; box-shadow: 0 0 0 1px var(--hearth-line); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border: 1px solid var(--hearth-line);
+  border-radius: 999px; background: transparent; color: var(--hearth-text-2); font-size: 13px; line-height: 1;
+}
+.chip[aria-pressed="true"] { border-color: var(--hearth-accent); background: var(--hearth-accent-soft); color: var(--hearth-accent-text); font-weight: 500; }
+
+/* The lists: rows split by hairlines. */
+.rows { display: flex; flex-direction: column; }
+.rows:focus { outline: none; }
+.rows:focus-visible { outline: 2px solid var(--hearth-accent); }
+.row {
+  display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 36px; padding: 6px 0;
+  border-top: 1px solid var(--hearth-line);
+}
+.row:first-child { border-top: 0; }
+.rank { flex: none; width: 24px; align-self: flex-start; text-align: right; color: var(--hearth-text-3); }
+.body { flex: 1; min-width: 0; align-self: flex-start; }
+.owner { color: var(--hearth-text-2); }
+.name { color: var(--hearth-text); font-weight: 500; }
+.plain { color: var(--hearth-text); }
+.desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--hearth-text-2); }
+.meta { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; margin-top: 2px; font-size: 12px; line-height: 20px; color: var(--hearth-text-3); }
+.stars { display: inline-flex; align-items: center; gap: 4px; }
+.row .btn { align-self: flex-start; }
+.hid-text { flex: 1; min-width: 0; font-size: 13px; color: var(--hearth-text-2); }
+.grow { flex: 1; min-width: 0; }
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; max-width: 420px; margin: 0 auto; padding: 32px 8px; text-align: center; }
+.empty:focus { outline: none; }
+.empty h2, .empty h3 { font-size: 16px; line-height: 1.4; font-weight: 600; }
+.hidden-box { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.hidden-box .rows { align-self: stretch; }
+
+/* The card on the dashboard. */
+.card { display: flex; flex-direction: column; min-height: 88px; }
+.caption { font-size: 12px; line-height: 20px; color: var(--hearth-text-3); }
+.card .rank { width: 16px; align-self: center; font-size: 12px; }
+.card .stars { flex: none; font-size: 12px; color: var(--hearth-text-3); }
+.card .empty { flex: 1; min-height: 88px; padding: 8px; }
+.foot { margin-top: auto; padding-top: 8px; font-size: 12px; line-height: 20px; color: var(--hearth-text-3); }
+.foot .failed { padding: 6px 10px; border: 1px solid var(--hearth-line); border-radius: 8px; background: var(--hearth-surface-2); color: var(--hearth-text); }
+
+/* A change that failed, and the app that could not be read. */
+.notice {
+  display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; border: 1px solid var(--hearth-line);
+  border-radius: 8px; background: var(--hearth-surface-2); color: var(--hearth-text); font-size: 12px; line-height: 20px;
+}
+.notice svg { margin-top: 3px; color: var(--hearth-text-2); }
+.card .notice { margin-top: 8px; }
+.failed-load { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 6px 0; }
+.failed-load p { color: var(--hearth-text-2); }
+.skeleton { display: flex; flex-direction: column; gap: 14px; padding: 8px 0; }
+.bone { height: 14px; border-radius: 6px; background: var(--hearth-surface-2); animation: pulse 1.6s ease-in-out infinite; }
+.bone.short { width: 40%; }
+@keyframes pulse { 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .bone { animation: none; } }
+
+/* Touch screens get 44px targets. */
+@media (pointer: coarse) {
+  .btn, .btn.small { height: 44px; padding: 0 12px; }
+  .seg button { height: 40px; padding: 0 16px; }
+  .chip { height: 36px; padding: 0 14px; }
+  .row { min-height: 44px; }
+}
+</style>
+</head>
+<body>
+<div id="app" class="app"></div>
+<script>
+(() => {
+  "use strict";
+
+  /** The languages a space may follow, in the order of the setting's options, which is the order of the searches. Their names read the same in both languages. */
+  const LANGUAGE_NAMES = {
+    typescript: "TypeScript",
+    javascript: "JavaScript",
+    python: "Python",
+    go: "Go",
+    rust: "Rust",
+    java: "Java",
+    cpp: "C++",
+    csharp: "C#",
+    swift: "Swift",
+    kotlin: "Kotlin",
+  };
+
+  // Every text of the interface, in both languages: the build's app's own, and a few for what this page does itself.
+  const TEXT = {
+    en: {
+      title: "GitHub Trending",
+      ranges: { day: "Today", week: "This week", month: "This month" },
+      all: "All",
+      range: "Range",
+      language: "Language",
+      updatedNow: "Updated just now",
+      updatedMinutes: "Updated {minutes} min ago",
+      updatedAt: "Updated at {time}",
+      refresh: "Refresh now",
+      refreshing: "Refreshing…",
+      refreshingCount: "Refreshing… {done}/{total}",
+      failed: "Couldn't reach GitHub at {time}.",
+      failedShowing: "Couldn't reach GitHub at {time}. Showing results from {previous}.",
+      retry: "Try again",
+      emptyFirst: "No results yet. The first refresh is on its way.",
+      emptySet: "No new repositories here yet.",
+      stars: "{count} stars",
+      forks: "{count} forks",
+      ageHours: "{count} h old",
+      ageDays: "{count} d old",
+      newTab: "opens in a new tab",
+      hide: "Hide",
+      hid: "Hid {name}.",
+      undo: "Undo",
+      hidden: "Hidden ({count})",
+      show: "Show again",
+      hiddenFull: "The Hide list holds 1000 repositories, as many as it can. Show some of them again first.",
+      changeFailed: "That change could not be saved. Try again.",
+      startFailed: "The refresh could not be started. Try again.",
+      loading: "Loading…",
+      loadFailed: "This app could not be loaded.",
+    },
+    zh: {
+      title: "GitHub 热门",
+      ranges: { day: "今天", week: "本周", month: "本月" },
+      all: "全部",
+      range: "时间范围",
+      language: "语言",
+      updatedNow: "刚刚更新",
+      updatedMinutes: "{minutes} 分钟前更新",
+      updatedAt: "更新于 {time}",
+      refresh: "立即刷新",
+      refreshing: "正在刷新…",
+      refreshingCount: "正在刷新… {done}/{total}",
+      failed: "{time} 时无法连接 GitHub。",
+      failedShowing: "{time} 时无法连接 GitHub。现在显示的是 {previous} 的结果。",
+      retry: "重试",
+      emptyFirst: "还没有结果，第一次刷新马上就到。",
+      emptySet: "这里还没有新仓库。",
+      stars: "{count} 星",
+      forks: "{count} 个分叉",
+      ageHours: "{count} 小时前创建",
+      ageDays: "{count} 天前创建",
+      newTab: "在新标签页中打开",
+      hide: "隐藏",
+      hid: "已隐藏 {name}。",
+      undo: "撤销",
+      hidden: "已隐藏（{count}）",
+      show: "重新显示",
+      hiddenFull: "隐藏列表最多放 1000 个仓库，现在已经满了。请先重新显示其中一些。",
+      changeFailed: "这项更改未能保存，请重试。",
+      startFailed: "刷新没能开始，请重试。",
+      loading: "正在加载…",
+      loadFailed: "这个应用无法加载。",
+    },
+  };
+
+  const hearth = window.hearth;
+  if (!hearth) return;
+  const locale = hearth.locale === "zh" ? "zh" : "en";
+  const t = TEXT[locale];
+  const say = (text, values) => text.replace(/\{(\w+)\}/g, (whole, key) => (key in values ? String(values[key]) : whole));
+  document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
+  document.title = t.title;
+
+  const canEdit = hearth.access === "edit";
+  const inCard = hearth.view === "card";
+  const REPOS = "repos";
+  const HIDDEN = "hidden";
+  const REFRESHES = "refreshes";
+
+  // ------------------------------------------------------- GitHub's search
+  // What the build's job (`refresh` in hearth-stones/trending/server.ts) did, as it did it.
+
+  /** The ranges, in the order the searches go: repositories created in the last day, week and month. */
+  const RANGES = ["day", "week", "month"];
+  /**
+   * How far back each range reaches, and the fewest forks a repository needs
+   * to be listed in it. `forks:>=10` was measured to leave out most spam for
+   * a week; a day gives a real project less time to be forked, and a month
+   * asks for less than four weeks' worth, so that a project that rose late
+   * in it stays.
+   */
+  const REACH = { day: { days: 1, forks: 3 }, week: { days: 7, forks: 10 }, month: { days: 30, forks: 25 } };
+  const LANGUAGES = Object.keys(LANGUAGE_NAMES);
+  /** GitHub's search of repositories, on the one host the manifest lists in `network`. */
+  const SEARCH = "https://api.github.com/search/repositories";
+  /** What every search asks for: GitHub's JSON, in the version of its REST API this app is written against. */
+  const GITHUB_HEADERS = { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" };
+  /** How many repositories a list holds at most: one page of a search. */
+  const PER_PAGE = 25;
+  /** The longest description kept, in characters, which is also GitHub's own limit. */
+  const LONGEST_DESCRIPTION = 350;
+  /** The longest language name kept, in characters. GitHub's are far shorter. */
+  const LONGEST_LANGUAGE = 60;
+  /** How many repositories a space's Hide list holds at most, so that every list can leave out all of them. */
+  const MOST_HIDDEN = 1000;
+  const MINUTE_MS = 60 * 1000;
+  const HOUR_MS = 60 * MINUTE_MS;
+  const DAY_MS = 24 * HOUR_MS;
+  /** owner/name as GitHub allows them, so that a link built from one can only lead into github.com. */
+  const FULL_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
+  /** A moment as GitHub writes `created_at`: a date, a time to the second and Z or an offset (RFC 3339). */
+  const DATE_TIME =
+    /^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+
+  /**
+   * The deny-list: the spam GitHub's search still lets through after the
+   * query's own filters, as three patterns. A repository matches when its
+   * owner/name and description, with `-`, `_`, `.` and `/` read as spaces,
+   * match one: "Fake_Balance.v2" holds the words "Fake Balance".
+   */
+  const SPAM = [
+    // A year, then "installer": "XYZ 2026: Full-Feature Desktop Installer". Not "nix-installer".
+    /\b(?:19|20)\d\d\b.*\binstaller\b/i,
+    // Crypto bots: "solana-mint-bot", "pump sniper bot", "wallet drainer bot", "volume bot". Not "mint-theme".
+    /\b(?:mint|sniper|drainer|volume) ?bot\b/i,
+    // Fake balances: "Fake-Balance" wallet tools, "flash USDT". Not "flash-attention", nor "fake-balancer".
+    /\b(?:fake ?balance|flash ?usdt)\b/i,
+  ];
+  const isSpam = (fullName, description) => {
+    const text = `${fullName} ${description}`.replace(/[-_./]/g, " ");
+    return SPAM.some((pattern) => pattern.test(text));
+  };
+
+  /**
+   * The address of one search: repositories created since the run's start
+   * less the range's days, in UTC to the second, that are no fork, not
+   * archived and forked at least the range's fewest times, of one language
+   * when `language` is not "", most stars first, one page of them.
+   */
+  function searchUrl(range, language, started) {
+    const { days, forks } = REACH[range];
+    const since = new Date(started.getTime() - days * DAY_MS).toISOString().slice(0, 19);
+    const terms = [`created:>=${since}+00:00`, "fork:false", "archived:false", `forks:>=${forks}`];
+    if (language !== "") terms.push(`language:${language}`);
+    const query = new URLSearchParams({ q: terms.join(" "), sort: "stars", order: "desc", per_page: String(PER_PAGE) });
+    return `${SEARCH}?${query}`;
+  }
+
+  const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+  const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
+  const textOrNull = (value) => typeof value === "string" || value === null;
+  /** A repository as GitHub's search lists one, with every field this app reads. */
+  const isFound = (item) =>
+    isRecord(item) &&
+    Number.isSafeInteger(item.id) &&
+    item.id > 0 &&
+    typeof item.full_name === "string" &&
+    textOrNull(item.description) &&
+    textOrNull(item.language) &&
+    isCount(item.stargazers_count) &&
+    isCount(item.forks_count) &&
+    typeof item.created_at === "string" &&
+    DATE_TIME.test(item.created_at);
+
+  const cut = (text, length) => (text.length <= length ? text : `${text.slice(0, length - 1)}…`);
+  const messageOf = (error) => (error instanceof Error ? error.message : String(error));
+
+  /**
+   * The repositories of one search's answer, or why the run fails: GitHub
+   * turned it down (403 and 429 are its answers to too many searches), said
+   * something else than 2xx, answered with something else than a list of
+   * repositories, or cut the search short (`incomplete_results`: it ran out
+   * of time and gives what it found so far, maybe nothing).
+   */
+  function foundIn(answer) {
+    if (answer.status === 403 || answer.status === 429) {
+      throw new Error(`GitHub turned the search down (${answer.status}), most likely for its rate limit.`);
+    }
+    if (!answer.ok) throw new Error(`GitHub's search answered ${answer.status}.`);
+    let body;
+    try {
+      body = JSON.parse(answer.text);
+    } catch (error) {
+      throw new Error(`The answer from ${SEARCH} is not JSON (${cut(messageOf(error), 120)}).`);
+    }
+    const shaped =
+      isRecord(body) &&
+      (body.incomplete_results === undefined || typeof body.incomplete_results === "boolean") &&
+      Array.isArray(body.items) &&
+      body.items.every(isFound);
+    if (!shaped) throw new Error("GitHub's search did not answer with a list of repositories.");
+    if (body.incomplete_results === true) {
+      throw new Error("GitHub's search ran out of time and gave only part of its results (incomplete_results).");
+    }
+    return body.items;
+  }
+
+  /** Whether a repository goes into the lists: a name GitHub could have given, and no spam. */
+  const keep = (repo) => FULL_NAME.test(repo.full_name) && !isSpam(repo.full_name, repo.description ?? "");
+
+  /** A text on one line, and at most `longest` characters, "…" last when cut, never half of a character. */
+  function oneLine(text, longest) {
+    const line = text.replace(/\s+/g, " ").trim();
+    if (line.length <= longest) return line;
+    // A character beyond the basic plane takes two places, and is not cut in half.
+    return `${line.slice(0, longest - 1).replace(/[\uD800-\uDBFF]$/, "")}…`;
+  }
+
+  /** A repository of a search as a row of `repos` keeps it. */
+  const rowOf = (repo, range, set, position) => ({
+    range,
+    set,
+    position,
+    githubId: repo.id,
+    fullName: repo.full_name,
+    description: oneLine(repo.description ?? "", LONGEST_DESCRIPTION),
+    language: oneLine(repo.language ?? "", LONGEST_LANGUAGE),
+    stars: repo.stargazers_count,
+    forks: repo.forks_count,
+    repoCreatedAt: new Date(repo.created_at).toISOString(),
+  });
+
+  // ------------------------------------------------------- Times and counts
+  // In the reader's language and time zone, against the browser's clock, on a 24-hour clock.
+
+  const TAG = locale === "zh" ? "zh-CN" : "en-US";
+  const timeFormat = new Intl.DateTimeFormat(TAG, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const dateTimeFormat = new Intl.DateTimeFormat(TAG, { dateStyle: "medium", timeStyle: "short", hourCycle: "h23" });
+  const wholeFormat = new Intl.NumberFormat(TAG);
+  const compactFormat = new Intl.NumberFormat(TAG, { notation: "compact", maximumFractionDigits: 1 });
+  /** A count in full, "12,345"; in few characters, "12.3K", "1.2万". */
+  const whole = (value) => wholeFormat.format(value);
+  const compact = (value) => compactFormat.format(value);
+  /** A moment and its date: "Nov 10, 2026, 08:05", "2026年11月10日 08:05". */
+  const dateAndTime = (ms) => dateTimeFormat.format(new Date(ms));
+  /** A moment as a time of day, "14:05", or with its date when it is not today's. */
+  function momentText(ms) {
+    const day = (value) => new Date(value).toDateString();
+    return day(ms) === day(now) ? timeFormat.format(new Date(ms)) : dateAndTime(ms);
+  }
+  /**
+   * When the lists shown were fetched: "Updated just now" under a minute (a
+   * time a little ahead of this browser's clock included), "Updated 12 min
+   * ago" under 90 minutes, then "Updated at 13:05".
+   */
+  function updatedText(at) {
+    const minutes = Math.floor((now - at) / MINUTE_MS);
+    if (minutes < 1) return t.updatedNow;
+    if (minutes < 90) return say(t.updatedMinutes, { minutes });
+    return say(t.updatedAt, { time: momentText(at) });
+  }
+  /** How old a repository is: "5 h old" under 48 hours, then "3 d old"; never less than an hour. */
+  function ageText(createdAt) {
+    const hours = Math.max(1, Math.floor((now - Date.parse(createdAt)) / HOUR_MS));
+    return hours < 48 ? say(t.ageHours, { count: hours }) : say(t.ageDays, { count: Math.floor(hours / 24) });
+  }
+
+  // ------------------------------------------------------- What is stored
+  //
+  // `refreshes` holds a row for each of the newest 20 refreshes: `at` when it
+  // started (by the server's clock once it has ended), then `ok` and `error`.
+  // A refresh going on has ok false and error "running", and touches its row
+  // after every search, so that its `updatedAt` says it is still alive; a
+  // silent one counts as gone (its page was closed) and as never started.
+  // When it ends, its row's `updatedAt` is when it ended.
+
+  /** How long a refresh may stay silent before it counts as gone: its page was closed, say. One search waits a minute at most. */
+  const SILENT_MS = 60 * 1000;
+  /** A refresh starts by itself when the last one started more than this long ago. */
+  const REFRESH_EVERY_MS = HOUR_MS;
+  const KEEP_REFRESHES = 20;
+  /** The clock is read again this often, and what others changed is read again every POLL_MS, or BUSY_POLL_MS while a refresh is going on elsewhere. */
+  const TICK_MS = 5000;
+  const POLL_MS = 15000;
+  const BUSY_POLL_MS = 5000;
+  /** After a refresh that could not even start, the page waits this long before it starts one by itself again. */
+  const START_AGAIN_MS = 5 * MINUTE_MS;
+
+  let now = Date.now();
+  let loaded = false;
+  let loadFailed = false;
+  /** The refreshes, the one that started last first. */
+  let refreshes = [];
+  /** The Hide list, the last hidden first, each repository once. */
+  let hidden = [];
+  let hiddenIds = new Set();
+  /** The lists, by range and set: "week\n" for this week's of every language, "week\nrust" for its Rust. */
+  let lists = new Map();
+  /** When the lists were last written, for lists no refresh row tells of (the build's app's, moved here). */
+  let listsWrittenAt = null;
+  let anyLists = false;
+  /** Which good refresh the lists were read after: read again when another has gone well. */
+  let listsReadFor = null;
+  let followed = [];
+  let ownRange = "week";
+  let hideDescriptions = false;
+
+  /** The range picked here, until it is saved as the reader's own (or their own changes elsewhere). */
+  let picked = null;
+  let rangeSave = null;
+  let pickedLanguage = "";
+  /** This page's own refresh: the search it is at, of how many, and its row. */
+  let run = null;
+  let noStartBefore = 0;
+  /** A repository this page has just hidden, and where it stood, for "Hid owner/name. Undo" in its place. */
+  let hid = null;
+  const hiding = new Set();
+  const showing = new Set();
+  let hiddenOpen = false;
+  /** Where the keyboard goes once an action's change is drawn: `selectors`, when `from`, the control the action began at, has gone. */
+  let focusNext = null;
+  const focusAfter = (selectors) => (focusNext = { selectors, from: document.activeElement });
+
+  const timeOf = (iso) => {
+    const ms = typeof iso === "string" ? Date.parse(iso) : NaN;
+    return Number.isFinite(ms) ? ms : 0;
+  };
+  // By the server's clock, which every page shares, from the times it gives every row.
+  /** When a refresh started: its row was written then. */
+  const startOf = (row) => timeOf(row.createdAt) || timeOf(row.at);
+  /** When a refresh ended, or last said it was still going. */
+  const lastSignOf = (row) => timeOf(row.updatedAt) || startOf(row);
+  const isRunning = (row) => row.ok !== true && row.error === "running";
+
+  /**
+   * The server's clock less this browser's, as this page's own writes tell it
+   * (0 until it has written one). A browser's clock may be minutes off, and
+   * whether a refresh is going on, or due, is told by the server's.
+   */
+  let clockOffset = 0;
+  const serverNow = () => Date.now() + clockOffset;
+  /** Learns the offset from a row this page wrote: the server stamped it while the call was on its way. */
+  function learnClock(row, sentAt) {
+    const at = isRecord(row) ? timeOf(row.updatedAt) : 0;
+    if (at > 0) clockOffset = Math.round(at - (sentAt + Date.now()) / 2);
+  }
+  /**
+   * Each refresh going on, by its row: its last sign, and when this page first
+   * read that sign, by this browser's clock. One whose sign has not moved for
+   * SILENT_MS while this page looked has gone silent, whatever either clock says.
+   */
+  const signsSeen = new Map();
+  function watchSigns(rows) {
+    const at = Date.now();
+    const going = new Set();
+    for (const row of rows) {
+      if (!isRunning(row)) continue;
+      going.add(row.id);
+      const seen = signsSeen.get(row.id);
+      if (!seen || seen.sign !== row.updatedAt) signsSeen.set(row.id, { sign: row.updatedAt, since: at });
+    }
+    for (const id of [...signsSeen.keys()]) if (!going.has(id)) signsSeen.delete(id);
+  }
+  /** How long a refresh has said nothing: by the server's clock, or by what this page saw, whichever is longer. */
+  function silentFor(row) {
+    const seen = signsSeen.get(row.id);
+    const watched = seen && seen.sign === row.updatedAt ? Date.now() - seen.since : 0;
+    return Math.max(serverNow() - lastSignOf(row), watched);
+  }
+  const isAlive = (row) => isRunning(row) && silentFor(row) < SILENT_MS;
+  const newest = (rows, by) => rows.reduce((best, row) => (best === null || by(row) > by(best) ? row : best), null);
+  const shownRange = () => (picked !== null && picked.own === ownRange ? picked.range : ownRange);
+  const shownLanguage = () => (followed.includes(pickedLanguage) ? pickedLanguage : "");
+  const languageName = (key) => LANGUAGE_NAMES[key] ?? key;
+
+  /** One list as it is shown: GitHub's order, one page of it, without what the space hid. */
+  const listOf = (range, set) =>
+    (lists.get(`${range}\n${set}`) ?? []).slice(0, PER_PAGE).filter((repo) => !hiddenIds.has(repo.githubId));
+
+  /** What the refreshes say: when the lists were fetched, whether the last refresh failed, whether one is going on, whether one is due. */
+  function situation() {
+    const lastOk = newest(refreshes.filter((row) => row.ok === true), lastSignOf);
+    const lastFailed = newest(refreshes.filter((row) => row.ok !== true && !isRunning(row)), lastSignOf);
+    const fetchedAt = lastOk !== null ? lastSignOf(lastOk) : listsWrittenAt;
+    const failedAt = lastFailed !== null && (fetchedAt === null || lastSignOf(lastFailed) > fetchedAt) ? lastSignOf(lastFailed) : null;
+    const elsewhere = refreshes.some((row) => isAlive(row) && !(run !== null && row.id === run.rowId));
+    // A refresh that went silent is as if it never started: the next page starts another.
+    const last = newest(refreshes.filter((row) => !isRunning(row) || isAlive(row)), startOf);
+    const due = last === null || serverNow() - startOf(last) >= REFRESH_EVERY_MS;
+    return { fetchedAt, failedAt, elsewhere, due, everFetched: lastOk !== null || anyLists };
+  }
+
+  /** What to say when the last refresh failed, or null: when, and from when the lists shown are. */
+  function failureText(state) {
+    if (state.failedAt === null) return null;
+    const time = momentText(state.failedAt);
+    return state.fetchedAt === null ? say(t.failed, { time }) : say(t.failedShowing, { time, previous: momentText(state.fetchedAt) });
+  }
+
+  const progressText = () => say(t.refreshingCount, { done: Math.min(run.search, run.total), total: run.total });
+
+  // ------------------------------------------------------- Drawing
+
+  function el(tag, attributes, ...children) {
+    const node = document.createElement(tag);
+    for (const [name, value] of Object.entries(attributes || {})) {
+      if (value === null || value === undefined || value === false) continue;
+      if (name === "text") node.textContent = value;
+      else node.setAttribute(name, value === true ? "" : String(value));
+    }
+    for (const child of children.flat()) if (child !== null && child !== undefined && child !== false) node.append(child);
+    return node;
+  }
+
+  function icon(paths, size, stroke, className) {
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    const attributes = {
+      width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": stroke,
+      "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false",
+    };
+    if (className) attributes.class = className;
+    for (const [name, value] of Object.entries(attributes)) svg.setAttribute(name, String(value));
+    for (const d of paths) {
+      const path = document.createElementNS(NS, "path");
+      path.setAttribute("d", d);
+      svg.append(path);
+    }
+    return svg;
+  }
+  const STAR = [
+    "M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z",
+  ];
+  const WARNING = ["m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3", "M12 9v4", "M12 17h.01"];
+
+  const setText = (node, text) => {
+    if (node.textContent !== text) node.textContent = text;
+  };
+
+  /**
+   * Draws a part again and keeps the keyboard where it was: on the same
+   * control, or, when that one has gone, on the one that took its place,
+   * unless an action has said where it goes (`focusNext`).
+   */
+  function redraw(container, build) {
+    const active = document.activeElement;
+    const inside = active !== null && active !== document.body && container.contains(active);
+    const before = inside ? [...container.querySelectorAll("[data-key]")] : [];
+    const was = inside ? { key: active.dataset.key, index: before.indexOf(active) } : null;
+    build();
+    if (was === null) return;
+    const after = [...container.querySelectorAll("[data-key]")];
+    // A control by its key; the list itself (or its empty state) by being the part's own place for the keyboard.
+    let target = was.key === undefined ? container.querySelector("[tabindex='-1']") : after.find((node) => node.dataset.key === was.key) ?? null;
+    if (target === null && focusNext === null) {
+      target = after[Math.min(Math.max(was.index, 0), after.length - 1)] ?? container.querySelector("[tabindex='-1']");
+    }
+    if (target) target.focus({ preventScroll: true });
+  }
+
+  /** After an action took away the control that had the keyboard, gives it to what took its place, unless the person went on elsewhere. */
+  function settleFocus() {
+    if (focusNext === null) return;
+    const { selectors, from } = focusNext;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body && active.isConnected) {
+      // Still on the control the action began at, which has yet to go: the next drawing settles it.
+      if (active !== from) focusNext = null;
+      return;
+    }
+    focusNext = null;
+    for (const selector of selectors) {
+      const target = root.querySelector(selector);
+      if (target) {
+        target.focus();
+        return;
+      }
+    }
+  }
+
+  /** owner/name linked to the repository on GitHub, in a new tab; a name GitHub could not have given is not linked. */
+  function repoLink(fullName, id, key, strong) {
+    const slash = fullName.indexOf("/");
+    if (!FULL_NAME.test(fullName)) return el("span", { id, class: "grow", text: fullName });
+    return el(
+      "a",
+      {
+        id, "data-key": key, href: `https://github.com/${fullName}`, target: "_blank", rel: "noopener noreferrer",
+        "aria-describedby": "new-tab",
+      },
+      el("span", { class: "owner", text: fullName.slice(0, slash + 1) }),
+      el("span", { class: strong ? "name" : "plain", text: fullName.slice(slash + 1) }),
+    );
+  }
+
+  // Focusable from a script alone: where the keyboard goes when the last row leaves the list.
+  const emptyState = (heading, text) => el("div", { class: "empty", tabindex: "-1" }, el(heading, { text }));
+
+  const root = document.getElementById("app");
+  // Parts both the card and the page have.
+  const newTab = el("span", { id: "new-tab", hidden: true, text: t.newTab });
+  const alerts = el("div", { class: "alerts", role: "alert" });
+  const announcer = el("p", { class: "sr-only", role: "status", "aria-live": "polite" });
+  const shouter = el("p", { class: "sr-only", role: "alert" });
+  /** What each part last drew, so that a read that brings nothing new changes nothing on the screen. */
+  const drawn = { list: "", chips: "", hidden: "", card: "" };
+
+  function showNotice(text) {
+    alerts.replaceChildren(el("p", { class: "notice" }, icon(WARNING, 14, 1.75), el("span", { text })));
+  }
+  const clearNotice = () => alerts.replaceChildren();
+  /** Says something to screen readers alone: politely, or at once for a failure. */
+  function speak(node, text) {
+    node.textContent = "";
+    setTimeout(() => (node.textContent = text), 60);
+  }
+
+  // ---- The card: the first five of the reader's own range, of every language.
+
+  const card = {
+    caption: el("p", { id: "caption", class: "caption" }),
+    list: el("div", { class: "card-list" }),
+    foot: el("div", { class: "foot" }),
+    footText: el("p", { class: "num" }),
+  };
+  card.foot.append(card.footText);
+
+  function cardRow(repo, index) {
+    const stars = say(t.stars, { count: whole(repo.stars) });
+    const link = repoLink(repo.fullName, `card-${repo.githubId}`, `link:${repo.githubId}`, true);
+    link.classList.add("grow");
+    return el(
+      "li",
+      { class: "row" },
+      el("span", { class: "rank num", text: String(index + 1) }),
+      link,
+      el(
+        "span",
+        { class: "stars num", title: stars },
+        icon(STAR, 12, 2),
+        el("span", { "aria-hidden": "true", text: compact(repo.stars) }),
+        el("span", { class: "sr-only", text: stars }),
+      ),
+    );
+  }
+
+  function drawCard(state) {
+    if (!card.caption.isConnected) {
+      root.replaceChildren(el("div", { class: "card" }, card.caption, card.list, alerts, card.foot), newTab, announcer, shouter);
+    }
+    setText(card.caption, t.ranges[ownRange]);
+    const repos = listOf(ownRange, "").slice(0, 5);
+    const signature = JSON.stringify([state.everFetched, repos.map((repo) => [repo.githubId, repo.fullName, repo.stars])]);
+    if (signature !== drawn.card) {
+      drawn.card = signature;
+      redraw(card.list, () => {
+        // Before any refresh went well the first is on its way; after one, this range has none, or the space hid them all.
+        card.list.replaceChildren(
+          repos.length > 0
+            ? el("ul", { class: "rows", "aria-labelledby": "caption" }, repos.map(cardRow))
+            : emptyState("h3", state.everFetched ? t.emptySet : t.emptyFirst),
+        );
+      });
+    }
+    // A refresh going on, the last one that failed, or when the lists were fetched.
+    const failure = failureText(state);
+    let text = "";
+    if (run !== null) text = progressText();
+    else if (state.elsewhere) text = t.refreshing;
+    else if (failure !== null) text = failure;
+    else if (state.fetchedAt !== null) text = updatedText(state.fetchedAt);
+    setText(card.footText, text);
+    card.footText.classList.toggle("failed", run === null && !state.elsewhere && failure !== null);
+    card.foot.hidden = text === "";
+  }
+
+  // ---- The page: every list, by range and language, and the Hide list.
+
+  const page = {
+    top: el("div", { class: "top" }),
+    topText: el("p", { class: "top-text num" }),
+    topStatus: el("span", { class: "top-status", text: t.refreshing }),
+    refresh: el("button", { type: "button", class: "btn small", "data-key": "refresh" }),
+    range: el("div", { class: "seg", role: "group", "aria-label": t.range }),
+    chips: el("div", { class: "chips", role: "group", "aria-label": t.language }),
+    list: el("div", { class: "list" }),
+    hidden: el("div", { class: "hidden-box" }),
+  };
+  page.top.append(icon(WARNING, 16, 1.75, "warn"), page.topText, page.topStatus);
+  if (canEdit) page.top.append(page.refresh);
+  page.refresh.addEventListener("click", () => {
+    if (page.refresh.getAttribute("aria-disabled") !== "true") startRefresh(true);
+  });
+  const rangeButtons = RANGES.map((range) => {
+    const button = el("button", { type: "button", "data-range": range, text: t.ranges[range] });
+    button.addEventListener("click", () => pickRange(range));
+    return button;
+  });
+  page.range.append(...rangeButtons);
+
+  function drawTop(state) {
+    const failure = failureText(state);
+    const text = failure ?? (state.fetchedAt !== null ? updatedText(state.fetchedAt) : "");
+    page.top.classList.toggle("banner", failure !== null);
+    setText(page.topText, text);
+    page.topText.hidden = text === "";
+    // Whoever may only look is told that a refresh is going on; whoever may edit sees it on the button.
+    page.topStatus.hidden = canEdit || !state.elsewhere;
+    if (canEdit) {
+      const busy = run !== null || state.elsewhere;
+      setText(page.refresh, run !== null ? progressText() : busy ? t.refreshing : failure !== null ? t.retry : t.refresh);
+      page.refresh.setAttribute("aria-disabled", String(busy));
+    }
+    page.top.hidden = !canEdit && text === "" && !state.elsewhere;
+  }
+
+  function drawChips() {
+    const signature = followed.join(",");
+    if (signature !== drawn.chips) {
+      drawn.chips = signature;
+      redraw(page.chips, () => {
+        page.chips.replaceChildren(
+          ...["", ...followed].map((key) => {
+            const chip = el("button", { type: "button", class: "chip", "data-key": `chip:${key}`, "data-language": key, text: key === "" ? t.all : languageName(key) });
+            chip.addEventListener("click", () => pickLanguage(key));
+            return chip;
+          }),
+        );
+      });
+    }
+    // None when the space follows no language: "All" alone would choose nothing.
+    page.chips.hidden = followed.length === 0;
+    const language = shownLanguage();
+    for (const chip of page.chips.children) chip.setAttribute("aria-pressed", String(chip.dataset.language === language));
+    for (const button of rangeButtons) button.setAttribute("aria-pressed", String(button.dataset.range === shownRange()));
+  }
+
+  function repoRow(repo, place) {
+    const link = `repo-${repo.githubId}`;
+    let hide = null;
+    if (canEdit) {
+      hide = el("button", {
+        type: "button", class: "btn small", "data-key": `hide:${repo.githubId}`, "data-hide": repo.githubId,
+        "aria-describedby": link, "aria-disabled": hiding.has(repo.githubId) ? "true" : null, text: t.hide,
+      });
+      hide.addEventListener("click", () => hideRepo(repo, place));
+    }
+    return el(
+      "li",
+      { class: "row" },
+      el("span", { class: "rank num", text: String(place + 1) }),
+      el(
+        "div",
+        { class: "body" },
+        repoLink(repo.fullName, link, `link:${repo.githubId}`, true),
+        hideDescriptions || repo.description === "" ? null : el("p", { class: "desc", title: repo.description, text: repo.description }),
+        el(
+          "p",
+          { class: "meta num" },
+          repo.language === "" ? null : el("span", { text: repo.language }),
+          el("span", { class: "stars" }, icon(STAR, 12, 2), say(t.stars, { count: whole(repo.stars) })),
+          el("span", { text: say(t.forks, { count: whole(repo.forks) }) }),
+          el("time", { datetime: repo.repoCreatedAt, title: dateAndTime(Date.parse(repo.repoCreatedAt)), "data-age": repo.repoCreatedAt, text: ageText(repo.repoCreatedAt) }),
+        ),
+      ),
+      hide,
+    );
+  }
+
+  function hidRow(entry) {
+    const undoButton = el("button", {
+      type: "button", class: "btn small", "data-key": "undo", "data-undo": true,
+      "aria-disabled": showing.has(entry.githubId) ? "true" : null, text: t.undo,
+    });
+    undoButton.addEventListener("click", () => undo(entry));
+    return el(
+      "li",
+      { class: "row" },
+      el("span", { class: "rank", "aria-hidden": "true" }),
+      el("p", { class: "hid-text", role: "status", text: say(t.hid, { name: entry.fullName }) }),
+      undoButton,
+    );
+  }
+
+  function drawList(state) {
+    const range = shownRange();
+    const language = shownLanguage();
+    const repos = listOf(range, language);
+    // "Hid owner/name. Undo" stands where the repository was, in the list it was hidden from.
+    const notice = hid !== null && hid.range === range && hid.language === language ? hid : null;
+    const label = `${t.ranges[range]} · ${language === "" ? t.all : languageName(language)}`;
+    const signature = JSON.stringify([
+      label, state.everFetched, hideDescriptions, notice && [notice.githubId, notice.place],
+      repos.map((repo) => [repo.githubId, repo.fullName, repo.description, repo.language, repo.stars, repo.forks, repo.repoCreatedAt]),
+      [...hiding], [...showing],
+    ]);
+    if (signature === drawn.list) return;
+    drawn.list = signature;
+    redraw(page.list, () => {
+      // The rank is the place among the repositories shown, so after the Hide list.
+      const lines = repos.map(repoRow);
+      if (notice !== null) lines.splice(Math.min(notice.place, lines.length), 0, hidRow(notice));
+      // Before any refresh went well the first is on its way; after one, this list has none, or the space hid them all.
+      page.list.replaceChildren(
+        lines.length > 0
+          ? el("ul", { class: "rows", "aria-label": label, tabindex: "-1", "data-repos": true }, lines)
+          : emptyState("h2", state.everFetched ? t.emptySet : t.emptyFirst),
+      );
+    });
+  }
+
+  /** "Hidden (n)", for whoever may change the space's Hide list: folded until opened, the last hidden first, each with "Show again". */
+  function drawHidden() {
+    const entries = canEdit ? hidden : [];
+    // Once every repository is shown again, the list starts folded the next time.
+    if (entries.length === 0) hiddenOpen = false;
+    const signature = JSON.stringify([hiddenOpen, entries.map((entry) => [entry.githubId, entry.fullName]), [...showing]]);
+    page.hidden.hidden = entries.length === 0;
+    if (signature === drawn.hidden) return;
+    drawn.hidden = signature;
+    redraw(page.hidden, () => {
+      if (entries.length === 0) {
+        page.hidden.replaceChildren();
+        return;
+      }
+      const toggle = el("button", {
+        type: "button", class: "btn small", "aria-expanded": String(hiddenOpen), "aria-controls": "hidden-list",
+        "data-key": "hidden-toggle", "data-hidden-toggle": true, text: say(t.hidden, { count: entries.length }),
+      });
+      toggle.addEventListener("click", () => {
+        hiddenOpen = !hiddenOpen;
+        draw();
+      });
+      const rows = entries.map((entry) => {
+        const link = `hidden-${entry.githubId}`;
+        const button = el("button", {
+          type: "button", class: "btn small", "data-key": `show:${entry.githubId}`, "aria-describedby": link,
+          "aria-disabled": showing.has(entry.githubId) ? "true" : null, text: t.show,
+        });
+        button.addEventListener("click", () => showAgain(entry.githubId));
+        const name = repoLink(entry.fullName, link, `hlink:${entry.githubId}`, false);
+        name.classList.add("grow");
+        return el("li", { class: "row" }, name, button);
+      });
+      page.hidden.replaceChildren(toggle, el("ul", { id: "hidden-list", class: "rows", hidden: !hiddenOpen }, rows));
+    });
+  }
+
+  function drawPage(state) {
+    if (!page.top.isConnected) {
+      root.replaceChildren(
+        el("div", { class: "page" }, page.top, el("div", { class: "controls" }, page.range, page.chips), alerts, page.list, page.hidden),
+        newTab,
+        announcer,
+        shouter,
+      );
+    }
+    drawTop(state);
+    drawChips();
+    drawList(state);
+    drawHidden();
+  }
+
+  function draw() {
+    now = Date.now();
+    if (!loaded) {
+      root.setAttribute("aria-busy", "true");
+      if (loadFailed) {
+        const retry = el("button", { type: "button", class: "btn", text: t.retry });
+        retry.addEventListener("click", () => {
+          loadFailed = false;
+          draw();
+          start();
+        });
+        root.replaceChildren(el("div", { class: "failed-load", role: "alert" }, el("p", { text: t.loadFailed }), retry));
+      } else if (!root.querySelector(".skeleton")) {
+        root.replaceChildren(
+          el(
+            "div",
+            { class: "skeleton" },
+            el("span", { class: "sr-only", text: t.loading }),
+            el("div", { class: "bone short" }),
+            el("div", { class: "bone" }),
+            el("div", { class: "bone" }),
+            el("div", { class: "bone" }),
+          ),
+        );
+      }
+      return;
+    }
+    root.removeAttribute("aria-busy");
+    const state = situation();
+    if (inCard) drawCard(state);
+    else drawPage(state);
+    // The ages move on with the clock, in place.
+    for (const time of root.querySelectorAll("time[data-age]")) setText(time, ageText(time.dataset.age));
+    settleFocus();
+  }
+
+  // ------------------------------------------------------- Reading
+
+  function keepRefreshes(rows) {
+    const kept = rows.filter((row) => isRecord(row) && typeof row.id === "string");
+    return kept.sort((a, b) => startOf(b) - startOf(a) || timeOf(b.createdAt) - timeOf(a.createdAt));
+  }
+
+  function keepLists(rows) {
+    const grouped = new Map();
+    let written = 0;
+    for (const row of rows) {
+      if (!isRecord(row) || !RANGES.includes(row.range) || typeof row.set !== "string") continue;
+      if (!Number.isFinite(row.githubId) || typeof row.fullName !== "string") continue;
+      const repo = {
+        githubId: row.githubId,
+        fullName: row.fullName,
+        description: typeof row.description === "string" ? row.description : "",
+        language: typeof row.language === "string" ? row.language : "",
+        stars: Number.isFinite(row.stars) ? row.stars : 0,
+        forks: Number.isFinite(row.forks) ? row.forks : 0,
+        repoCreatedAt: typeof row.repoCreatedAt === "string" && timeOf(row.repoCreatedAt) > 0 ? row.repoCreatedAt : row.createdAt,
+        position: Number.isFinite(row.position) ? row.position : 0,
+        createdAt: timeOf(row.createdAt),
+      };
+      written = Math.max(written, repo.createdAt);
+      const key = `${row.range}\n${row.set}`;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(repo);
+    }
+    for (const list of grouped.values()) list.sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
+    lists = grouped;
+    anyLists = grouped.size > 0;
+    listsWrittenAt = written > 0 ? written : null;
+  }
+
+  function keepHidden(rows) {
+    const seen = new Set();
+    hidden = rows.filter((row) => {
+      if (!isRecord(row) || !Number.isFinite(row.githubId) || typeof row.fullName !== "string" || seen.has(row.githubId)) return false;
+      seen.add(row.githubId);
+      return true;
+    });
+    hiddenIds = seen;
+  }
+
+  function keepSettings(settings) {
+    const space = isRecord(settings) && isRecord(settings.space) ? settings.space : {};
+    const user = isRecord(settings) && isRecord(settings.user) ? settings.user : {};
+    const languages = Array.isArray(space.languages) ? space.languages : [];
+    followed = LANGUAGES.filter((key) => languages.includes(key));
+    ownRange = RANGES.includes(user.range) ? user.range : "week";
+    hideDescriptions = user.hideDescriptions === true;
+  }
+
+  /** Which good refresh the lists now come from. */
+  const goodRefreshKey = () => {
+    const lastOk = newest(refreshes.filter((row) => row.ok === true), lastSignOf);
+    return lastOk === null ? "" : `${lastOk.id} ${lastOk.updatedAt}`;
+  };
+
+  let reading = null;
+  let readAgain = false;
+  let readLists = false;
+  let lastRead = 0;
+  /** How many changes this page made to the Hide list and to its settings: a read asked before one may answer from before it. */
+  let ownChanges = 0;
+
+  /**
+   * Reads the refreshes, the Hide list and the settings, and the lists when
+   * `withLists` or when another refresh went well since they were read; then
+   * draws them, and starts a refresh when one is due. Asked while a read is
+   * on its way, it reads once more after that one.
+   */
+  function read(withLists) {
+    if (withLists) readLists = true;
+    if (reading) {
+      readAgain = true;
+      return reading;
+    }
+    reading = (async () => {
+      try {
+        do {
+          readAgain = false;
+          const wanted = readLists || !loaded;
+          readLists = false;
+          lastRead = Date.now();
+          const changes = ownChanges;
+          const [refreshRows, hiddenRows, settings] = await Promise.all([
+            hearth.list(REFRESHES, { orderBy: "createdAt", desc: true, limit: 200 }),
+            hearth.list(HIDDEN, { orderBy: "createdAt", desc: true, limit: 5000 }),
+            hearth.settings(),
+          ]);
+          refreshes = keepRefreshes(Array.isArray(refreshRows) ? refreshRows : []);
+          watchSigns(refreshes);
+          // This page changed the Hide list or its settings while they were read: what came back may be from before, so they are read again.
+          if (changes === ownChanges) {
+            keepHidden(Array.isArray(hiddenRows) ? hiddenRows : []);
+            keepSettings(settings);
+          } else readAgain = true;
+          const key = goodRefreshKey();
+          if (wanted || key !== listsReadFor) {
+            const rows = await hearth.list(REPOS, { orderBy: "position", limit: 5000 });
+            keepLists(Array.isArray(rows) ? rows : []);
+            listsReadFor = key;
+          }
+          loaded = true;
+        } while (readAgain);
+      } finally {
+        reading = null;
+      }
+      // Once the repository is back in the list (Undo, or "Show again" here or anywhere else), there is nothing to undo.
+      if (hid !== null && !hiddenIds.has(hid.githubId) && !showing.has(hid.githubId)) hid = null;
+      draw();
+      startIfDue();
+    })();
+    return reading;
+  }
+
+  function start() {
+    read(true).catch(() => {
+      if (loaded) return;
+      loadFailed = true;
+      draw();
+    });
+  }
+
+  // ------------------------------------------------------- Refreshing
+
+  /** Starts a refresh by itself, for whoever may edit, when the last one is more than an hour old and none is going on. */
+  function startIfDue() {
+    if (!canEdit || !loaded || run !== null || document.visibilityState === "hidden" || Date.now() < noStartBefore) return;
+    now = Date.now();
+    const state = situation();
+    if (!state.elsewhere && state.due) startRefresh(false);
+  }
+
+  /**
+   * A refresh: one search for every language and one for each language the
+   * space follows, in each range (day first, then week, then month; within a
+   * range every language first, then the languages in the order of the
+   * setting's options), each paced by the server, about 6.5 seconds apart.
+   * Nothing is written until every search has answered, so a refresh that
+   * fails leaves the lists of the last one that went well.
+   */
+  async function startRefresh(asked) {
+    if (!canEdit || run !== null) return;
+    now = Date.now();
+    if (situation().elsewhere) return;
+    const languages = [...followed];
+    const plan = RANGES.flatMap((range) => ["", ...languages].map((set) => ({ range, set })));
+    run = { rowId: null, search: 1, total: plan.length };
+    clearNotice();
+    draw();
+    let mine;
+    const sent = Date.now();
+    try {
+      mine = await hearth.add(REFRESHES, { at: new Date(serverNow()).toISOString(), ok: false, error: "running" });
+    } catch {
+      run = null;
+      noStartBefore = Date.now() + START_AGAIN_MS;
+      if (asked) showNotice(t.startFailed);
+      draw();
+      return;
+    }
+    learnClock(mine, sent);
+    // The run starts when the server wrote its row, by the server's clock, as the build's job did: this browser's may be off.
+    const started = new Date(timeOf(mine.createdAt) || serverNow());
+    run.rowId = mine.id;
+    speak(announcer, t.refreshing);
+    try {
+      // Two pages may have started at once: the one whose row came first goes on, the other gives way.
+      const rows = keepRefreshes(await hearth.list(REFRESHES, { orderBy: "createdAt", desc: true, limit: 200 }));
+      watchSigns(rows);
+      const first = (row) => timeOf(row.createdAt) < timeOf(mine.createdAt) || (row.createdAt === mine.createdAt && row.id < mine.id);
+      if (rows.some((row) => row.id !== mine.id && isAlive(row) && first(row))) {
+        run = null;
+        // Not again until that one has had time to say how it goes.
+        noStartBefore = Date.now() + BUSY_POLL_MS;
+        await hearth.remove(REFRESHES, mine.id).catch(() => {});
+        await read().catch(() => {});
+        return;
+      }
+      // Only the newest 20 are kept.
+      const old = [...rows].sort((a, b) => timeOf(b.createdAt) - timeOf(a.createdAt)).slice(KEEP_REFRESHES);
+      for (const row of old) await hearth.remove(REFRESHES, row.id).catch(() => {});
+    } catch {
+      // Whether another started too is not known: this one goes on.
+    }
+
+    let failure = null;
+    try {
+      const found = [];
+      for (const [index, { range, set }] of plan.entries()) {
+        run.search = index + 1;
+        draw();
+        const answer = await hearth.fetch(searchUrl(range, set, started), { headers: GITHUB_HEADERS });
+        const items = foundIn(answer);
+        found.push({ range, set, rows: items.filter(keep).slice(0, PER_PAGE).map((repo, position) => rowOf(repo, range, set, position)) });
+        // A sign of life after every search, so that other pages know this refresh is still going on.
+        if (index < plan.length - 1) {
+          const signed = Date.now();
+          await hearth.update(REFRESHES, mine.id, { error: "running" }).then((row) => learnClock(row, signed), () => {});
+        }
+      }
+      // Every search answered: each list in place of the one before, then the lists of languages no longer followed go.
+      for (const { range, set, rows } of found) await hearth.replace(REPOS, { range, set }, rows);
+      const stored = await hearth.list(REPOS, { orderBy: "position", limit: 5000 });
+      const sets = new Set((Array.isArray(stored) ? stored : []).map((row) => row.set));
+      for (const set of sets) {
+        if (typeof set === "string" && set !== "" && !languages.includes(set)) await hearth.replace(REPOS, { set }, []);
+      }
+      await hearth.update(REFRESHES, mine.id, { at: started.toISOString(), ok: true, error: "" });
+    } catch (error) {
+      failure = cut(messageOf(error), 500);
+      await hearth.update(REFRESHES, mine.id, { at: started.toISOString(), ok: false, error: failure }).catch(() => {});
+    }
+    run = null;
+    await read(true).catch(() => {});
+    draw();
+    if (failure === null) speak(announcer, t.updatedNow);
+    else speak(shouter, failureText(situation()) ?? say(t.failed, { time: momentText(Date.now()) }));
+  }
+
+  // ------------------------------------------------------- Choosing
+
+  /** The range is the reader's own setting: picked here, it is saved as theirs, so their card follows. */
+  function pickRange(range) {
+    if (range === shownRange()) return;
+    picked = { range, own: ownRange };
+    // "Hid owner/name. Undo" is about the list it was hidden from: another list does not show it.
+    hid = null;
+    clearNotice();
+    draw();
+    if (rangeSave === null) rangeSave = saveRange().finally(() => (rangeSave = null));
+  }
+
+  async function saveRange() {
+    for (;;) {
+      const wanted = picked !== null && picked.own === ownRange ? picked.range : null;
+      if (wanted === null || wanted === ownRange) return;
+      let saved;
+      try {
+        saved = await hearth.saveSettings({ user: { range: wanted } });
+      } catch {
+        ownChanges += 1;
+        // The range picked stays on this page; the reader's own stays as it was.
+        showNotice(t.changeFailed);
+        return;
+      }
+      ownChanges += 1;
+      const latest = picked !== null ? picked.range : wanted;
+      keepSettings(saved);
+      // Picked again meanwhile: that one is saved next.
+      picked = latest === ownRange ? null : { range: latest, own: ownRange };
+      draw();
+    }
+  }
+
+  function pickLanguage(language) {
+    if (language === shownLanguage()) return;
+    pickedLanguage = language;
+    hid = null;
+    clearNotice();
+    draw();
+  }
+
+  // ------------------------------------------------------- Hiding
+
+  /** After a change that failed: reads everything again and says so. */
+  async function afterFailure(text) {
+    showNotice(text);
+    await read(true).catch(() => {});
+  }
+
+  /** Puts a repository on the space's Hide list, once: every list leaves it out, for everyone in the space. */
+  async function hideRepo(repo, place) {
+    if (!canEdit || hiding.has(repo.githubId)) return;
+    const range = shownRange();
+    const language = shownLanguage();
+    hiding.add(repo.githubId);
+    clearNotice();
+    draw();
+    try {
+      // Read now, not from the screen: someone may have hidden it, or many others, since.
+      const rows = await hearth.list(HIDDEN, { orderBy: "createdAt", desc: true, limit: 5000 });
+      const all = Array.isArray(rows) ? rows : [];
+      if (!all.some((row) => isRecord(row) && row.githubId === repo.githubId)) {
+        if (all.length >= MOST_HIDDEN) {
+          hiding.delete(repo.githubId);
+          await afterFailure(t.hiddenFull);
+          return;
+        }
+        await hearth.add(HIDDEN, { githubId: repo.githubId, fullName: repo.fullName });
+      }
+    } catch {
+      ownChanges += 1;
+      hiding.delete(repo.githubId);
+      await afterFailure(t.changeFailed);
+      return;
+    }
+    ownChanges += 1;
+    hiding.delete(repo.githubId);
+    // On the Hide list now, the last hidden first: shown at once, and read again after.
+    if (!hiddenIds.has(repo.githubId)) keepHidden([{ githubId: repo.githubId, fullName: repo.fullName }, ...hidden]);
+    hid = { githubId: repo.githubId, fullName: repo.fullName, range, language, place };
+    focusAfter(["[data-undo]"]);
+    draw();
+    await read().catch(() => {});
+    draw();
+    focusNext = null;
+  }
+
+  /** Takes a repository off the space's Hide list; `focus` says where the keyboard goes once it is back. */
+  async function show(githubId, focus) {
+    if (!canEdit || showing.has(githubId)) return false;
+    showing.add(githubId);
+    clearNotice();
+    draw();
+    try {
+      await hearth.replace(HIDDEN, { githubId }, []);
+    } catch {
+      ownChanges += 1;
+      showing.delete(githubId);
+      await afterFailure(t.changeFailed);
+      return false;
+    }
+    ownChanges += 1;
+    showing.delete(githubId);
+    keepHidden(hidden.filter((entry) => entry.githubId !== githubId));
+    if (hid !== null && hid.githubId === githubId) hid = null;
+    focusAfter(focus);
+    draw();
+    await read().catch(() => {});
+    draw();
+    focusNext = null;
+    return true;
+  }
+
+  const undo = (entry) => show(entry.githubId, [`[data-hide="${entry.githubId}"]`]);
+  // While something is still hidden, "Hidden (n)"; after the last, the repository's own "Hide", or the list, or the range.
+  const showAgain = (githubId) =>
+    show(githubId, ["[data-hidden-toggle]", `[data-hide="${githubId}"]`, "[data-repos]", '.seg [aria-pressed="true"]']);
+
+  // ------------------------------------------------------- Keeping up
+
+  // Changed elsewhere: by another page of the app, the chat, or the settings.
+  hearth.onChange(() => {
+    read(true).catch(() => {});
+  });
+  // The minutes and ages move on by themselves; what others change shows within 15 seconds, and at once when Hearth is looked at again.
+  setInterval(() => {
+    if (!loaded) return;
+    now = Date.now();
+    const every = situation().elsewhere ? BUSY_POLL_MS : POLL_MS;
+    if (document.visibilityState !== "hidden" && now - lastRead >= every) {
+      read().catch(() => {});
+      return;
+    }
+    draw();
+    startIfDue();
+  }, TICK_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (loaded && document.visibilityState === "visible") read().catch(() => {});
+  });
+
+  draw();
+  start();
+})();
+</script>
+</body>
+</html>

@@ -89,7 +89,7 @@
       }
     }
   },
-  "instructions": "repos holds the lists the last good refresh left: for each range (day, week, month) and set (\"\" for every language, else a language key the space follows), GitHub's order by stars from position 0, as the page fetched them from api.github.com. hidden is the space's Hide list, left out of every list. refreshes holds one row: when the page last refreshed and whether it went well. Do not write repos yourself: the page refreshes them.",
+  "instructions": "repos holds the lists of the last refresh that went well: for each range (day, week, month) and set (\"\" for every language, else the key of a language the space follows, such as rust), the new repositories GitHub's search found with the most stars, in its order from position 0, at most 25, spam left out. hidden is the space's Hide list (githubId and fullName): every list leaves those repositories out, for everyone in the space; add a row to hide one, remove it to show it again. refreshes holds the newest 20 refreshes, one row each: at (when it started), ok, and error (\"running\" while it goes on, \"\" when it went well, else why it failed). The page refreshes the lists itself from api.github.com when someone who may edit opens it and the last refresh started more than an hour ago, or on Refresh now. Do not write repos or refreshes yourself.",
   "settings": {
     "languages": {
       "type": "multi-select",

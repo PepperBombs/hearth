@@ -189,8 +189,19 @@ h2, h3, p, ul { margin: 0; }
   let clearing = false;
   // Ticks on their way to the server, shown at once: id → { done, token }.
   const ticking = new Map();
+  // The save of each item's last tick, settled either way: two quick presses on one item are saved in
+  // the order they were made, and "Clear ticked" waits for the ticks pressed before it.
+  const saving = new Map();
+  // Set when "Try again" is pressed, so that the keyboard goes on into the app once it is read.
+  let refocus = false;
 
   const doneOf = (item) => (ticking.has(item.id) ? ticking.get(item.id).done : item.done === true);
+  /**
+   * Whether an item is listed where ticked items are not (the card; the page with "Hide ticked
+   * items"): one ticked here stays, ticked, until its tick is saved, so that a second quick press
+   * lands on it again rather than on the item that would have moved into its place.
+   */
+  const listedOpen = (item) => item.done !== true || ticking.has(item.id);
   const aisleOfRow = (item) => (typeof item.aisle === "string" ? item.aisle : "");
   const nameOfRow = (item) => (typeof item.name === "string" ? item.name : "");
   // The settings allow an empty entry and the same aisle twice; neither is a group of its own.
@@ -342,7 +353,7 @@ h2, h3, p, ul { margin: 0; }
 
   function drawList() {
     const titles = aisles();
-    const shown = hideDone ? items.filter((item) => !doneOf(item)) : items;
+    const shown = hideDone ? items.filter(listedOpen) : items;
     // An item whose aisle the space no longer has is listed under "Other", with those that never had one.
     const groupOf = (item) => (titles.includes(aisleOfRow(item)) ? aisleOfRow(item) : "");
     const groups = [...titles, ""]
@@ -385,17 +396,18 @@ h2, h3, p, ul { margin: 0; }
   }
 
   function drawCard() {
-    const open = items.filter((item) => !doneOf(item));
-    const first = open.slice(0, CARD_ROWS);
-    const signature = JSON.stringify([open.length, first.map((item) => [item.id, nameOfRow(item)])]);
+    const left = items.filter((item) => !doneOf(item)).length;
+    // Nothing left to buy: nothing to press by mistake either, so an item just ticked need not stay.
+    const first = left === 0 ? [] : items.filter(listedOpen).slice(0, CARD_ROWS);
+    const signature = JSON.stringify([left, first.map((item) => [item.id, nameOfRow(item), doneOf(item)])]);
     if (signature === drawn.card) return;
     drawn.card = signature;
     keepFocus(cardBox, () => {
-      if (open.length === 0) cardBox.replaceChildren(emptyState("h3"));
+      if (first.length === 0) cardBox.replaceChildren(emptyState("h3"));
       else
         cardBox.replaceChildren(
           el("ul", { class: "rows" }, first.map(itemRow)),
-          el("p", { class: "left", text: say(t.left, { count: open.length }) }),
+          el("p", { class: "left", text: say(t.left, { count: left }) }),
         );
     });
   }
@@ -423,6 +435,7 @@ h2, h3, p, ul { margin: 0; }
         const retry = el("button", { type: "button", class: "btn small", text: t.retry });
         retry.addEventListener("click", () => {
           loadFailed = false;
+          refocus = true;
           draw();
           start();
         });
@@ -433,6 +446,11 @@ h2, h3, p, ul { margin: 0; }
         root.replaceChildren(...(canEdit ? [form, alertSlot, listBox, clearBox] : [alertSlot, listBox]));
       }
     }
+    if (mode === "failed" && refocus) {
+      // Failed again: the keyboard stays on "Try again".
+      refocus = false;
+      root.querySelector("button").focus({ preventScroll: true });
+    }
     if (mode !== "ready") return;
     if (inCard) {
       drawCard();
@@ -441,6 +459,12 @@ h2, h3, p, ul { margin: 0; }
       drawList();
       drawClear();
       syncSubmit();
+    }
+    if (refocus) {
+      // Read at last after "Try again", which has gone: the keyboard goes on to the first control.
+      refocus = false;
+      const first = root.querySelector("input:not(:disabled), button:not(:disabled), [tabindex='-1']");
+      if (first) first.focus({ preventScroll: true });
     }
   }
 
@@ -505,6 +529,17 @@ h2, h3, p, ul { margin: 0; }
   // ---------------------------------------------------------------- Changing
 
   /**
+   * A row as the server saved it, in place of the one last read, so that the
+   * page shows a change it made even when the list cannot be read again just
+   * then. Read again soon after, with everyone's changes.
+   */
+  function keep(row) {
+    if (!row || typeof row !== "object" || typeof row.id !== "string") return;
+    const index = items.findIndex((item) => item.id === row.id);
+    items = index < 0 ? [...items, row] : items.map((item, at) => (at === index ? row : item));
+  }
+
+  /**
    * Puts an item on the list under the aisle chosen, or, when an item of that
    * name is on it already, marks that one as needed again, in the aisle just
    * chosen or the one it had: two people sharing the list often add the
@@ -525,12 +560,12 @@ h2, h3, p, ul { margin: 0; }
       const all = await hearth.list(ITEMS, ALL);
       const there = (Array.isArray(all) ? all : []).find((item) => sameName(nameOfRow(item)) === sameName(name));
       if (!there) {
-        await hearth.add(ITEMS, { name, aisle, done: false });
+        keep(await hearth.add(ITEMS, { name, aisle, done: false }));
         message = [say(t.added, { name }), true];
       } else {
         const had = aisleOfRow(there);
         const wanted = aisle === "" ? had : aisle;
-        if (there.done === true || wanted !== had) await hearth.update(ITEMS, there.id, { done: false, aisle: wanted });
+        if (there.done === true || wanted !== had) keep(await hearth.update(ITEMS, there.id, { done: false, aisle: wanted }));
         message = [say(t.already, { name: nameOfRow(there) }), false];
       }
     } catch {
@@ -548,7 +583,11 @@ h2, h3, p, ul { margin: 0; }
     setStatus(message[0], message[1]);
   }
 
-  /** Ticks an item off as bought, for everyone, or unticks it. Shown at once; read again once saved. */
+  /**
+   * Ticks an item off as bought, for everyone, or unticks it. Shown at once;
+   * saved after the item's tick before, if that is still on its way; read
+   * again once saved.
+   */
   async function tick(item, done) {
     const token = {};
     ticking.set(item.id, { done, token });
@@ -556,15 +595,28 @@ h2, h3, p, ul { margin: 0; }
     clearNotice();
     setStatus("");
     draw();
+    const save = (saving.get(item.id) || Promise.resolve()).then(() => hearth.update(ITEMS, item.id, { done }));
+    const settled = save.then(
+      () => {},
+      () => {},
+    );
+    saving.set(item.id, settled);
+    const saved = () => {
+      if (saving.get(item.id) === settled) saving.delete(item.id);
+    };
+    let row;
     try {
-      await hearth.update(ITEMS, item.id, { done });
+      row = await save;
     } catch {
       // Someone else may have cleared it first: it is gone, and the list shows that once read again.
+      saved();
       if (mine()) ticking.delete(item.id);
       await afterFailure();
       draw();
       return;
     }
+    saved();
+    keep(row);
     await refresh().catch(() => {});
     if (mine()) ticking.delete(item.id);
     draw();
@@ -579,6 +631,9 @@ h2, h3, p, ul { margin: 0; }
     setStatus("");
     draw();
     try {
+      // What is ticked on the screen is what goes: ticks and unticks pressed before are saved first,
+      // so that an item just unticked, still needed, is not deleted, nor one just ticked left behind.
+      await Promise.all([...saving.values()]);
       await hearth.replace(ITEMS, { done: true }, []);
     } catch {
       clearing = false;
@@ -586,6 +641,7 @@ h2, h3, p, ul { margin: 0; }
       draw();
       return;
     }
+    items = items.filter((item) => item.done !== true);
     await refresh().catch(() => {});
     clearing = false;
     draw();

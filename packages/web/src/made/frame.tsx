@@ -26,6 +26,9 @@ export function notifyMadeAppChanged(appId: string, source: Window | null = null
   for (const listener of listeners.get(appId) ?? []) listener(source);
 }
 
+/** The calls that change the app's data or settings, after which its other pages read again. */
+const WRITES: ReadonlySet<string> = new Set(["add", "update", "remove", "replace", "saveSettings"]);
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -102,7 +105,9 @@ export function MadeAppFrame({ app, view = "card", maxHeight = 560 }: { app: App
         answer(app, message.op, message.args).then(
           (result) => {
             reply({ ok: true, result });
-            if (message.op !== "list") notifyMadeAppChanged(app.id, own);
+            // Only a write changes what the app's other pages show: telling them after a read too would
+            // have two pages of one app on screen wake each other for ever.
+            if (WRITES.has(String(message.op))) notifyMadeAppChanged(app.id, own);
           },
           (error: unknown) => reply({ ok: false, error: error instanceof Error ? error.message : String(error) }),
         );
