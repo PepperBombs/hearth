@@ -7,10 +7,10 @@
  *
  * The conversation lives in this page only; the server keeps none of it.
  */
-import type { ChatEvent, ChatFailure, ChatMessage, Space } from "@hearth/shared";
+import type { AppSummary, CHAT_ACTIONS, ChatEvent, ChatFailure, ChatMessage, Space } from "@hearth/shared";
 import { Button, Segmented, buttonClass } from "@hearth/sdk/web";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Send, Square } from "lucide-react";
+import { Check, Send, Square, Undo2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link } from "react-router";
 import { Card } from "../components/card";
@@ -18,14 +18,24 @@ import { Page } from "../components/shell/page";
 import { setAssistantLevel } from "../groups/api";
 import type { PlainMessageKey } from "../i18n";
 import { MadeAppFrame, notifyMadeAppChanged } from "../made/frame";
-import { MODEL_QUERY_KEY, fetchModelSettings, streamChat } from "../made/api";
+import { MODEL_QUERY_KEY, fetchModelSettings, restoreVersion, streamChat } from "../made/api";
+import { ApiRequestError } from "../session/api";
 import { useI18n } from "../session/preferences";
 import { SESSION_QUERY_KEY, useSession } from "../session/session";
 
 type Entry =
   | { kind: "user"; text: string }
   | { kind: "model"; text: string }
-  | { kind: "action"; action: "app_created" | "row_added" | "row_updated"; appId: string; appName: string }
+  | {
+      kind: "action";
+      action: ChatAction;
+      appId: string;
+      appName: string;
+      /** For a change to the app: the version it made, the one before, and for a restore the one brought back. */
+      version?: number;
+      previous?: number;
+      restored?: number;
+    }
   | { kind: "failure"; failure: ChatFailure | "network" | "stopped"; detail: string };
 
 const FAILURES: Record<ChatFailure | "network" | "stopped", PlainMessageKey | "chat.failModel"> = {
@@ -40,6 +50,8 @@ const FAILURES: Record<ChatFailure | "network" | "stopped", PlainMessageKey | "c
   network: "chat.failNetwork",
   stopped: "chat.stopped",
 };
+
+type ChatAction = (typeof CHAT_ACTIONS)[number];
 
 const ACTIONS = {
   app_created: "chat.actionAppCreated",
@@ -97,10 +109,19 @@ export function Chat() {
       if (event.type === "text") add({ kind: "model", text: event.text });
       else if (event.type === "error") add({ kind: "failure", failure: event.failure, detail: event.detail });
       else if (event.type === "action") {
-        add({ kind: "action", action: event.action, appId: event.appId, appName: event.appName });
-        // A new app comes with the session; a changed row, to every page of its app on screen.
-        if (event.action === "app_created") void queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY });
-        else notifyMadeAppChanged(event.appId);
+        add({
+          kind: "action",
+          action: event.action,
+          appId: event.appId,
+          appName: event.appName,
+          ...(event.version === undefined ? {} : { version: event.version }),
+          ...(event.previous === undefined ? {} : { previous: event.previous }),
+          ...(event.restored === undefined ? {} : { restored: event.restored }),
+        });
+        // A new app, or a new version of one, comes with the session, and its page is drawn afresh;
+        // a changed row goes to every page of its app on screen.
+        if (event.action === "row_added" || event.action === "row_updated") notifyMadeAppChanged(event.appId);
+        else void queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY });
       }
     };
     try {
@@ -247,9 +268,16 @@ function EntryView({ entry }: { entry: Entry }) {
     case "action":
       return (
         <div className="flex flex-col gap-2">
-          <p className="flex items-center gap-1.5 text-fg-2">
+          <p className="flex flex-wrap items-center gap-1.5 text-fg-2">
             <Check size={16} aria-hidden="true" className="text-accent" />
-            {t(ACTIONS[entry.action], { app: entry.appName })}
+            {entry.action === "app_updated"
+              ? t("chat.actionAppUpdated", { app: entry.appName, version: entry.version ?? 0 })
+              : entry.action === "app_restored"
+                ? t("chat.actionAppRestored", { app: entry.appName, restored: entry.restored ?? 0 })
+                : t(ACTIONS[entry.action], { app: entry.appName })}
+            {(entry.action === "app_updated" || entry.action === "app_restored") && app && entry.previous !== undefined ? (
+              <Undo app={app} version={entry.previous} />
+            ) : null}
           </p>
           {/* The app it made, drawn as on the dashboard, once the session holds it. */}
           {entry.action === "app_created" && app ? (
@@ -269,3 +297,39 @@ function EntryView({ entry }: { entry: Entry }) {
     }
   }
 }
+
+/**
+ * Undoes a change the model made to an app: the version before it comes
+ * back into use, as a new version, which the server refuses when an entry
+ * written since would not fit it.
+ */
+function Undo({ app, version }: { app: AppSummary; version: number }) {
+  const { t } = useI18n();
+  const queryClient = useQueryClient();
+  const [state, setState] = useState<"idle" | "working" | "done" | "conflict" | "failed">("idle");
+  const undo = async () => {
+    setState("working");
+    try {
+      await restoreVersion(app.spaceId, app.id, version);
+      await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY });
+      setState("done");
+    } catch (error) {
+      setState(error instanceof ApiRequestError && error.status === 409 ? "conflict" : "failed");
+    }
+  };
+  if (state === "done") return <span className="text-fg-3">{t("chat.undone")}</span>;
+  return (
+    <>
+      <Button size="sm" disabled={state === "working"} onClick={() => void undo()}>
+        <Undo2 size={14} aria-hidden="true" />
+        {t("chat.undo")}
+      </Button>
+      {state === "conflict" || state === "failed" ? (
+        <span role="alert" className="basis-full text-down">
+          {t(state === "conflict" ? "chat.undoConflict" : "chat.undoFailed")}
+        </span>
+      ) : null}
+    </>
+  );
+}
+

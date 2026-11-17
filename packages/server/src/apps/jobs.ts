@@ -789,3 +789,13 @@ export function requestRun(
     })
     .immediate();
 }
+
+/**
+ * Forgets the job status of one install, for an app that has no jobs any
+ * more: one of the build's apps moved to a built-in app made in Hearth
+ * (src/made/builtin.ts), whose page refreshes what its job fetched.
+ */
+export function forgetJobs(db: Db, spaceId: string, appId: string): number {
+  return db.prepare("DELETE FROM app_jobs WHERE space_id = ? AND app_id = ?").run(spaceId, appId).changes;
+}
+

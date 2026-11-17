@@ -164,7 +164,14 @@ export function listAppsForUser(db: Db, registry: Registry, userId: string): App
       enabled: row.enabled === 1,
       pinned: row.pinned === 1,
       hasPage: app.hasPage,
-      ...(app.made ? { made: true } : {}),
+      ...(app.made
+        ? {
+            made: true,
+            version: app.version ?? 1,
+            ...(app.template ? { template: app.template } : {}),
+            ...(manifest.settings ? { settings: manifest.settings } : {}),
+          }
+        : {}),
     });
   }
   return apps;
@@ -220,7 +227,8 @@ export function addApp(
         throw new Refusal(403, "forbidden", "Adding apps to this space is for its owners and the members they allow.");
       }
       const app = registry.get(appId);
-      if (!app) throw notFound();
+      // A made app is its space's own: it is not there to be added anywhere else.
+      if (!app || (app.madeIn !== undefined && app.madeIn !== spaceId)) throw notFound();
       if (app.manifest.spaces && !app.manifest.spaces.includes(member.kind)) {
         throw new Refusal(409, "conflict", `This app cannot be added to a ${member.kind} space.`);
       }
@@ -334,6 +342,7 @@ export function listSpaceApps(db: Db, registry: Registry, request: { userId: str
             exceptions.filter((exception) => exception.appId === install.id).map((exception) => [exception.userId, exception.level]),
           ),
           assistant: install.assistant === 1,
+          ...((template) => (template ? { template } : {}))(registry.get(install.id)?.template),
         }),
       );
       return { apps, members: listMemberDetails(db, spaceId), invitations: listInvitations(db, spaceId) };

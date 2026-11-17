@@ -1,0 +1,1296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Ideas</title>
+<style>
+/*
+ * Ideas, a built-in app of Hearth: a timeline of short notes with #tags,
+ * pins, search and an archive, after the design of Memos. In its card: a box
+ * to write an idea at once and the three written last. On its own page:
+ * everything. Colours come only from Hearth's variables, so both themes work.
+ */
+*, *::before, *::after { box-sizing: border-box; }
+/* Room for the focus ring of what touches the frame's edge. */
+body { padding: 4px; line-height: 1.57; -webkit-font-smoothing: antialiased; }
+p, h2, h3, ul { margin: 0; }
+ul { padding: 0; list-style: none; }
+button, input, textarea { margin: 0; font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--hearth-accent); outline-offset: 2px; }
+::selection { background: var(--hearth-accent-soft); color: var(--hearth-accent-text); }
+.num { font-variant-numeric: tabular-nums; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.icon { flex: none; }
+
+/* The kit's look: buttons, boxes, chips and the switch. */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 34px; padding: 0 12px; border: 1px solid var(--hearth-line); border-radius: 8px;
+  background: var(--hearth-surface); color: var(--hearth-text); font-weight: 500; white-space: nowrap; user-select: none;
+}
+.btn.primary { border-color: var(--hearth-accent); background: var(--hearth-accent); color: var(--hearth-surface); }
+.btn.sm { height: 28px; padding: 0 8px; font-size: 12px; line-height: 20px; }
+.btn:disabled, .btn[aria-disabled="true"] { opacity: .55; }
+@media (hover: hover) {
+  .btn:not(:disabled):not([aria-disabled="true"]):hover { background: var(--hearth-surface-2); }
+  .btn.primary:not(:disabled):not([aria-disabled="true"]):hover { background: var(--hearth-accent); opacity: .92; }
+}
+.input, .box {
+  display: block; width: 100%; border: 1px solid var(--hearth-line); border-radius: 8px;
+  background: var(--hearth-surface); color: var(--hearth-text); appearance: none;
+}
+.input { height: 36px; padding: 0 10px; }
+.box { min-height: 76px; max-height: 320px; padding: 8px 10px; resize: vertical; field-sizing: content; }
+.input::placeholder, .box::placeholder { color: var(--hearth-text-3); opacity: 1; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* A chip grows with a long tag that wraps (30 Chinese characters do on a phone) rather than spill out of it. */
+.chip {
+  display: inline-flex; align-items: center; min-height: 28px; padding: 2px 10px;
+  border: 1px solid var(--hearth-line); border-radius: 14px; background: transparent;
+  color: var(--hearth-text-2); font-size: 13px; line-height: 20px; text-align: start; overflow-wrap: anywhere;
+}
+.chip[aria-pressed="true"] { border-color: var(--hearth-accent); background: var(--hearth-accent-soft); color: var(--hearth-accent-text); font-weight: 500; }
+.chip-count { margin-left: 6px; font-size: 12px; color: var(--hearth-text-3); }
+.seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--hearth-surface-2); }
+.seg button { height: 28px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--hearth-text-2); font-size: 13px; }
+.seg button[aria-pressed="true"] { background: var(--hearth-surface); color: var(--hearth-text); font-weight: 500; box-shadow: 0 0 0 1px var(--hearth-line); }
+/* A thumb needs more room than a pointer. */
+@media (pointer: coarse) {
+  .btn { height: 44px; padding: 0 16px; }
+  .btn.sm { height: 44px; padding: 0 12px; }
+  .input { height: 44px; font-size: 16px; }
+  .box { font-size: 16px; }
+  .chip { min-height: 36px; padding: 2px 14px; border-radius: 18px; }
+  .seg button { height: 40px; padding: 0 16px; }
+  .row { min-height: 44px; }
+  .shortcut { display: none; }
+}
+
+/* The page. */
+.page { display: flex; flex-direction: column; gap: 16px; }
+.composer, .edit { display: flex; flex-direction: column; gap: 8px; }
+.composer-foot { display: flex; align-items: center; gap: 12px; }
+.edit-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.hint, .used, .more { font-size: 12px; line-height: 20px; color: var(--hearth-text-3); }
+.push { margin-left: auto; }
+.controls { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.timeline { display: flex; flex-direction: column; gap: 10px; }
+.idea { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--hearth-line); border-radius: 8px; }
+.idea-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.tag { padding: 0; border: 0; border-radius: 4px; background: none; color: var(--hearth-accent-text); text-align: start; }
+.tag[aria-pressed="true"] { font-weight: 500; }
+@media (hover: hover) { .tag:hover { text-decoration: underline; } }
+.idea-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-width: 0; font-size: 12px; line-height: 20px; color: var(--hearth-text-3); }
+.pinned { display: inline-flex; align-items: center; gap: 4px; font-weight: 500; color: var(--hearth-text-2); }
+.author { min-width: 0; overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-left: auto; }
+.confirm { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; background: var(--hearth-surface-2); }
+.confirm-title { font-weight: 600; }
+.confirm-body { color: var(--hearth-text-2); }
+.confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+.empty { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 420px; margin: 0 auto; padding: 32px 8px; text-align: center; }
+.empty-badge { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin-bottom: 4px; border-radius: 999px; background: var(--hearth-accent-soft); color: var(--hearth-accent-text); }
+.empty-title { font-size: 16px; line-height: 1.4; font-weight: 600; }
+.empty-body { color: var(--hearth-text-2); }
+.empty-action { margin-top: 8px; }
+
+/* The card. */
+.card { display: flex; flex-direction: column; gap: 6px; min-height: 88px; }
+.quick { display: flex; gap: 8px; }
+.quick .input { flex: 1; min-width: 0; }
+.rows { display: flex; flex-direction: column; }
+.row { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 36px; padding: 6px 0; border-top: 1px solid var(--hearth-line); overflow-wrap: anywhere; }
+.row:first-child { border-top: 0; }
+.row-body { flex: 1; min-width: 0; }
+.clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.row-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 20px; color: var(--hearth-text-3); }
+.card .empty { justify-content: center; min-height: 88px; padding: 8px; }
+
+/* What went wrong, where it went wrong; and the shape of what is on its way. */
+.alert { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid var(--hearth-line); border-radius: 8px; background: var(--hearth-surface-2); }
+.alert-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.alert-lead { font-weight: 600; }
+.alert-reason { color: var(--hearth-text-2); }
+.bones { display: flex; flex-direction: column; gap: 10px; }
+.bone { height: 36px; border-radius: 8px; background: var(--hearth-surface-2); }
+.bone.tall { height: 76px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="status" class="sr-only" role="status" aria-live="polite"></div>
+<script>
+(() => {
+  "use strict";
+  const H = window.hearth;
+  const ZH = H.locale === "zh";
+  const CAN_EDIT = H.access === "edit";
+  const PAGE = H.view === "page";
+  document.documentElement.lang = ZH ? "zh-CN" : "en";
+  /** In a group, an idea names who wrote it: the members' names, by their IDs (a name is never translated). */
+  const GROUP = !!H.space && H.space.kind === "group";
+  const NAMES = new Map(
+    (GROUP && Array.isArray(H.space.members) ? H.space.members : [])
+      .filter((member) => member && typeof member.id === "string" && typeof member.name === "string")
+      .map((member) => [member.id, member.name]),
+  );
+
+  /* ---------------------------------------------------------------------
+   * Every interface string, in English and Chinese. What people write is
+   * never translated.
+   * ------------------------------------------------------------------- */
+  const TEXT = {
+    en: {
+      write: "Write an idea",
+      placeholder: "What's on your mind? Add #tags to group ideas.",
+      save: "Save",
+      shortcut: "Ctrl+Enter or ⌘+Enter saves.",
+      search: "Search ideas",
+      tags: "Tags",
+      allTags: "All tags ({count})",
+      fewerTags: "Fewer tags",
+      view: "Ideas shown",
+      active: "Active ({count})",
+      archived: "Archived ({count})",
+      pinned: "Pinned",
+      pin: "Pin",
+      unpin: "Unpin",
+      edit: "Edit",
+      editing: "Edit this idea",
+      cancel: "Cancel",
+      archive: "Archive",
+      restore: "Bring back",
+      delete: "Delete",
+      deleteTitle: "Delete this idea?",
+      deleteBody: "It will be gone for good. To put it away and keep it, archive it instead.",
+      whenNow: "just now",
+      whenMinutes: "{count} min ago",
+      whenHours: "{count} h ago",
+      whenYesterday: "yesterday, {time}",
+      emptyFirst: "No ideas yet.",
+      emptyFirstHint: "Write one down as soon as it comes to you.",
+      emptyActive: "Every idea is archived.",
+      emptyArchived: "Nothing archived.",
+      emptyArchivedHint: "An idea that is done or given up can be put away here instead of deleted.",
+      emptyFound: "Nothing found.",
+      clear: "Clear filters",
+      more: "Showing the first {count}. Search or pick a tag to find the rest.",
+      loading: "Loading ideas…",
+      loadFailed: "The ideas could not be read.",
+      retry: "Try again",
+      saveFailed: "The idea could not be saved.",
+      changeFailed: "The idea could not be changed.",
+      deleteFailed: "The idea could not be deleted.",
+      gone: "That idea is gone: someone deleted it.",
+      pinArchived: "An archived idea cannot be pinned. Bring it back first.",
+      full: "This space holds 5000 ideas, as many as it can. Delete some of them first.",
+      tooLong: "An idea holds at most 4000 characters.",
+      dismiss: "Dismiss",
+      saved: "Idea saved.",
+      pinnedOne: "Idea pinned.",
+      unpinnedOne: "Idea unpinned.",
+      archivedOne: "Idea archived.",
+      restoredOne: "Idea brought back.",
+      deletedOne: "Idea deleted.",
+    },
+    zh: {
+      write: "写下一个想法",
+      placeholder: "想到了什么？加上 #标签 方便归类。",
+      save: "保存",
+      shortcut: "按 Ctrl+Enter 或 ⌘+Enter 保存。",
+      search: "搜索想法",
+      tags: "标签",
+      allTags: "全部标签（{count}）",
+      fewerTags: "收起标签",
+      view: "显示范围",
+      active: "当前（{count}）",
+      archived: "已归档（{count}）",
+      pinned: "已置顶",
+      pin: "置顶",
+      unpin: "取消置顶",
+      edit: "编辑",
+      editing: "编辑这个想法",
+      cancel: "取消",
+      archive: "归档",
+      restore: "恢复",
+      delete: "删除",
+      deleteTitle: "删除这个想法？",
+      deleteBody: "删除后无法恢复。如果只是想收起来留着，可以改为归档。",
+      whenNow: "刚刚",
+      whenMinutes: "{count} 分钟前",
+      whenHours: "{count} 小时前",
+      whenYesterday: "昨天 {time}",
+      emptyFirst: "还没有想法。",
+      emptyFirstHint: "想到什么，随手记下来。",
+      emptyActive: "所有想法都已归档。",
+      emptyArchived: "没有已归档的想法。",
+      emptyArchivedHint: "已经完成或放弃的想法可以归档收起，不必删除。",
+      emptyFound: "没有找到。",
+      clear: "清除筛选",
+      more: "只显示前 {count} 条。搜索或选择标签可以找到其余的想法。",
+      loading: "正在读取想法…",
+      loadFailed: "无法读取想法。",
+      retry: "重试",
+      saveFailed: "无法保存这个想法。",
+      changeFailed: "无法修改这个想法。",
+      deleteFailed: "无法删除这个想法。",
+      gone: "这个想法已经被别人删除了。",
+      pinArchived: "已归档的想法不能置顶。请先恢复它。",
+      full: "这个空间已经有 5000 个想法，不能再多了。请先删除一些。",
+      tooLong: "一个想法最多 4000 个字。",
+      dismiss: "关闭",
+      saved: "想法已保存。",
+      pinnedOne: "想法已置顶。",
+      unpinnedOne: "已取消置顶。",
+      archivedOne: "想法已归档。",
+      restoredOne: "想法已恢复。",
+      deletedOne: "想法已删除。",
+    },
+  };
+  const WORDS = ZH ? TEXT.zh : TEXT.en;
+  document.title = ZH ? "想法" : "Ideas";
+  function t(key, values) {
+    const text = WORDS[key] ?? TEXT.en[key] ?? key;
+    return values === undefined ? text : text.replace(/\{(\w+)\}/g, (whole, name) => (name in values ? String(values[name]) : whole));
+  }
+
+  /* ---------------------------------------------------------------------
+   * What an idea's text means: how long it may be, which of its words are
+   * #tags, and how a search reads it (the old app's text.ts, as it was).
+   * ------------------------------------------------------------------- */
+  /** The longest text of an idea, in characters, after the spaces around it are taken off. */
+  const LONGEST_IDEA = 4000;
+  /** Text as a tag or a search compares it: "Idea", "IDEA" and "ｉｄｅａ" are the same. */
+  const fold = (text) => text.normalize("NFKC").toLowerCase();
+  /** A web address: what a "#" inside it belongs to. Only the characters an address is made of. */
+  const WEB_ADDRESS = /https?:\/\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+/gi;
+  /** A tag: "#" (or "＃") and 1 to 30 letters, digits, "_" or "-" after it, in any script. A longer run is no tag. */
+  const TAG = /[#＃]([\p{L}\p{M}\p{N}_＿－-]{1,30})(?![\p{L}\p{M}\p{N}_＿－-])/gu;
+  /** What a tag still has to be once it is folded. */
+  const FOLDED_TAG = /^[\p{L}\p{M}\p{N}_-]{1,30}$/u;
+  /** A tag as it is kept and compared: without its "#", folded. */
+  const tagKey = (tag) => fold(tag.trim().replace(/^[#＃]/, ""));
+  /** The tags of a text, in its order: where each stands, "#" included, and the tag, folded. */
+  function findTags(text) {
+    const addresses = [...text.matchAll(WEB_ADDRESS)].map((match) => ({ start: match.index, end: match.index + match[0].length }));
+    const found = [];
+    for (const match of text.matchAll(TAG)) {
+      const start = match.index;
+      if (addresses.some((address) => start >= address.start && start < address.end)) continue;
+      const tag = fold(match[1] ?? "");
+      if (!FOLDED_TAG.test(tag)) continue;
+      found.push({ start, end: start + match[0].length, tag });
+    }
+    return found;
+  }
+  /** The tags of a text as a row keeps them: each once, in the order they first come. */
+  const tagsOf = (text) => [...new Set(findTags(text).map((found) => found.tag))];
+  /** The words of a search, folded. Nothing typed, or spaces alone, is no word: everything matches. */
+  const searchWords = (search) => fold(search).split(/\s+/).filter((word) => word !== "");
+  /**
+   * Whether a text contains every one of the words, wherever each stands in it.
+   * The page asks `matches`, the same question of the folded text it keeps for each idea.
+   */
+  function containsWords(text, words) {
+    if (words.length === 0) return true;
+    const folded = fold(text);
+    return words.every((word) => folded.includes(word));
+  }
+
+  /* ---------------------------------------------------------------------
+   * A text in pieces, and when an idea was written, on the reader's clock
+   * (the old app's format.ts).
+   * ------------------------------------------------------------------- */
+  /** An idea's text in pieces, in order: plain text, and tags as they were typed with the tag they stand for. */
+  function partsOf(text) {
+    const parts = [];
+    let at = 0;
+    for (const found of findTags(text)) {
+      if (found.start > at) parts.push({ kind: "text", text: text.slice(at, found.start) });
+      parts.push({ kind: "tag", text: text.slice(found.start, found.end), tag: found.tag });
+      at = found.end;
+    }
+    if (at < text.length) parts.push({ kind: "text", text: text.slice(at) });
+    return parts;
+  }
+  const INTL = ZH ? "zh-CN" : "en-US";
+  const TIME_OF_DAY = new Intl.DateTimeFormat(INTL, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const DATE_AND_TIME = new Intl.DateTimeFormat(INTL, { dateStyle: "medium", timeStyle: "short", hourCycle: "h23" });
+  const DAY = new Intl.DateTimeFormat(INTL, { month: "short", day: "numeric" });
+  const DAY_AND_YEAR = new Intl.DateTimeFormat(INTL, { year: "numeric", month: "short", day: "numeric" });
+  const MINUTE_MS = 60 * 1000;
+  const sameDay = (one, other) =>
+    one.getFullYear() === other.getFullYear() && one.getMonth() === other.getMonth() && one.getDate() === other.getDate();
+  /** "Nov 10, 2026, 08:05", "2026年11月10日 08:05". */
+  function dateAndTime(at) {
+    const date = new Date(at);
+    return Number.isNaN(date.getTime()) ? "" : DATE_AND_TIME.format(date);
+  }
+  /**
+   * "just now" under a minute, "5 min ago" under an hour, "3 h ago" for the
+   * rest of the same day, "yesterday, 14:05" for the day before, then the
+   * date ("Nov 3"), with its year when that is not this one.
+   */
+  function whenText(at, now) {
+    const written = new Date(at);
+    if (Number.isNaN(written.getTime())) return "";
+    // A time the server's clock put a little ahead of this browser's is "just now".
+    const minutes = Math.floor((now - written.getTime()) / MINUTE_MS);
+    if (minutes < 1) return t("whenNow");
+    if (minutes < 60) return t("whenMinutes", { count: minutes });
+    const today = new Date(now);
+    if (sameDay(written, today)) return t("whenHours", { count: Math.floor(minutes / 60) });
+    const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+    if (sameDay(written, yesterday)) return t("whenYesterday", { time: TIME_OF_DAY.format(written) });
+    return (written.getFullYear() === today.getFullYear() ? DAY : DAY_AND_YEAR).format(written);
+  }
+
+  /* ---------------------------------------------------------------------
+   * The ideas, as this page holds them. All of a space's ideas are read at
+   * once (5000 at most, as the old app held), and the views, the tags and
+   * the search are worked out here.
+   * ------------------------------------------------------------------- */
+  /** How many ideas a space holds at most, archived ones included. */
+  const MOST_IDEAS = 5000;
+  /** How many ideas the timeline shows before "Showing the first …". */
+  const SHOWN = 200;
+  /** How many ideas the card shows. */
+  const LATEST = 3;
+  /** How many tags are chips before "All tags (n)" is pressed: the most used. */
+  const CHIPS_SHOWN = 12;
+  /** From this many characters on, a box says how many of the 4000 are used. */
+  const COUNT_FROM = LONGEST_IDEA - 500;
+  /** How many tags a row's list field holds. */
+  // As many as a list field holds (MOST_LIST_ITEMS on the server): every tag of a text, as the build's Ideas kept.
+  const MOST_TAGS = 2000;
+  /** How often the clock and the ideas are read again, so that what others write shows here too. */
+  const TICK_MS = 15000;
+  /** Where the focus goes when the idea that had it left the timeline. */
+  const AFTER_LEAVING = ["[data-ideas]:not([hidden])", '[aria-pressed="true"]', "[data-composer]"];
+
+  const state = {
+    loaded: false,
+    loadError: null,
+    /** Every idea, the newest first, as the store orders them. */
+    all: [],
+    signature: "",
+    view: "active",
+    /** The tag chosen, folded; "" for every tag. */
+    tag: "",
+    typed: "",
+    allTags: false,
+    editing: null,
+    deleting: null,
+    /** The ideas a change is on its way for: their buttons wait. */
+    busy: new Set(),
+    adding: false,
+    /** What went wrong, and where: "composer", "page" or an idea's ID. */
+    alert: null,
+    now: Date.now(),
+  };
+
+  /** The tags and the folded text of each idea, worked out once per text. */
+  const known = new Map();
+  function prepare(row) {
+    const text = typeof row.text === "string" ? row.text : "";
+    let cached = known.get(row.id);
+    if (!cached || cached.text !== text) {
+      cached = { text, tags: tagsOf(text), folded: fold(text) };
+      known.set(row.id, cached);
+    }
+    const archived = row.archived === true;
+    return {
+      id: row.id,
+      text,
+      createdBy: String(row.createdBy ?? ""),
+      createdAt: String(row.createdAt ?? ""),
+      updatedAt: String(row.updatedAt ?? ""),
+      archived,
+      // An archived idea is never pinned.
+      pinned: row.pinned === true && !archived,
+      // The tags of the text, read afresh: a tag the page draws is a tag its chip finds.
+      tags: cached.tags,
+      folded: cached.folded,
+    };
+  }
+  /** `containsWords(idea.text, words)`, without folding all of a space's ideas again at every key. */
+  const matches = (idea, words) => words.length === 0 || words.every((word) => idea.folded.includes(word));
+  const signatureOf = (ideas) => ideas.map((idea) => `${idea.id}@${idea.updatedAt}`).join("\n");
+  const find = (id) => state.all.find((idea) => idea.id === id);
+  function setAll(ideas) {
+    state.all = ideas;
+    state.signature = signatureOf(ideas);
+  }
+
+  /* ---------------------------------------------------------------------
+   * Reading the ideas: at the start, when they changed elsewhere, and every
+   * 15 seconds while the page is seen. A reading that was on its way while
+   * this page changed something is read again, so it never undoes the change.
+   * ------------------------------------------------------------------- */
+  let generation = 0;
+  let pending = 0;
+  let reading = false;
+  let readAgain = false;
+  function read() {
+    if (reading) {
+      readAgain = true;
+      return;
+    }
+    reading = true;
+    readAgain = false;
+    const at = generation;
+    H.list("ideas", { orderBy: "createdAt", desc: true, limit: MOST_IDEAS })
+      .then(
+        (rows) => {
+          if (pending === 0 && at === generation) apply(rows);
+          else readAgain = true;
+        },
+        (error) => {
+          // Once the ideas are shown they stay; the next reading tries again. Until then the failure is
+          // said once, and not again at every reading that fails the same way behind it.
+          if (!state.loaded && state.loadError === null) {
+            state.loadError = reasonOf(error);
+            render();
+          }
+        },
+      )
+      .finally(() => {
+        reading = false;
+        settle();
+      });
+  }
+  function settle() {
+    if (readAgain && pending === 0 && !reading) read();
+  }
+  function apply(rows) {
+    if (!Array.isArray(rows)) return;
+    const ideas = rows.filter((row) => row && typeof row.id === "string").map(prepare);
+    const signature = signatureOf(ideas);
+    if (state.loaded && signature === state.signature) return;
+    const ids = new Set(ideas.map((idea) => idea.id));
+    for (const id of known.keys()) if (!ids.has(id)) known.delete(id);
+    setAll(ideas);
+    state.loaded = true;
+    state.loadError = null;
+    // An idea someone else deleted while this page had something to say about it.
+    if (state.alert && state.alert.at !== "page" && state.alert.at !== "composer" && !ids.has(state.alert.at)) {
+      setAlert("page", t("gone"));
+      wantFocus(...AFTER_LEAVING);
+    }
+    render();
+  }
+  /**
+   * Why a call failed, as Hearth says it: in English alone, so a page in Chinese gives its own words and
+   * leaves the reason out.
+   */
+  const reasonOf = (error) => (ZH ? "" : error instanceof Error ? error.message : String(error));
+
+  /* ---------------------------------------------------------------------
+   * Changing the ideas. What the store answers goes into the timeline at
+   * once; a change that fails is read again, in case the idea is gone.
+   * ------------------------------------------------------------------- */
+  /** A text as it is kept: line breaks as "\n", no spaces around it. */
+  const keptText = (typed) => typed.replace(/\r\n?/g, "\n").trim();
+  const keptTags = (text) => tagsOf(text).slice(0, MOST_TAGS);
+
+  function begin() {
+    pending += 1;
+    generation += 1;
+  }
+  function end() {
+    pending -= 1;
+    generation += 1;
+  }
+
+  async function addIdea() {
+    const field = composer.field;
+    const sent = field.value;
+    const text = keptText(sent);
+    if (state.adding || text === "") return;
+    clearAlert();
+    if (text.length > LONGEST_IDEA) return showAlert("composer", t("tooLong"));
+    if (state.all.length >= MOST_IDEAS) return showAlert("composer", t("full"));
+    state.adding = true;
+    begin();
+    syncComposer();
+    try {
+      const idea = prepare(await H.add("ideas", { text, tags: keptTags(text), pinned: false, archived: false }));
+      // What was typed while it was on its way is the start of the next idea.
+      if (field.value === sent) field.value = "";
+      setAll([idea, ...state.all.filter((other) => other.id !== idea.id)]);
+      if (PAGE) {
+        // An idea just written is shown: among the active ones, with no search on, and no tag it does not carry.
+        state.view = "active";
+        state.typed = "";
+        search.value = "";
+        if (state.tag !== "" && !idea.tags.includes(state.tag)) state.tag = "";
+      }
+      announce(t("saved"));
+    } catch (error) {
+      readAgain = true;
+      setAlert("composer", t("saveFailed"), reasonOf(error));
+    } finally {
+      state.adding = false;
+      end();
+      syncComposer();
+      // "Save" switches itself off once the box is empty: the focus goes back to the box, for the next idea.
+      if (document.hasFocus() && (lost() || document.activeElement === composer.save)) field.focus();
+      render();
+      settle();
+    }
+  }
+
+  /** Sends one change of one idea; `done` takes the store's answer, `failed` the error. */
+  async function change(id, send, done, failed) {
+    if (state.busy.has(id)) return;
+    clearAlert();
+    state.busy.add(id);
+    begin();
+    render();
+    try {
+      done(await send());
+    } catch (error) {
+      readAgain = true;
+      failed(reasonOf(error));
+    } finally {
+      state.busy.delete(id);
+      end();
+      render();
+      settle();
+    }
+  }
+  function replaceRow(row) {
+    const idea = prepare(row);
+    setAll(state.all.map((other) => (other.id === idea.id ? idea : other)));
+  }
+  const keyOf = (name, id) => `${name}:${id}`;
+  const keyed = (name, id) => `[data-key="${CSS.escape(keyOf(name, id))}"]`;
+
+  function pin(idea) {
+    const pinned = !idea.pinned;
+    change(
+      idea.id,
+      async () => {
+        const row = await H.update("ideas", idea.id, { pinned });
+        // Archived elsewhere meanwhile: an archived idea is never pinned (the old app's server refused it).
+        if (pinned && row && row.archived === true) return { row: await H.update("ideas", idea.id, { pinned: false }), refused: true };
+        return { row, refused: false };
+      },
+      ({ row, refused }) => {
+        replaceRow(row);
+        if (refused) {
+          setAlert(idea.id, t("pinArchived"));
+          wantFocus(...AFTER_LEAVING);
+          return;
+        }
+        announce(t(pinned ? "pinnedOne" : "unpinnedOne"));
+        // A pinned idea moves to the top, and its button with it: the focus follows.
+        wantFocus(keyed("pin", idea.id));
+      },
+      (reason) => setAlert(idea.id, t("changeFailed"), reason),
+    );
+  }
+  function archive(idea) {
+    const archived = !idea.archived;
+    change(
+      idea.id,
+      // Archiving unpins; an idea brought back comes back unpinned.
+      () => H.update("ideas", idea.id, { archived, pinned: false }),
+      (row) => {
+        replaceRow(row);
+        announce(t(archived ? "archivedOne" : "restoredOne"));
+        wantFocus(...AFTER_LEAVING);
+      },
+      (reason) => setAlert(idea.id, t("changeFailed"), reason),
+    );
+  }
+  function startEdit(idea) {
+    clearAlert();
+    state.deleting = null;
+    state.editing = idea.id;
+    render();
+    const item = pageItems.get(idea.id);
+    if (item && item.form) {
+      const area = item.form.area;
+      area.focus();
+      area.setSelectionRange(area.value.length, area.value.length);
+    }
+  }
+  function stopEdit(id) {
+    state.editing = null;
+    wantFocus(keyed("edit", id));
+    render();
+  }
+  function saveEdit(id, area) {
+    const idea = find(id);
+    const text = keptText(area.value);
+    if (!idea || text === "" || state.busy.has(id)) return;
+    // Nothing changed: nothing to send, and the idea keeps the time it was last changed.
+    if (text === idea.text) return stopEdit(id);
+    if (text.length > LONGEST_IDEA) return showAlert(id, t("tooLong"));
+    change(
+      id,
+      () => H.update("ideas", id, { text, tags: keptTags(text) }),
+      (row) => {
+        replaceRow(row);
+        state.editing = null;
+        announce(t("saved"));
+        wantFocus(keyed("edit", id));
+      },
+      (reason) => setAlert(id, t("changeFailed"), reason),
+    );
+  }
+  function askDelete(idea) {
+    clearAlert();
+    // Another idea's box stays open, with what is typed in it.
+    state.deleting = idea.id;
+    render();
+    focusFirst([keyed("confirm-cancel", idea.id)]);
+  }
+  function keepIdea(id) {
+    if (state.busy.has(id)) return;
+    state.deleting = null;
+    wantFocus(keyed("delete", id));
+    render();
+  }
+  function confirmDelete(idea) {
+    change(
+      idea.id,
+      () => H.remove("ideas", idea.id),
+      () => {
+        state.deleting = null;
+        setAll(state.all.filter((other) => other.id !== idea.id));
+        announce(t("deletedOne"));
+        wantFocus(...AFTER_LEAVING);
+      },
+      (reason) => {
+        // Deleted or not, the question is answered.
+        state.deleting = null;
+        setAlert(idea.id, t("deleteFailed"), reason);
+        wantFocus(keyed("delete", idea.id));
+      },
+    );
+  }
+  function pickTag(tag) {
+    const key = tagKey(tag);
+    state.tag = state.tag === key ? "" : key;
+    render();
+  }
+  function clearFilters() {
+    state.tag = "";
+    state.typed = "";
+    search.value = "";
+    wantFocus("[data-key=search]");
+    render();
+  }
+
+  /* ---------------------------------------------------------------------
+   * Messages: failures where they happened, and quiet news for screen
+   * readers.
+   * ------------------------------------------------------------------- */
+  let alerts = 0;
+  function setAlert(at, lead, reason = "") {
+    state.alert = { at, lead, reason, n: ++alerts };
+  }
+  function showAlert(at, lead, reason) {
+    setAlert(at, lead, reason);
+    render();
+  }
+  function clearAlert() {
+    state.alert = null;
+  }
+  const statusBox = document.getElementById("status");
+  let statusTimer = 0;
+  function announce(message) {
+    statusBox.textContent = "";
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => {
+      statusBox.textContent = message;
+    }, 60);
+  }
+
+  /* ---------------------------------------------------------------------
+   * The focus. A control that moved or went away gives the focus to what
+   * took its place, and only when nothing else has it: a person who went on
+   * elsewhere, in this page or around it, keeps their place.
+   * ------------------------------------------------------------------- */
+  let wanted = null;
+  const wantFocus = (...selectors) => {
+    wanted = selectors;
+  };
+  const lost = () => !document.activeElement || document.activeElement === document.body;
+  function focusFirst(selectors) {
+    for (const selector of selectors) {
+      const target = root.querySelector(selector);
+      if (!target) continue;
+      target.focus();
+      if (document.activeElement === target) return true;
+    }
+    return false;
+  }
+  function captureFocus() {
+    return document.hasFocus() && !lost() ? document.activeElement.getAttribute("data-key") : null;
+  }
+  function restoreFocus(key) {
+    if (key !== null && lost()) focusFirst([`[data-key="${CSS.escape(key)}"]`]);
+    if (wanted !== null) {
+      const selectors = wanted;
+      wanted = null;
+      if (document.hasFocus() && lost()) focusFirst(selectors);
+    }
+  }
+
+  /* ---------------------------------------------------------------------
+   * Drawing.
+   * ------------------------------------------------------------------- */
+  function h(tag, props, ...children) {
+    const element = document.createElement(tag);
+    for (const [name, value] of Object.entries(props || {})) {
+      if (value === null || value === undefined || value === false) continue;
+      if (name === "class") element.className = value;
+      else if (name.startsWith("on") && typeof value === "function") element.addEventListener(name.slice(2), value);
+      else element.setAttribute(name, value === true ? "" : String(value));
+    }
+    for (const child of children.flat()) if (child !== null && child !== undefined && child !== false) element.append(child);
+    return element;
+  }
+  const BOOKMARK =
+    "M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z";
+  const STAR =
+    "M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z";
+  /** One of Hearth's icons (Lucide's), drawn in the text's colour. With a label it is read; without, it is not. */
+  function icon(path, size, label) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const attributes = { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", "stroke-width": 1.75, "stroke-linecap": "round", "stroke-linejoin": "round", class: "icon" };
+    for (const [name, value] of Object.entries(attributes)) svg.setAttribute(name, String(value));
+    if (label) {
+      svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", label);
+    } else svg.setAttribute("aria-hidden", "true");
+    const shape = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    shape.setAttribute("d", path);
+    svg.append(shape);
+    return svg;
+  }
+  const setText = (element, text) => {
+    if (element.textContent !== text) element.textContent = text;
+  };
+  const markBusy = (button, busy) => {
+    if (busy) button.setAttribute("aria-disabled", "true");
+    else button.removeAttribute("aria-disabled");
+  };
+  /** A box of several lines: three to start with, one more for each line typed up to ten, where the browser cannot size it by its text. */
+  const sizeBox = (box) => {
+    box.rows = Math.min(10, Math.max(3, box.value.split("\n").length));
+  };
+  const showUsed = (element, value) => {
+    element.hidden = value.length < COUNT_FROM;
+    setText(element, element.hidden ? "" : `${value.length}/${LONGEST_IDEA}`);
+  };
+  /** Ctrl+Enter or ⌘+Enter, never while an input method is composing. */
+  const savesOn = (event) => !event.isComposing && event.key === "Enter" && (event.ctrlKey || event.metaKey);
+
+  const root = document.getElementById("app");
+  root.className = PAGE ? "page" : "card";
+  let built = false;
+  let composer = null;
+  let search, chips, segments, controls, timeline, emptyBox, moreNote, rowsList, alertBox;
+  const pageItems = new Map();
+  const cardItems = new Map();
+
+  function render() {
+    if (!state.loaded) return renderWaiting();
+    if (!built) build();
+    const focused = captureFocus();
+    if (PAGE) renderPage();
+    else renderCard();
+    placeAlert();
+    restoreFocus(focused);
+  }
+
+  /** Until the ideas are read: their shape, or why they could not be read. */
+  function renderWaiting() {
+    root.textContent = "";
+    if (state.loadError === null) {
+      root.setAttribute("aria-busy", "true");
+      const bones = PAGE
+        ? [CAN_EDIT ? h("div", { class: "bone tall" }) : null, h("div", { class: "bone" }), h("div", { class: "bone tall" }), h("div", { class: "bone tall" })]
+        : [CAN_EDIT ? h("div", { class: "bone" }) : null, h("div", { class: "bone" }), h("div", { class: "bone" })];
+      root.append(h("p", { class: "sr-only" }, t("loading")), h("div", { class: "bones", "aria-hidden": "true" }, bones));
+      return;
+    }
+    root.removeAttribute("aria-busy");
+    const retry = () => {
+      state.loadError = null;
+      render();
+      read();
+    };
+    const again = h("button", { type: "button", class: "btn sm", "data-key": "retry", onclick: retry }, t("retry"));
+    root.append(
+      h(
+        "div",
+        { class: "alert", role: "alert" },
+        h(
+          "p",
+          { class: "alert-text" },
+          h("span", { class: "alert-lead" }, t("loadFailed")),
+          state.loadError ? [" ", h("span", { class: "alert-reason" }, state.loadError)] : null,
+        ),
+        again,
+      ),
+    );
+    // Failed again after "Try again": the keyboard stays on "Try again".
+    if (document.hasFocus() && lost()) again.focus();
+  }
+
+  function build() {
+    built = true;
+    root.textContent = "";
+    root.removeAttribute("aria-busy");
+    if (CAN_EDIT) root.append(buildComposer());
+    if (PAGE) {
+      search = h("input", { id: "search-field", class: "input", type: "search", maxlength: 200, placeholder: t("search"), "data-key": "search", autocomplete: "off" });
+      const typed = () => {
+        state.typed = search.value;
+        render();
+      };
+      search.addEventListener("input", (event) => {
+        if (!event.isComposing) typed();
+      });
+      search.addEventListener("compositionend", typed);
+      chips = h("div", { class: "chips", role: "group", "aria-label": t("tags") });
+      const segment = (value) =>
+        h("button", { type: "button", "data-key": `view:${value}`, "data-view": value, onclick: () => ((state.view = value), render()) });
+      segments = [segment("active"), segment("archived")];
+      controls = h(
+        "div",
+        { class: "controls" },
+        h("label", { class: "sr-only", for: "search-field" }, t("search")),
+        search,
+        chips,
+        h("div", { class: "seg", role: "group", "aria-label": t("view") }, segments),
+      );
+      // Not a stop for Tab: the focus is put here when the idea that had it left the timeline.
+      timeline = h("ul", { class: "timeline", tabindex: "-1", "data-ideas": "" });
+      emptyBox = h("div", { class: "empty" });
+      moreNote = h("p", { class: "more num" });
+      root.append(controls, timeline, emptyBox, moreNote);
+    } else {
+      rowsList = h("ul", { class: "rows" });
+      emptyBox = h("div", { class: "empty" });
+      root.append(rowsList, emptyBox);
+    }
+  }
+
+  /** The box an idea is written in, and "Save": one line on the card (Enter saves), several on the page (Ctrl/⌘+Enter). */
+  function buildComposer() {
+    const field = PAGE
+      ? h("textarea", { id: "composer-field", class: "box", rows: 3, maxlength: LONGEST_IDEA, placeholder: t("placeholder"), "data-composer": "", "data-key": "composer" })
+      : h("input", { id: "composer-field", class: "input", type: "text", maxlength: LONGEST_IDEA, placeholder: t("write"), autocomplete: "off", "data-composer": "", "data-key": "composer" });
+    const label = h("label", { class: "sr-only", for: "composer-field" }, t("write"));
+    const save = h("button", { type: "submit", class: PAGE ? "btn primary push" : "btn primary", "data-key": "composer-save" }, t("save"));
+    const used = PAGE ? h("p", { class: "used num", hidden: true }) : null;
+    const form = PAGE
+      ? h("form", { class: "composer" }, label, field, h("div", { class: "composer-foot" }, h("p", { class: "hint shortcut" }, t("shortcut")), used, save))
+      : h("form", { class: "quick" }, label, field, save);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      addIdea();
+    });
+    field.addEventListener("input", syncComposer);
+    if (PAGE) {
+      field.addEventListener("keydown", (event) => {
+        if (!savesOn(event)) return;
+        event.preventDefault();
+        addIdea();
+      });
+    }
+    composer = { form, field, save, used };
+    syncComposer();
+    return form;
+  }
+  function syncComposer() {
+    if (!composer) return;
+    const value = composer.field.value;
+    composer.save.disabled = state.adding || value.trim() === "";
+    if (PAGE) {
+      sizeBox(composer.field);
+      showUsed(composer.used, value);
+    }
+  }
+
+  /** What the page shows, worked out as the old app's queries `list` and `tags` did. */
+  function derive() {
+    const active = [];
+    const archived = [];
+    for (const idea of state.all) (idea.archived ? archived : active).push(idea);
+    const counted = new Map();
+    for (const idea of active) for (const tag of idea.tags) counted.set(tag, (counted.get(tag) || 0) + 1);
+    const tags = [...counted]
+      .map(([tag, count]) => ({ tag, count }))
+      .sort((one, other) => other.count - one.count || (one.tag < other.tag ? -1 : 1));
+    const words = searchWords(state.typed);
+    const found = (state.view === "archived" ? archived : active).filter(
+      (idea) => (state.tag === "" || idea.tags.includes(state.tag)) && matches(idea, words),
+    );
+    // Pinned ideas first, then the newest first.
+    const ordered = [...found.filter((idea) => idea.pinned), ...found.filter((idea) => !idea.pinned)];
+    return {
+      counts: { active: active.length, archived: archived.length },
+      tags,
+      shown: ordered.slice(0, SHOWN),
+      more: ordered.length > SHOWN,
+      filtered: state.tag !== "" || words.length > 0,
+    };
+  }
+
+  function renderPage() {
+    const { counts, tags, shown, more, filtered } = derive();
+    // An idea that left the timeline shown (deleted or archived elsewhere, or filtered out) is no longer being edited.
+    if (state.editing !== null && !shown.some((idea) => idea.id === state.editing)) state.editing = null;
+    if (state.deleting !== null && !shown.some((idea) => idea.id === state.deleting)) state.deleting = null;
+    // With nothing written yet there is nothing to search, filter or switch between.
+    controls.hidden = !(counts.active + counts.archived > 0 || state.view !== "active" || state.tag !== "" || state.typed !== "");
+    renderChips(tags);
+    for (const button of segments) {
+      const view = button.dataset.view;
+      setText(button, t(view, { count: counts[view] }));
+      button.setAttribute("aria-pressed", String(state.view === view));
+    }
+    timeline.hidden = shown.length === 0;
+    timeline.setAttribute("aria-label", t(state.view, { count: counts[state.view] }));
+    reconcile(timeline, pageItems, shown, createIdea, updateIdea);
+    renderEmpty(
+      shown.length > 0 ? null : filtered ? "found" : state.view === "archived" ? "archived" : counts.archived > 0 ? "active" : "first",
+    );
+    moreNote.hidden = !more;
+    setText(moreNote, more ? t("more", { count: shown.length }) : "");
+  }
+
+  function renderCard() {
+    // The three written last, pinned or not: the card shows what was just written, wherever the pins are.
+    const latest = state.all.filter((idea) => !idea.archived).slice(0, LATEST);
+    rowsList.hidden = latest.length === 0;
+    reconcile(rowsList, cardItems, latest, createRow, updateRow);
+    renderEmpty(latest.length === 0 ? "first" : null);
+  }
+
+  /** Puts one element per idea in the list, in order, moving only what moved and keeping the rest as it is. */
+  function reconcile(list, items, ideas, create, update) {
+    const keep = new Set(ideas.map((idea) => idea.id));
+    for (const [id, item] of items) {
+      if (keep.has(id)) continue;
+      item.li.remove();
+      items.delete(id);
+    }
+    let cursor = list.firstElementChild;
+    for (const idea of ideas) {
+      let item = items.get(idea.id);
+      if (!item) {
+        item = create(idea);
+        items.set(idea.id, item);
+      }
+      update(item, idea);
+      if (item.li === cursor) cursor = cursor.nextElementSibling;
+      else list.insertBefore(item.li, cursor);
+    }
+  }
+
+  /** The pinned mark, when it was written and, on the page in a group, by whom. */
+  function fillMeta(item, idea, card) {
+    const when = whenText(idea.createdAt, state.now);
+    const author = card ? undefined : NAMES.get(idea.createdBy);
+    const signature = `${idea.pinned}|${when}|${idea.createdAt}|${author ?? ""}`;
+    if (item.metaSignature === signature) return;
+    item.metaSignature = signature;
+    item.meta.textContent = "";
+    if (idea.pinned) item.meta.append(card ? icon(BOOKMARK, 12, t("pinned")) : h("span", { class: "pinned" }, icon(BOOKMARK, 12), t("pinned")));
+    item.meta.append(h("time", { datetime: idea.createdAt, title: dateAndTime(idea.createdAt) }, when));
+    if (author !== undefined) item.meta.append(h("span", { class: "author" }, author));
+  }
+
+  /* The card's rows. */
+  function createRow() {
+    const item = { li: h("li", { class: "row" }), text: h("p", { class: "clamp" }), meta: h("p", { class: "row-meta num" }) };
+    item.li.append(h("div", { class: "row-body" }, item.text, item.meta));
+    return item;
+  }
+  function updateRow(item, idea) {
+    setText(item.text, idea.text);
+    fillMeta(item, idea, true);
+  }
+
+  /* The timeline's ideas. */
+  let ids = 0;
+  function createIdea(idea) {
+    const id = idea.id;
+    const textId = `idea-text-${++ids}`;
+    const item = { li: h("li", { class: "idea", "data-idea": id }), text: h("p", { class: "idea-text", id: textId }), meta: h("p", { class: "meta num" }), tagButtons: [] };
+    const foot = h("div", { class: "idea-foot" }, item.meta);
+    if (CAN_EDIT) {
+      const action = (name, run) =>
+        h("button", {
+          type: "button",
+          class: "btn sm",
+          "data-key": keyOf(name, id),
+          "aria-describedby": textId,
+          onclick: () => {
+            const current = find(id);
+            if (current && !state.busy.has(id)) run(current);
+          },
+        });
+      item.pin = action("pin", pin);
+      item.edit = action("edit", startEdit);
+      item.archive = action("archive", archive);
+      item.remove = action("delete", askDelete);
+      item.edit.textContent = t("edit");
+      item.remove.textContent = t("delete");
+      item.actions = h("div", { class: "actions" }, item.pin, item.edit, item.archive, item.remove);
+      foot.append(item.actions);
+    }
+    item.li.append(item.text, foot);
+    return item;
+  }
+  function updateIdea(item, idea) {
+    const editing = state.editing === idea.id;
+    const deleting = state.deleting === idea.id;
+    const busy = state.busy.has(idea.id);
+    if (editing) {
+      if (!item.form) {
+        item.form = editForm(idea);
+        item.text.replaceWith(item.form.form);
+      }
+      item.form.busy(busy);
+    } else {
+      if (item.form) {
+        item.form.form.replaceWith(item.text);
+        item.form = null;
+      }
+      if (item.textShown !== idea.text) {
+        item.tagButtons = fillText(item.text, idea);
+        item.textShown = idea.text;
+      }
+      for (const button of item.tagButtons) button.setAttribute("aria-pressed", String(button.dataset.tag === state.tag));
+    }
+    fillMeta(item, idea, false);
+    if (!CAN_EDIT) return;
+    item.actions.hidden = editing || deleting;
+    item.pin.hidden = idea.archived;
+    setText(item.pin, t(idea.pinned ? "unpin" : "pin"));
+    setText(item.archive, t(idea.archived ? "restore" : "archive"));
+    for (const button of [item.pin, item.edit, item.archive, item.remove]) markBusy(button, busy);
+    if (deleting && !item.confirm) {
+      item.confirm = confirmPanel(idea);
+      item.li.append(item.confirm.panel);
+    } else if (!deleting && item.confirm) {
+      item.confirm.panel.remove();
+      item.confirm = null;
+    }
+    if (item.confirm) item.confirm.busy(busy);
+  }
+  /** The text as typed, line breaks kept, its #tags pressable like their chips. */
+  function fillText(paragraph, idea) {
+    paragraph.textContent = "";
+    const buttons = [];
+    for (const part of partsOf(idea.text)) {
+      if (part.kind === "text") {
+        paragraph.append(part.text);
+        continue;
+      }
+      const button = h("button", { type: "button", class: "tag", "data-tag": part.tag, "data-key": `tag:${idea.id}:${buttons.length}`, onclick: () => pickTag(part.tag) }, part.text);
+      buttons.push(button);
+      paragraph.append(button);
+    }
+    return buttons;
+  }
+  /** The idea's text in a box of its own, in its place, with "Save" and "Cancel" (Ctrl/⌘+Enter and Escape). */
+  function editForm(idea) {
+    const id = idea.id;
+    const areaId = `edit-field-${++ids}`;
+    const area = h("textarea", { id: areaId, class: "box", maxlength: LONGEST_IDEA, "data-key": keyOf("edit-box", id) });
+    area.value = idea.text;
+    const used = h("p", { class: "used num", hidden: true });
+    const cancel = h("button", { type: "button", class: "btn sm", "data-key": keyOf("edit-cancel", id), onclick: () => stopEdit(id) }, t("cancel"));
+    const save = h("button", { type: "submit", class: "btn sm primary", "data-key": keyOf("edit-save", id) }, t("save"));
+    const label = h("label", { class: "sr-only", for: areaId }, t("editing"));
+    const form = h("form", { class: "edit" }, label, area, h("div", { class: "edit-foot" }, used, cancel, save));
+    const sync = () => {
+      sizeBox(area);
+      showUsed(used, area.value);
+      save.disabled = area.value.trim() === "";
+    };
+    area.addEventListener("input", sync);
+    area.addEventListener("keydown", (event) => {
+      if (savesOn(event)) {
+        event.preventDefault();
+        saveEdit(id, area);
+      } else if (event.key === "Escape" && !event.isComposing) {
+        event.preventDefault();
+        stopEdit(id);
+      }
+    });
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      saveEdit(id, area);
+    });
+    sync();
+    return { form, area, busy: (busy) => markBusy(save, busy) };
+  }
+  /** "Delete" asks first, in the idea's place: the page's own dialogs are blocked in the sandbox. */
+  function confirmPanel(idea) {
+    const id = idea.id;
+    const titleId = `confirm-title-${++ids}`;
+    const bodyId = `confirm-body-${ids}`;
+    const cancel = h("button", { type: "button", class: "btn sm", "data-key": keyOf("confirm-cancel", id), onclick: () => keepIdea(id) }, t("cancel"));
+    const remove = h(
+      "button",
+      {
+        type: "button",
+        class: "btn sm primary",
+        "data-key": keyOf("confirm-delete", id),
+        onclick: () => {
+          const current = find(id);
+          if (current && !state.busy.has(id)) confirmDelete(current);
+        },
+      },
+      t("delete"),
+    );
+    const panel = h(
+      "div",
+      { class: "confirm", role: "group", "aria-labelledby": titleId, "aria-describedby": bodyId },
+      h("p", { class: "confirm-title", id: titleId }, t("deleteTitle")),
+      h("p", { class: "confirm-body", id: bodyId }, t("deleteBody")),
+      h("div", { class: "confirm-actions" }, cancel, remove),
+    );
+    panel.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || event.isComposing) return;
+      event.preventDefault();
+      keepIdea(id);
+    });
+    return {
+      panel,
+      busy: (busy) => {
+        markBusy(cancel, busy);
+        markBusy(remove, busy);
+      },
+    };
+  }
+
+  /** The tags of the active ideas as chips, the most used first, and the one chosen, which only archived ideas may carry. */
+  let chipsShown = null;
+  function renderChips(tags) {
+    const visible = state.allTags ? tags : tags.slice(0, CHIPS_SHOWN);
+    const chosen =
+      state.tag !== "" && !visible.some((entry) => entry.tag === state.tag)
+        ? [{ tag: state.tag, count: (tags.find((entry) => entry.tag === state.tag) || { count: 0 }).count }]
+        : [];
+    const entries = [...visible, ...chosen];
+    const extra = tags.length > CHIPS_SHOWN;
+    const shape = JSON.stringify([entries, extra, state.allTags]);
+    if (shape !== chipsShown) {
+      chipsShown = shape;
+      chips.textContent = "";
+      for (const entry of entries) {
+        chips.append(
+          h(
+            "button",
+            { type: "button", class: "chip", "data-tag": entry.tag, "data-key": `chip:${entry.tag}`, onclick: () => pickTag(entry.tag) },
+            // A space of its own, which no screen shows: the chip is read as "#v2 1", not "#v21".
+            `#${entry.tag} `,
+            entry.count > 0 ? h("span", { class: "chip-count num" }, String(entry.count)) : null,
+          ),
+        );
+      }
+      if (extra) {
+        const label = state.allTags ? t("fewerTags") : t("allTags", { count: tags.length });
+        chips.append(h("button", { type: "button", class: "chip", "data-key": "chip:all", onclick: () => ((state.allTags = !state.allTags), render()) }, label));
+      }
+    }
+    for (const chip of chips.children) {
+      chip.setAttribute("aria-pressed", String(chip.dataset.tag === undefined ? state.allTags : chip.dataset.tag === state.tag));
+    }
+    chips.hidden = entries.length === 0;
+  }
+
+  /** What a view shows when it has nothing to list, and why. */
+  let emptyShown;
+  function renderEmpty(kind) {
+    if (kind === emptyShown) return;
+    emptyShown = kind;
+    emptyBox.textContent = "";
+    emptyBox.hidden = kind === null;
+    if (kind === null) return;
+    const title = { found: "emptyFound", archived: "emptyArchived", active: "emptyActive", first: "emptyFirst" }[kind];
+    if (!PAGE) {
+      emptyBox.append(h("h3", { class: "empty-title" }, t(title)));
+      return;
+    }
+    if (kind === "first") emptyBox.append(h("span", { class: "empty-badge", "aria-hidden": "true" }, icon(STAR, 20)));
+    emptyBox.append(h("h2", { class: "empty-title" }, t(title)));
+    if (kind === "archived") emptyBox.append(h("p", { class: "empty-body" }, t("emptyArchivedHint")));
+    if (kind === "first" && CAN_EDIT) emptyBox.append(h("p", { class: "empty-body" }, t("emptyFirstHint")));
+    if (kind === "found") {
+      emptyBox.append(h("div", { class: "empty-action" }, h("button", { type: "button", class: "btn", "data-key": "clear", onclick: clearFilters }, t("clear"))));
+    }
+  }
+
+  /** The failure shown: under the box it was written in, in the idea it was about, or above the timeline. */
+  function placeAlert() {
+    const alert = state.alert;
+    if (alert === null) {
+      if (alertBox) alertBox.remove();
+      alertBox = null;
+      return;
+    }
+    if (!alertBox || alertBox.dataset.n !== String(alert.n)) {
+      if (alertBox) alertBox.remove();
+      const dismiss = () => {
+        const at = alert.at;
+        clearAlert();
+        wantFocus(at === "composer" ? "[data-composer]" : keyed("edit", at), "[data-composer]", "[data-ideas]:not([hidden])");
+        render();
+      };
+      alertBox = h(
+        "div",
+        { class: "alert", role: "alert", "data-n": alert.n },
+        h("p", { class: "alert-text" }, h("span", { class: "alert-lead" }, alert.lead), alert.reason ? [" ", h("span", { class: "alert-reason" }, alert.reason)] : null),
+        h("button", { type: "button", class: "btn sm", "data-key": "dismiss", onclick: dismiss }, t("dismiss")),
+      );
+    }
+    const item = pageItems.get(alert.at);
+    if (alert.at === "composer" && composer) {
+      if (alertBox.previousSibling !== composer.form) composer.form.after(alertBox);
+    } else if (item) {
+      if (alertBox.parentNode !== item.li || item.li.lastChild !== alertBox) item.li.append(alertBox);
+    } else {
+      const anchor = PAGE ? timeline : rowsList;
+      if (alertBox.nextSibling !== anchor) anchor.before(alertBox);
+    }
+  }
+
+  /* ---------------------------------------------------------------------
+   * Start: the shape of the page, then the ideas.
+   * ------------------------------------------------------------------- */
+  render();
+  read();
+  // Changed elsewhere: by the chat, the app's card or its page in another place.
+  H.onChange(read);
+  // "5 min ago" moves on by itself, and what others in the space write shows up.
+  setInterval(() => {
+    state.now = Date.now();
+    if (state.loaded) render();
+    if (document.visibilityState !== "hidden") read();
+  }, TICK_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    state.now = Date.now();
+    if (state.loaded) render();
+    read();
+  });
+})();
+</script>
+</body>
+</html>

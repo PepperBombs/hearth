@@ -1,0 +1,671 @@
+<!doctype html>
+<html>
+<head>
+<title>Grocery list</title>
+<style>
+/*
+ * The grocery list, as an app made in Hearth: a shopping list the people of
+ * a space share, grouped by the aisles the space sets. In its card it shows
+ * the first items still to buy; on its own page, every item by aisle, a box
+ * to add one under an aisle, and a button to clear what is ticked.
+ * Colours come from Hearth's variables only, so that both themes fit.
+ */
+*, *::before, *::after { box-sizing: border-box; }
+/* Room for the focus ring of a control at the edge: the frame cuts off whatever lies outside it. */
+body { padding: 4px; -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid var(--hearth-accent); outline-offset: 2px; }
+button, input { font: inherit; color: inherit; margin: 0; }
+button:not(:disabled) { cursor: pointer; }
+h2, h3, p, ul { margin: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* A long word, a name or an aisle, wraps rather than reaching past the edge of a narrow card. */
+.app { overflow-wrap: anywhere; }
+/* The page's parts lie 16px apart; one with nothing in it (no message, no ticked item) takes no room. */
+.app > :not(:empty) ~ :not(:empty) { margin-top: 16px; }
+
+/* The box to add an item, its button and the aisles to put it under. */
+.add-row { display: flex; gap: 8px; }
+.input {
+  display: block; flex: 1; min-width: 0; width: 100%; height: 36px; padding: 0 10px;
+  border: 1px solid var(--hearth-line); border-radius: 8px; background: var(--hearth-surface); color: var(--hearth-text);
+}
+.input::placeholder { color: var(--hearth-text-3); opacity: 1; }
+.btn {
+  display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 6px; height: 34px; padding: 0 12px;
+  border: 1px solid var(--hearth-line); border-radius: 8px; background: var(--hearth-surface); color: var(--hearth-text);
+  font-weight: 500; white-space: nowrap; user-select: none; -webkit-user-select: none;
+}
+.btn:hover:not(:disabled) { background: var(--hearth-surface-2); }
+.btn:disabled { cursor: not-allowed; opacity: .55; }
+.btn.primary { border-color: var(--hearth-accent); background: var(--hearth-accent); color: var(--hearth-surface); }
+.btn.primary:hover:not(:disabled) { background: var(--hearth-accent); opacity: .92; }
+.btn.small { height: 28px; padding: 0 8px; font-size: 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chips[hidden] { display: none; }
+.chip {
+  display: inline-flex; align-items: center; max-width: 100%; min-height: 28px; padding: 2px 10px;
+  border: 1px solid var(--hearth-line); border-radius: 999px; background: transparent; color: var(--hearth-text-2);
+  font-size: 13px; line-height: 1.4; text-align: left; overflow-wrap: anywhere;
+}
+.chip[aria-pressed="true"] { border-color: var(--hearth-accent); background: var(--hearth-accent-soft); color: var(--hearth-accent-text); font-weight: 500; }
+.status { color: var(--hearth-text-2); font-size: 13px; overflow-wrap: anywhere; }
+.status.shown { margin-top: 8px; }
+
+/* The list: one part per aisle, 16px apart, rows between hairlines. */
+.list > section + section { margin-top: 16px; }
+.aisle { font-size: 12px; line-height: 20px; font-weight: 500; color: var(--hearth-text-3); }
+.rows { list-style: none; padding: 0; display: flex; flex-direction: column; }
+.row {
+  display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 36px; padding: 6px 0;
+  border-top: 1px solid var(--hearth-line); overflow-wrap: anywhere;
+}
+.row:first-child { border-top: 0; }
+.check { display: inline-flex; align-items: center; gap: 10px; min-width: 0; cursor: pointer; }
+.check.off { cursor: not-allowed; }
+.box { position: relative; display: inline-flex; flex: none; width: 18px; height: 18px; }
+/* A wider touch target around the box. */
+.box::before { content: ""; position: absolute; inset: -8px; }
+/* Someone who may only look sees the boxes dimmed, and the names as clear as ever. */
+.check.off .box { opacity: .55; }
+.box input {
+  position: relative; display: block; width: 100%; height: 100%; margin: 0; appearance: none; -webkit-appearance: none;
+  border: 1px solid var(--hearth-text-3); border-radius: 6px; background: var(--hearth-surface); cursor: inherit;
+}
+.box input:checked { border-color: var(--hearth-accent); background: var(--hearth-accent); }
+.box svg { position: absolute; inset: 0; margin: auto; color: var(--hearth-surface); opacity: 0; pointer-events: none; }
+.box input:checked + svg { opacity: 1; }
+.name { min-width: 0; overflow-wrap: anywhere; }
+.check.done .name { color: var(--hearth-text-3); text-decoration: line-through; }
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; max-width: 420px; margin: 0 auto; padding: 32px 8px; text-align: center; }
+.empty h2, .empty h3 { font-size: 16px; line-height: 1.4; font-weight: 600; }
+
+/* The card on the dashboard. */
+.card { display: flex; flex-direction: column; min-height: 88px; }
+.card .empty { flex: 1; padding: 8px; }
+.left { margin-top: auto; padding-top: 8px; font-size: 12px; line-height: 20px; color: var(--hearth-text-3); font-variant-numeric: tabular-nums; }
+
+/* A change that failed, and the app that could not be read. */
+.notice {
+  display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; border: 1px solid var(--hearth-line);
+  border-radius: 8px; background: var(--hearth-surface-2); color: var(--hearth-text); font-size: 12px; line-height: 20px;
+}
+.notice svg { flex: none; margin-top: 3px; color: var(--hearth-text-2); }
+.failed { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 6px 0; }
+.failed p { color: var(--hearth-text-2); }
+.skeleton { display: flex; flex-direction: column; gap: 14px; padding: 8px 0; }
+.bone { height: 14px; border-radius: 6px; background: var(--hearth-surface-2); animation: pulse 1.6s ease-in-out infinite; }
+.bone.tall { height: 36px; border-radius: 8px; }
+@keyframes pulse { 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .bone { animation: none; } }
+
+/* Touch screens get 44px targets, and 16px text in the box so that phones do not zoom in. */
+@media (pointer: coarse) {
+  .input { height: 44px; font-size: 16px; }
+  .btn { height: 44px; padding: 0 16px; }
+  .btn.small { height: 44px; padding: 0 12px; }
+  .chip { min-height: 36px; padding: 4px 14px; }
+  .row, .check { min-height: 44px; }
+}
+</style>
+</head>
+<body>
+<div id="app" class="app"></div>
+<script>
+(() => {
+  "use strict";
+
+  // Every text of the interface, in both languages. What people type is never translated.
+  const TEXT = {
+    en: {
+      title: "Grocery list",
+      empty: "Nothing to buy.",
+      add: "Add an item",
+      submit: "Add",
+      aisle: "Aisle",
+      other: "Other",
+      clear: "Clear ticked",
+      left: "{count} left",
+      added: "{name} added.",
+      already: "{name} is on the list already.",
+      loading: "Loading…",
+      loadFailed: "This app could not be loaded.",
+      retry: "Try again",
+      changeFailed: "That change could not be saved. Try again.",
+      changeRefused: "That change was not made. The app now shows what is saved.",
+    },
+    zh: {
+      title: "购物清单",
+      empty: "没有要买的东西。",
+      add: "添加物品",
+      submit: "添加",
+      aisle: "货架",
+      other: "其他",
+      clear: "清除已勾选",
+      left: "还剩 {count} 项",
+      added: "已添加 {name}。",
+      already: "{name} 已在清单上。",
+      loading: "正在加载…",
+      loadFailed: "这个应用无法加载。",
+      retry: "重试",
+      changeFailed: "这项更改未能保存，请重试。",
+      changeRefused: "这项更改没有生效。应用现在显示的是已保存的内容。",
+    },
+  };
+
+  const hearth = window.hearth;
+  if (!hearth) return;
+  const locale = hearth.locale === "zh" ? "zh" : "en";
+  const t = TEXT[locale];
+  const say = (text, values) => text.replace(/\{(\w+)\}/g, (whole, key) => (key in values ? String(values[key]) : whole));
+  document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
+  document.title = t.title;
+
+  const canEdit = hearth.access === "edit";
+  const inCard = hearth.view === "card";
+  const ITEMS = "items";
+  const MAX_NAME = 80;
+  // The most rows one read gives: the whole list, so that a name already on it is always found.
+  const ALL = { orderBy: "createdAt", limit: 5000 };
+  // The list is read again this often while it is in view, so that what others change shows here too.
+  const REFRESH_MS = 15000;
+  const CARD_ROWS = 6;
+
+  /**
+   * What makes two names the same item: case, spaces around and inside them,
+   * and full-width letters do not count ("Milk", " milk ", "ＭＩＬＫ").
+   */
+  const sameName = (name) => String(name).normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+
+  // What the server holds, as last read: the items oldest first, and the settings.
+  let items = [];
+  let aislesSetting = [];
+  let hideDone = false;
+  let loaded = false;
+  let loadFailed = false;
+  // The aisle chosen for the next item; it stays chosen after an item is added.
+  let picked = "";
+  let adding = false;
+  let clearing = false;
+  // Ticks on their way to the server, shown at once: id → { done, token }.
+  const ticking = new Map();
+  // The save of each item's last tick, settled either way: two quick presses on one item are saved in
+  // the order they were made, and "Clear ticked" waits for the ticks pressed before it.
+  const saving = new Map();
+  // Set when "Try again" is pressed, so that the keyboard goes on into the app once it is read.
+  let refocus = false;
+
+  const doneOf = (item) => (ticking.has(item.id) ? ticking.get(item.id).done : item.done === true);
+  /**
+   * Whether an item is listed where ticked items are not (the card; the page with "Hide ticked
+   * items"): one ticked here stays, ticked, until its tick is saved, so that a second quick press
+   * lands on it again rather than on the item that would have moved into its place.
+   */
+  const listedOpen = (item) => item.done !== true || ticking.has(item.id);
+  const aisleOfRow = (item) => (typeof item.aisle === "string" ? item.aisle : "");
+  const nameOfRow = (item) => (typeof item.name === "string" ? item.name : "");
+  // The settings allow an empty entry and the same aisle twice; neither is a group of its own.
+  const aisles = () => [...new Set(aislesSetting)].filter((title) => typeof title === "string" && title.trim() !== "");
+  // An aisle someone has taken out of the settings since it was chosen is no longer a choice.
+  const chosenAisle = () => (aisles().includes(picked) ? picked : "");
+
+  // ---------------------------------------------------------------- Drawing
+
+  function el(tag, attributes, ...children) {
+    const node = document.createElement(tag);
+    for (const [name, value] of Object.entries(attributes || {})) {
+      if (value === null || value === undefined || value === false) continue;
+      if (name === "text") node.textContent = value;
+      else node.setAttribute(name, value === true ? "" : String(value));
+    }
+    for (const child of children.flat()) if (child !== null && child !== undefined && child !== false) node.append(child);
+    return node;
+  }
+
+  function icon(paths, size, stroke) {
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    const attributes = {
+      width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": stroke,
+      "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false",
+    };
+    for (const [name, value] of Object.entries(attributes)) svg.setAttribute(name, String(value));
+    for (const d of paths) {
+      const path = document.createElementNS(NS, "path");
+      path.setAttribute("d", d);
+      svg.append(path);
+    }
+    return svg;
+  }
+  const CHECK = ["M20 6 9 17l-5-5"];
+  const WARNING = ["m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3", "M12 9v4", "M12 17h.01"];
+
+  /**
+   * Keeps the keyboard where it was when a part is drawn again: on the same
+   * control, or, when that one has gone (an item ticked off the card, or
+   * hidden once ticked), on the one that took its place.
+   */
+  function keepFocus(container, redraw) {
+    const active = document.activeElement;
+    const before = [...container.querySelectorAll("[data-key]")];
+    const was = active && container.contains(active) ? { key: active.dataset.key, index: before.indexOf(active) } : null;
+    redraw();
+    if (!was) return;
+    const after = [...container.querySelectorAll("[data-key]")];
+    const target =
+      after.find((node) => node.dataset.key === was.key) ||
+      after[Math.min(Math.max(was.index, 0), after.length - 1)] ||
+      container.querySelector("[tabindex='-1']");
+    if (target) target.focus({ preventScroll: true });
+  }
+
+  function itemRow(item) {
+    const done = doneOf(item);
+    const box = el("input", { type: "checkbox", "data-key": `item:${item.id}` });
+    box.checked = done;
+    box.disabled = !canEdit;
+    box.addEventListener("change", () => tick(item, box.checked));
+    return el(
+      "li",
+      { class: "row" },
+      el(
+        "label",
+        { class: `check${done ? " done" : ""}${canEdit ? "" : " off"}` },
+        el("span", { class: "box" }, box, icon(CHECK, 14, 2.5)),
+        el("span", { class: "name", text: nameOfRow(item) }),
+      ),
+    );
+  }
+
+  // Focusable from a script alone: where the keyboard goes when the last item leaves the list.
+  const emptyState = (heading) => el("div", { class: "empty", tabindex: "-1" }, el(heading, { text: t.empty }));
+
+  // The parts that stay put while the list changes, so that what is typed and where the keyboard is stay too.
+  const alertSlot = el("div", { class: "slot", role: "alert" });
+  const listBox = el("div", { class: "list" });
+  const cardBox = el("div", { class: "card" });
+  const clearBox = el("div", { class: "clear" });
+  const clearButton = el("button", { type: "button", class: "btn small", text: t.clear });
+  clearButton.addEventListener("click", () => clearTicked());
+
+  const nameBox = el("input", { id: "name", class: "input", type: "text", maxlength: MAX_NAME, placeholder: t.add, autocomplete: "off" });
+  const submitButton = el("button", { type: "submit", class: "btn primary", text: t.submit });
+  const chips = el("div", { class: "chips", role: "group", "aria-label": t.aisle, hidden: true });
+  const status = el("p", { class: "status", role: "status", "aria-live": "polite" });
+  const form = el(
+    "form",
+    { class: "add", novalidate: true },
+    el("label", { class: "sr-only", for: "name", text: t.add }),
+    el("div", { class: "add-row" }, nameBox, submitButton),
+    chips,
+    status,
+  );
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    addItem();
+  });
+  nameBox.addEventListener("input", () => {
+    setStatus("");
+    syncSubmit();
+  });
+
+  const syncSubmit = () => {
+    submitButton.disabled = adding || nameBox.value.trim() === "";
+  };
+
+  /** A message under the box. `quiet`: for screen readers alone, as the list already shows it. */
+  function setStatus(text, quiet) {
+    status.classList.toggle("shown", Boolean(text) && !quiet);
+    if (!text) status.replaceChildren();
+    else status.replaceChildren(quiet ? el("span", { class: "sr-only", text }) : text);
+  }
+
+  function showNotice(text) {
+    alertSlot.replaceChildren(el("p", { class: "notice" }, icon(WARNING, 14, 1.75), el("span", { text })));
+  }
+  const clearNotice = () => alertSlot.replaceChildren();
+
+  // What each part last drew, so that a read that brings nothing new changes nothing on the screen.
+  const drawn = { list: "", card: "", chips: "" };
+
+  function drawChips() {
+    const titles = aisles();
+    const signature = JSON.stringify(titles);
+    if (signature !== drawn.chips) {
+      drawn.chips = signature;
+      keepFocus(chips, () => {
+        chips.replaceChildren(
+          ...titles.map((title) => {
+            const chip = el("button", { type: "button", class: "chip", "data-key": `chip:${title}`, text: title });
+            chip.addEventListener("click", () => {
+              picked = chosenAisle() === title ? "" : title;
+              drawChips();
+            });
+            return chip;
+          }),
+        );
+      });
+      chips.hidden = titles.length === 0;
+    }
+    const chosen = chosenAisle();
+    for (const chip of chips.children) chip.setAttribute("aria-pressed", String(chip.textContent === chosen));
+  }
+
+  function drawList() {
+    const titles = aisles();
+    const shown = hideDone ? items.filter(listedOpen) : items;
+    // An item whose aisle the space no longer has is listed under "Other", with those that never had one.
+    const groupOf = (item) => (titles.includes(aisleOfRow(item)) ? aisleOfRow(item) : "");
+    const groups = [...titles, ""]
+      .map((title) => ({ title, items: shown.filter((item) => groupOf(item) === title) }))
+      .filter((group) => group.items.length > 0);
+    // Headings only when the space has aisles: without them the list is one list.
+    const headed = titles.length > 0;
+    const signature = JSON.stringify([headed, groups.map((group) => [group.title, group.items.map((item) => [item.id, nameOfRow(item), doneOf(item)])])]);
+    if (signature === drawn.list) return;
+    drawn.list = signature;
+    keepFocus(listBox, () => {
+      if (groups.length === 0) {
+        listBox.replaceChildren(emptyState("h2"));
+        return;
+      }
+      listBox.replaceChildren(
+        ...groups.map((group) =>
+          el(
+            "section",
+            { "aria-label": group.title || t.other },
+            headed ? el("h2", { class: "aisle", text: group.title || t.other }) : null,
+            el("ul", { class: "rows" }, group.items.map(itemRow)),
+          ),
+        ),
+      );
+    });
+  }
+
+  function drawClear() {
+    // Shown while anything is ticked, also when ticked items are hidden.
+    const any = canEdit && items.some(doneOf);
+    if (!any) {
+      const hadFocus = document.activeElement === clearButton;
+      clearBox.replaceChildren();
+      if (hadFocus) nameBox.focus({ preventScroll: true });
+    } else if (!clearButton.isConnected) {
+      clearBox.append(clearButton);
+    }
+    clearButton.disabled = clearing;
+  }
+
+  function drawCard() {
+    const left = items.filter((item) => !doneOf(item)).length;
+    // Nothing left to buy: nothing to press by mistake either, so an item just ticked need not stay.
+    const first = left === 0 ? [] : items.filter(listedOpen).slice(0, CARD_ROWS);
+    const signature = JSON.stringify([left, first.map((item) => [item.id, nameOfRow(item), doneOf(item)])]);
+    if (signature === drawn.card) return;
+    drawn.card = signature;
+    keepFocus(cardBox, () => {
+      if (first.length === 0) cardBox.replaceChildren(emptyState("h3"));
+      else
+        cardBox.replaceChildren(
+          el("ul", { class: "rows" }, first.map(itemRow)),
+          el("p", { class: "left", text: say(t.left, { count: left }) }),
+        );
+    });
+  }
+
+  const root = document.getElementById("app");
+  let mode = "";
+
+  function draw() {
+    const next = loaded ? "ready" : loadFailed ? "failed" : "loading";
+    if (next !== mode) {
+      mode = next;
+      if (mode === "loading") {
+        // Not announced: every card of the dashboard loads at once. A screen reader finds the word when it reads on.
+        const rows = [0.62, 0.45, 0.54].map((width) => el("div", { class: "bone", style: `width:${width * 100}%` }));
+        root.replaceChildren(
+          el(
+            "div",
+            { class: "skeleton" },
+            el("span", { class: "sr-only", text: t.loading }),
+            !inCard && canEdit ? el("div", { class: "bone tall" }) : null,
+            rows,
+          ),
+        );
+      } else if (mode === "failed") {
+        const retry = el("button", { type: "button", class: "btn small", text: t.retry });
+        retry.addEventListener("click", () => {
+          loadFailed = false;
+          refocus = true;
+          draw();
+          start();
+        });
+        root.replaceChildren(el("div", { class: "failed", role: "alert" }, el("p", { text: t.loadFailed }), retry));
+      } else if (inCard) {
+        root.replaceChildren(cardBox, alertSlot);
+      } else {
+        root.replaceChildren(...(canEdit ? [form, alertSlot, listBox, clearBox] : [alertSlot, listBox]));
+      }
+    }
+    if (mode === "failed" && refocus) {
+      // Failed again: the keyboard stays on "Try again".
+      refocus = false;
+      root.querySelector("button").focus({ preventScroll: true });
+    }
+    if (mode !== "ready") return;
+    if (inCard) {
+      drawCard();
+    } else {
+      if (canEdit) drawChips();
+      drawList();
+      drawClear();
+      syncSubmit();
+    }
+    if (refocus) {
+      // Read at last after "Try again", which has gone: the keyboard goes on to the first control.
+      refocus = false;
+      const first = root.querySelector("input:not(:disabled), button:not(:disabled), [tabindex='-1']");
+      if (first) first.focus({ preventScroll: true });
+    }
+  }
+
+  // ---------------------------------------------------------------- Reading
+
+  let reading = null;
+  let readAgain = false;
+
+  /**
+   * Reads the list and the settings, and draws them. Asked while a read is
+   * on its way, it reads once more after that one, so that what it gives
+   * back was read after it was asked.
+   */
+  function refresh() {
+    if (reading) {
+      readAgain = true;
+      return reading;
+    }
+    reading = (async () => {
+      try {
+        do {
+          readAgain = false;
+          const [rows, settings] = await Promise.all([hearth.list(ITEMS, ALL), hearth.settings()]);
+          items = Array.isArray(rows) ? rows : [];
+          const space = (settings && settings.space) || {};
+          const user = (settings && settings.user) || {};
+          aislesSetting = Array.isArray(space.aisles) ? space.aisles : [];
+          hideDone = user.hideDone === true;
+          loaded = true;
+        } while (readAgain);
+      } finally {
+        reading = null;
+      }
+      draw();
+    })();
+    return reading;
+  }
+
+  function start() {
+    refresh().catch(() => {
+      if (loaded) return;
+      loadFailed = true;
+      draw();
+    });
+  }
+
+  /**
+   * After a change that failed: reads the list again and says so. When the
+   * read works, the server turned the change down (the item is gone, say)
+   * and the page now shows what it holds; when it does not, the server could
+   * not be reached, and trying again may help.
+   */
+  async function afterFailure() {
+    try {
+      await refresh();
+      showNotice(t.changeRefused);
+    } catch {
+      showNotice(t.changeFailed);
+    }
+  }
+
+  // ---------------------------------------------------------------- Changing
+
+  /**
+   * A row as the server saved it, in place of the one last read, so that the
+   * page shows a change it made even when the list cannot be read again just
+   * then. Read again soon after, with everyone's changes.
+   */
+  function keep(row) {
+    if (!row || typeof row !== "object" || typeof row.id !== "string") return;
+    const index = items.findIndex((item) => item.id === row.id);
+    items = index < 0 ? [...items, row] : items.map((item, at) => (at === index ? row : item));
+  }
+
+  /**
+   * Puts an item on the list under the aisle chosen, or, when an item of that
+   * name is on it already, marks that one as needed again, in the aisle just
+   * chosen or the one it had: two people sharing the list often add the
+   * same thing, and it stays one item.
+   */
+  async function addItem() {
+    const typed = nameBox.value;
+    const name = typed.trim();
+    if (adding || name === "" || name.length > MAX_NAME) return;
+    const aisle = chosenAisle();
+    adding = true;
+    syncSubmit();
+    clearNotice();
+    setStatus("");
+    let message;
+    try {
+      // Read now, not from the screen: someone may have added it since the list was last read.
+      const all = await hearth.list(ITEMS, ALL);
+      const there = (Array.isArray(all) ? all : []).find((item) => sameName(nameOfRow(item)) === sameName(name));
+      if (!there) {
+        keep(await hearth.add(ITEMS, { name, aisle, done: false }));
+        message = [say(t.added, { name }), true];
+      } else {
+        const had = aisleOfRow(there);
+        const wanted = aisle === "" ? had : aisle;
+        if (there.done === true || wanted !== had) keep(await hearth.update(ITEMS, there.id, { done: false, aisle: wanted }));
+        message = [say(t.already, { name: nameOfRow(there) }), false];
+      }
+    } catch {
+      // The text stays in the box when the item could not be added.
+      adding = false;
+      syncSubmit();
+      await afterFailure();
+      return;
+    }
+    await refresh().catch(() => {});
+    adding = false;
+    // The aisle stays chosen for the next item. Anything typed meanwhile stays too.
+    if (nameBox.value === typed) nameBox.value = "";
+    syncSubmit();
+    setStatus(message[0], message[1]);
+  }
+
+  /**
+   * Ticks an item off as bought, for everyone, or unticks it. Shown at once;
+   * saved after the item's tick before, if that is still on its way; read
+   * again once saved.
+   */
+  async function tick(item, done) {
+    const token = {};
+    ticking.set(item.id, { done, token });
+    const mine = () => ticking.has(item.id) && ticking.get(item.id).token === token;
+    clearNotice();
+    setStatus("");
+    draw();
+    const save = (saving.get(item.id) || Promise.resolve()).then(() => hearth.update(ITEMS, item.id, { done }));
+    const settled = save.then(
+      () => {},
+      () => {},
+    );
+    saving.set(item.id, settled);
+    const saved = () => {
+      if (saving.get(item.id) === settled) saving.delete(item.id);
+    };
+    let row;
+    try {
+      row = await save;
+    } catch {
+      // Someone else may have cleared it first: it is gone, and the list shows that once read again.
+      saved();
+      if (mine()) ticking.delete(item.id);
+      await afterFailure();
+      draw();
+      return;
+    }
+    saved();
+    keep(row);
+    await refresh().catch(() => {});
+    if (mine()) ticking.delete(item.id);
+    draw();
+  }
+
+  /** Deletes every ticked item, for everyone. */
+  async function clearTicked() {
+    if (clearing) return;
+    const hadFocus = document.activeElement === clearButton;
+    clearing = true;
+    clearNotice();
+    setStatus("");
+    draw();
+    try {
+      // What is ticked on the screen is what goes: ticks and unticks pressed before are saved first,
+      // so that an item just unticked, still needed, is not deleted, nor one just ticked left behind.
+      await Promise.all([...saving.values()]);
+      await hearth.replace(ITEMS, { done: true }, []);
+    } catch {
+      clearing = false;
+      await afterFailure();
+      draw();
+      return;
+    }
+    items = items.filter((item) => item.done !== true);
+    await refresh().catch(() => {});
+    clearing = false;
+    draw();
+    // The button has gone with what it cleared: the keyboard goes on to the box for the next item.
+    if (hadFocus && !clearButton.isConnected && !form.contains(document.activeElement)) nameBox.focus({ preventScroll: true });
+  }
+
+  // ---------------------------------------------------------------- Keeping up
+
+  // Changed elsewhere: by another page of the app, the chat, or the settings.
+  hearth.onChange(() => {
+    refresh().catch(() => {});
+  });
+  // What others change shows within 15 seconds, and at once when Hearth is looked at again.
+  setInterval(() => {
+    if (loaded && document.visibilityState === "visible") refresh().catch(() => {});
+  }, REFRESH_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (loaded && document.visibilityState === "visible") refresh().catch(() => {});
+  });
+
+  draw();
+  start();
+})();
+</script>
+</body>
+</html>

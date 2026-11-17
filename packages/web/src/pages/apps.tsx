@@ -8,9 +8,10 @@
  *   change nothing for anyone else, the app's settings, and for an owner of
  *   the space "Move", which takes the app with its data to another space,
  *   and "Remove", which hides the app for everyone and keeps its data.
- * - Where the person may add apps, "Add an app" offers the apps this build
- *   holds that the space does not have yet. Adding is a saved setting: no
- *   rebuild, no restart. In a group the person adding is asked who else may
+ * - Where the person may add apps, "Add an app" offers the apps shipped with
+ *   Hearth (docs/platform.md, "Built-in apps"), each added as an app made in
+ *   Hearth of the space's own, and the apps this build holds, that the space
+ *   does not have yet. Adding is a saved setting: no rebuild, no restart. In a group the person adding is asked who else may
  *   use it, "only me for now" first (owner's decision 1). Moving an app into
  *   a group asks the same.
  * - An app the space had and removed kept its data, and adding it again
@@ -27,12 +28,13 @@ import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } fr
 import { Link } from "react-router";
 import type { AppSummary, InstalledApp, Localized, MemberAccess, Space } from "@hearth/shared";
 import { Button, Dialog, DialogBody, EmptyState, IconButton, Row, Rows, Switch, Tag } from "@hearth/sdk/web";
-import { useBundledApps, type BundledApp } from "../apps/bundled";
+import { useBundledApps } from "../apps/bundled";
 import { useSpaceApps } from "../groups/queries";
 import {
   AppSettingsButton,
   useAddApp,
   useAppPrefs,
+  useCatalog,
   useFullAppName,
   useMoveApp,
   useMoveTargets,
@@ -410,18 +412,55 @@ function RemoveDialog({ app, open, onClose }: { app: AppSummary; open: boolean; 
 }
 
 /**
- * The apps this build holds that a space does not list for this person and
- * whose manifest allows its kind, and when there are none, why: the build
- * holds no apps at all (a plain `pnpm build` holds none), every one of them
- * is here already, or the others are not for this kind of space.
+ * An app the Add dialog offers: one shipped with Hearth, which becomes an
+ * app made in Hearth of the space's own (`fromCatalog`), or one of the build's.
  */
-function useAddable(space: Space): { apps: BundledApp[]; none: PlainMessageKey } {
+type Addable = {
+  id: string;
+  fromCatalog: boolean;
+  name: Localized;
+  description: Localized;
+  icon: string;
+  color: string;
+  network: readonly string[];
+};
+
+/**
+ * The built-in apps and the apps this build holds that a space does not
+ * list for this person and that fit its kind, and when there are none, why:
+ * there are no apps at all (a plain `pnpm build` holds none), every one of
+ * them is here already, or the others are not for this kind of space. Null
+ * while the built-in apps are being asked for.
+ */
+function useAddable(space: Space): { apps: Addable[]; none: PlainMessageKey | null } {
   const session = useSession();
   const bundled = useBundledApps();
-  const present = new Set(session.apps.filter((app) => app.spaceId === space.id).map((app) => app.id));
-  const apps = bundled.filter((app) => !present.has(app.id) && (!app.manifest.spaces || app.manifest.spaces.includes(space.kind)));
-  const none: PlainMessageKey =
-    bundled.length === 0 ? "apps.addNoneInstalled" : bundled.every((app) => present.has(app.id)) ? "apps.addNothing" : "apps.addNothingFits";
+  const catalog = useCatalog();
+  const here = session.apps.filter((app) => app.spaceId === space.id);
+  const builtIn = catalog.data ?? [];
+  const offered = [
+    ...builtIn.map((template) => ({
+      app: { ...template, fromCatalog: true } satisfies Addable,
+      here: here.some((app) => app.template === template.id),
+      fits: true,
+    })),
+    // A build's app that Hearth now ships as a built-in app is offered as that alone.
+    ...bundled
+      .filter((app) => !builtIn.some((template) => template.id === app.id))
+      .map(({ id, manifest }) => ({
+        app: { id, fromCatalog: false, name: manifest.name, description: manifest.description, icon: manifest.icon, color: manifest.color, network: manifest.network ?? [] } satisfies Addable,
+        here: here.some((app) => app.id === id),
+        fits: !manifest.spaces || manifest.spaces.includes(space.kind),
+      })),
+  ];
+  const apps = offered.filter((entry) => !entry.here && entry.fits).map((entry) => entry.app);
+  const none: PlainMessageKey | null = catalog.isPending
+    ? null
+    : offered.length === 0
+      ? "apps.addNoneInstalled"
+      : offered.every((entry) => entry.here)
+        ? "apps.addNothing"
+        : "apps.addNothingFits";
   return { apps, none };
 }
 
@@ -437,7 +476,7 @@ function AddApp({ space }: { space: Space }) {
   return (
     <CardFooter className="flex flex-wrap items-center gap-3">
       {addable.length === 0 ? (
-        <p className="text-xs text-fg-3">{t(none)}</p>
+        none ? <p className="text-xs text-fg-3">{t(none)}</p> : null
       ) : (
         <>
           <Button size="sm" aria-haspopup="dialog" onClick={() => setOpen(true)}>
@@ -459,7 +498,7 @@ const ACCESS_CHOICES: ReadonlyArray<{ value: MemberAccess; label: PlainMessageKe
 
 const RADIO = "size-4 flex-none accent-accent";
 
-function AddAppDialog(props: { space: Space; addable: BundledApp[]; open: boolean; onClose: () => void }) {
+function AddAppDialog(props: { space: Space; addable: Addable[]; open: boolean; onClose: () => void }) {
   const { t } = useI18n();
   const title = props.space.kind === "group" ? t("apps.addTo", { space: props.space.name }) : t("apps.addToPersonal");
   return (
@@ -476,11 +515,12 @@ function restoreNote(entry: InstalledApp, t: Translate): string {
 }
 
 /** Mounted each time the dialog opens, so that it starts from the first app and "only me for now". */
-function AddAppForm({ space, addable, onClose, title }: { space: Space; addable: BundledApp[]; onClose: () => void; title: string }) {
+function AddAppForm({ space, addable, onClose, title }: { space: Space; addable: Addable[]; onClose: () => void; title: string }) {
   const { locale, t } = useI18n();
   const name = useId();
   const add = useAddApp();
   const list = useSpaceApps(space);
+  // IDs do not repeat: a build's app that is also a built-in app is offered as the built-in one alone.
   const [chosenId, setChosenId] = useState(addable[0]?.id ?? "");
   const [memberAccess, setMemberAccess] = useState<MemberAccess>("none");
   // The session is loaded again after a refusal; an app it no longer offers is not chosen.
@@ -490,15 +530,19 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
   // Only an owner brings a removed app back (anyone else is turned down), and only an owner may read
   // the list that says which were removed. Until it is known, nothing is added.
   const known = !owner || list.data !== undefined;
-  const removed = (appId: string) => (owner ? list.data?.apps.find((entry) => entry.id === appId && entry.removedAt !== null) : undefined);
-  const restoring = chosen ? removed(chosen.id) !== undefined : false;
+  // A built-in app the space removed is the made app added from it.
+  const removed = (app: Addable) =>
+    owner
+      ? list.data?.apps.find((entry) => (app.fromCatalog ? entry.template === app.id : entry.id === app.id) && entry.removedAt !== null)
+      : undefined;
+  const restoring = chosen ? removed(chosen) !== undefined : false;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!chosen || !known || add.isPending) return;
     // Closed whether or not the dialog is still there when the session is loaded again.
     add
-      .mutateAsync({ install: { spaceId: space.id, appId: chosen.id }, memberAccess: group ? memberAccess : undefined })
+      .mutateAsync({ install: { spaceId: space.id, appId: chosen.id }, memberAccess: group ? memberAccess : undefined, fromCatalog: chosen.fromCatalog })
       .then(onClose, () => undefined);
   };
 
@@ -522,8 +566,8 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
         <fieldset className="flex min-w-0 flex-col gap-1">
           <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("apps.addChoose")}</legend>
           {addable.map((app) => {
-            const entry = removed(app.id);
-            const hosts = app.manifest.network ?? [];
+            const entry = removed(app);
+            const hosts = app.network;
             return (
               <label
                 key={app.id}
@@ -537,10 +581,10 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
                   checked={chosen?.id === app.id}
                   onChange={() => setChosenId(app.id)}
                 />
-                <AppIcon icon={app.manifest.icon} color={app.manifest.color} />
+                <AppIcon icon={app.icon} color={app.color} />
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="font-medium">{pickLocalized(app.manifest.name, locale)}</span>
-                  <span className="text-xs text-fg-3">{pickLocalized(app.manifest.description, locale)}</span>
+                  <span className="font-medium">{pickLocalized(app.name, locale)}</span>
+                  <span className="text-xs text-fg-3">{pickLocalized(app.description, locale)}</span>
                   {hosts.length > 0 ? (
                     <span className="text-xs text-fg-2 wrap-anywhere">
                       {t("apps.addNetwork", { hosts: joinNames(hosts, locale) })}

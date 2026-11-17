@@ -15,7 +15,7 @@ import type { Registry } from "../apps/registry";
 import type { Config } from "../config";
 import type { Db } from "../db/database";
 import { listSpacesForUser } from "../db/people";
-import { Refusal } from "../http/errors";
+import { NOTHING_HERE, Refusal } from "../http/errors";
 import {
   addMadeRow,
   assistantMayChange,
@@ -23,10 +23,14 @@ import {
   listMadeRows,
   madeAppsIn,
   updateMadeRow,
+  changeMadeApp,
+  nameOf,
+  readMadeApp,
+  restoreMadeVersion,
   type MadeApp,
   type MadeRequest,
 } from "../made/apps";
-import { madeHtmlSchema, madeManifestSchema, type MadeManifest } from "../made/manifest";
+import { MAX_HTML_BYTES, checkMadeManifest, madeHtmlSchema, madeManifestSchema, type MadeManifest } from "../made/manifest";
 import { ModelCallError, openConversation, type ToolCall, type ToolOutcome, type ToolSpec } from "./providers";
 import { modelAccess } from "./settings";
 
@@ -61,7 +65,7 @@ function describeApps(apps: readonly { app: MadeApp; level: "view" | "edit" }[])
         .map(([name, collection]) => `    - ${name} { ${describeFields(collection.fields)} }`)
         .join("\n");
       return [
-        `- appId ${app.appId}: ${JSON.stringify(manifest.name)}${manifest.description ? ` (${JSON.stringify(manifest.description)})` : ""}, you may ${level === "edit" ? "read and change" : "only read"} its rows`,
+        `- appId ${app.appId}, version ${app.version}: ${JSON.stringify(manifest.name)}${manifest.description ? ` (${JSON.stringify(manifest.description)})` : ""}${app.template ? `, the built-in app "${app.template}"` : ""}, you may ${level === "edit" ? "read and change" : "only read"} its rows`,
         `  collections:\n${collections}`,
         manifest.instructions ? `  its maker's instructions: ${JSON.stringify(manifest.instructions)}` : null,
       ]
@@ -81,7 +85,7 @@ Apps made in this space:
 ${describeApps(apps)}
 
 To make an app, call create_app with a manifest and its page:
-- manifest: a short name in the person's language, a description, an icon, a colour, the size of its card on the dashboard (small, wide, tall or large), its collections and their fields (text, number, boolean, date as YYYY-MM-DD, or choice with options), and instructions for whoever changes its data later.
+- manifest: a short name in the person's language, a description, an icon, a colour, the size of its card on the dashboard (small, wide, tall or large), its collections and their fields (text, number, boolean, date as YYYY-MM-DD, or choice with options), and instructions for whoever changes its data later. It names no hosts ("network"): an app made here fetches nothing from outside.
 - html: one complete HTML document, everything inline. It runs in a sandbox that blocks every request, so no external script, style, font or image, and no fetch: plain JavaScript, no frameworks. It reaches its data only through window.hearth, which is there before its scripts run:
     await hearth.list(collection, { orderBy, desc, limit }) gives the rows, each with id, createdAt, updatedAt and its fields
     await hearth.add(collection, data) gives the new row
@@ -92,6 +96,8 @@ To make an app, call create_app with a manifest and its page:
   Forms work: handle their submit event and call preventDefault. alert, confirm and prompt are blocked: say things in the page itself. Write people's text into the page with textContent, never innerHTML.
   The body already has the font and colours. Use the CSS variables --hearth-surface, --hearth-surface-2, --hearth-line, --hearth-text, --hearth-text-2, --hearth-text-3, --hearth-accent, --hearth-accent-soft and --hearth-accent-text, so that it fits light and dark. It is shown as a card on the dashboard, often narrow, on phones too: keep it compact, and let people add, change and remove entries in the page itself. Write its texts in the person's language.
 - When it is made, say in a sentence or two what it does.
+
+To change an app (its fields, its page, its name or look), read it first with read_app, then call update_app with the whole new manifest, the whole new page, or both, and a short note in the person's language saying what changed. A change must leave every row stored now valid: adding collections and optional fields, adding options to a choice and making a field optional always work; to change what stored rows hold, change those rows first. The server refuses a change that would leave a row behind, and says which. Every change is a new version: say what you changed, and that it can be undone. When the person asks to undo a change or go back, call restore_app_version with the version to go back to.
 
 Before you change rows you have not seen, read them with list_rows. Use the appId and collection names exactly as listed.
 
@@ -109,6 +115,14 @@ const INPUTS = {
   }),
   add_row: z.strictObject({ ...appRef, data: z.record(z.string(), z.unknown()) }),
   update_row: z.strictObject({ ...appRef, rowId: z.string().min(1).max(100), data: z.record(z.string(), z.unknown()) }),
+  read_app: z.strictObject({ appId: appRef.appId }),
+  update_app: z.strictObject({
+    appId: appRef.appId,
+    manifest: z.unknown().optional(),
+    html: z.string().optional(),
+    note: z.string().trim().min(1).max(200),
+  }),
+  restore_app_version: z.strictObject({ appId: appRef.appId, version: z.number().int().min(1) }),
 } as const;
 type ToolName = keyof typeof INPUTS;
 
@@ -148,13 +162,37 @@ const TOOLS: readonly ToolSpec[] = [
     description: "Changes the given fields of one row of an app made in this space. Gives the row as it is now.",
     inputSchema: jsonSchemaOf(INPUTS.update_row),
   },
+  {
+    name: "read_app",
+    description: "Reads an app made in this space: its version in use, its whole manifest and page, and its recent versions with what changed in each.",
+    inputSchema: jsonSchemaOf(INPUTS.read_app),
+  },
+  {
+    name: "update_app",
+    description:
+      "Changes an app made in this space, as a new version that can be undone: give the whole new manifest, the whole new page, or both, and a note saying what changed. Refused if a stored row would no longer fit.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        appId: { type: "string" },
+        manifest: jsonSchemaOf(madeManifestSchema),
+        html: { type: "string", description: "The app's whole new page: one complete HTML document, everything inline." },
+        note: { type: "string", description: "What changed, in a few words, in the person's language." },
+      },
+      required: ["appId", "note"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "restore_app_version",
+    description: "Brings an earlier version of an app made in this space back into use, as a new version. Refused if a row written since would not fit it.",
+    inputSchema: jsonSchemaOf(INPUTS.restore_app_version),
+  },
 ];
 
-function output(value: unknown): string {
+function output(value: unknown, limit = MAX_TOOL_OUTPUT): string {
   const text = JSON.stringify(value);
-  return text.length <= MAX_TOOL_OUTPUT
-    ? text
-    : `${text.slice(0, MAX_TOOL_OUTPUT)}\n[cut short: ask for fewer rows with "limit"]`;
+  return text.length <= limit ? text : `${text.slice(0, limit)}\n[cut short: ask for fewer rows with "limit"]`;
 }
 
 /** Runs one tool call for the person, and tells the conversation what changed. */
@@ -177,7 +215,7 @@ async function runTool(
     appId,
     by: "assistant",
   });
-  const appName = (appId: string) => registry.get(appId)?.manifest.name.en ?? appId;
+  const appName = (appId: string) => registry.get(appId)?.manifest.name[context.user.locale] ?? appId;
 
   try {
     switch (name) {
@@ -187,6 +225,8 @@ async function runTool(
         }
         const manifest = madeManifestSchema.safeParse(input.manifest);
         if (!manifest.success) return fail(`The manifest is not valid: ${z.prettifyError(manifest.error)}`);
+        const sdkProblem = checkMadeManifest(manifest.data);
+        if (sdkProblem !== null) return fail(`The manifest is not valid: ${sdkProblem}`);
         const html = madeHtmlSchema.safeParse(input.html);
         if (!html.success) return fail(`The page is not valid: ${z.prettifyError(html.error)}`);
         const { appId } = createMadeApp(db, registry, {
@@ -195,8 +235,8 @@ async function runTool(
           manifest: manifest.data,
           html: html.data,
         });
-        await emit({ type: "action", action: "app_created", appId, appName: manifest.data.name });
-        return { id: call.id, content: output({ appId, name: manifest.data.name }), isError: false };
+        await emit({ type: "action", action: "app_created", appId, appName: nameOf(manifest.data, context.user.locale) });
+        return { id: call.id, content: output({ appId, name: nameOf(manifest.data, context.user.locale) }), isError: false };
       }
       case "list_rows": {
         const { appId, collection, orderBy, desc, limit } = input as z.infer<typeof INPUTS.list_rows>;
@@ -215,10 +255,56 @@ async function runTool(
         await emit({ type: "action", action: "row_updated", appId, appName: appName(appId) });
         return { id: call.id, content: output({ row }), isError: false };
       }
+      case "read_app": {
+        const { appId } = input as z.infer<typeof INPUTS.read_app>;
+        const app = readMadeApp(db, registry, request(appId));
+        const versions = app.versions.slice(0, 10).map(({ version, note, createdAt }) => ({ version, note, createdAt }));
+        // The whole page, which update_app replaces whole: allowed as large as a page may be.
+        return {
+          id: call.id,
+          content: output({ appId, version: app.version, manifest: app.manifest, html: app.html, versions }, MAX_HTML_BYTES + MAX_TOOL_OUTPUT),
+          isError: false,
+        };
+      }
+      case "update_app": {
+        const { appId, manifest: rawManifest, html: rawHtml, note } = input as z.infer<typeof INPUTS.update_app>;
+        if (rawManifest === undefined && rawHtml === undefined) return fail("Give a new manifest, a new page, or both.");
+        let manifest: MadeManifest | undefined;
+        if (rawManifest !== undefined) {
+          const parsed = madeManifestSchema.safeParse(rawManifest);
+          if (!parsed.success) return fail(`The manifest is not valid: ${z.prettifyError(parsed.error)}`);
+          manifest = parsed.data;
+        }
+        let html: string | undefined;
+        if (rawHtml !== undefined) {
+          const parsed = madeHtmlSchema.safeParse(rawHtml);
+          if (!parsed.success) return fail(`The page is not valid: ${z.prettifyError(parsed.error)}`);
+          html = parsed.data;
+        }
+        const changed = changeMadeApp(db, registry, { ...request(appId), ...(manifest ? { manifest } : {}), ...(html !== undefined ? { html } : {}), note });
+        await emit({ type: "action", action: "app_updated", appId, appName: nameOf(changed, context.user.locale), version: changed.version, previous: changed.previous });
+        return { id: call.id, content: output({ version: changed.version, previous: changed.previous }), isError: false };
+      }
+      case "restore_app_version": {
+        const { appId, version } = input as z.infer<typeof INPUTS.restore_app_version>;
+        const restored = restoreMadeVersion(db, registry, { ...request(appId), version });
+        await emit({
+          type: "action",
+          action: "app_restored",
+          appId,
+          appName: nameOf(restored, context.user.locale),
+          version: restored.version,
+          previous: restored.previous,
+          restored: restored.restored,
+        });
+        return { id: call.id, content: output({ version: restored.version, restored: restored.restored }), isError: false };
+      }
     }
   } catch (error) {
     if (error instanceof Refusal) {
-      const why = error.status === 404 ? "There is no such app, collection or row here, or it is not one you may use." : error.message;
+      // The bare "nothing here" says no more than that; a refusal with its own reason says it.
+      const why =
+        error.message === NOTHING_HERE ? "There is no such app, collection or row here, or it is not one you may use." : error.message;
       return fail(why);
     }
     throw error;

@@ -5,10 +5,15 @@
  * the page around it (frame.tsx).
  */
 import {
+  catalogAppSchema,
   chatEventSchema,
+  madeRestoreSchema,
   modelSettingsSchema,
+  type CatalogApp,
   type ChatEvent,
+  type MemberAccess,
   type ChatRequest,
+  type MadeRestore,
   type MadeRow,
   type ModelSettings,
   type ModelSettingsRequest,
@@ -112,3 +117,77 @@ export async function updateRow(
 export async function removeRow(spaceId: string, appId: string, collection: string, rowId: string): Promise<void> {
   await request(`${rowsPath(spaceId, appId, collection)}/${encodeURIComponent(rowId)}`, { method: "DELETE" });
 }
+
+/** Brings an earlier version of a made app back into use, as a new version: the chat's undo. */
+export async function restoreVersion(spaceId: string, appId: string, version: number): Promise<MadeRestore> {
+  const response = await request(
+    `/api/spaces/${encodeURIComponent(spaceId)}/apps/${encodeURIComponent(appId)}/versions/${version}/restore`,
+    { method: "POST" },
+  );
+  const parsed = madeRestoreSchema.safeParse(await response.json().catch(() => undefined));
+  if (!parsed.success) throw new ApiRequestError("invalid_response", response.status, "The answer did not match the expected shape.");
+  return parsed.data;
+}
+
+/** The app's settings here, the space's and the person's own, defaults filled in (the settings route every app has). */
+export async function readSettings(spaceId: string, appId: string): Promise<unknown> {
+  const response = await request(`/api/spaces/${encodeURIComponent(spaceId)}/apps/${encodeURIComponent(appId)}/settings`);
+  return response.json();
+}
+
+export async function saveSettings(spaceId: string, appId: string, patch: Record<string, unknown>): Promise<unknown> {
+  const response = await request(`/api/spaces/${encodeURIComponent(spaceId)}/apps/${encodeURIComponent(appId)}/settings`, {
+    method: "PATCH",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(patch),
+  });
+  return response.json();
+}
+
+export async function replaceRows(
+  spaceId: string,
+  appId: string,
+  collection: string,
+  where: Record<string, unknown>,
+  rows: readonly Record<string, unknown>[],
+): Promise<{ removed: number; added: number }> {
+  const response = await request(`${rowsPath(spaceId, appId, collection)}/replace`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ where, rows }),
+  });
+  return (await response.json()) as { removed: number; added: number };
+}
+
+/** A GET from one of the hosts the app names, made by the server: the answer, or an error naming why. */
+export async function fetchForApp(spaceId: string, appId: string, url: string, headers: Record<string, string>): Promise<unknown> {
+  const response = await fetch(`/api/spaces/${encodeURIComponent(spaceId)}/apps/${encodeURIComponent(appId)}/fetch`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { ...JSON_HEADERS, Accept: "application/json" },
+    body: JSON.stringify({ url, headers }),
+  });
+  const body = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
+  if (!response.ok) throw new Error(body?.error?.message ?? `The fetch failed with status ${response.status}.`);
+  return body;
+}
+
+export const CATALOG_QUERY_KEY = ["catalog"] as const;
+
+/** GET /api/catalog: the apps shipped with Hearth. */
+export async function fetchCatalog(signal?: AbortSignal): Promise<CatalogApp[]> {
+  const response = await request("/api/catalog", { signal });
+  const parsed = catalogAppSchema.array().safeParse(await response.json().catch(() => undefined));
+  if (!parsed.success) throw new ApiRequestError("invalid_response", response.status, "The built-in apps did not match the expected shape.");
+  return parsed.data;
+}
+
+/** POST /api/spaces/:spaceId/catalog/:templateId: a built-in app added to a space, or the one it removed brought back. */
+export async function addFromCatalog(spaceId: string, templateId: string, memberAccess?: MemberAccess): Promise<void> {
+  await request(`/api/spaces/${encodeURIComponent(spaceId)}/catalog/${encodeURIComponent(templateId)}`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(memberAccess === undefined ? {} : { memberAccess }),
+  });
+}
+

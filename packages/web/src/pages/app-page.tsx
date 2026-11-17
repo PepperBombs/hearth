@@ -2,6 +2,7 @@ import { Tag } from "@hearth/sdk/web";
 import { useParams } from "react-router";
 import { AppView } from "../apps/app-view";
 import { AppSettingsButton } from "../apps/manage";
+import { MadeAppFrame } from "../made/frame";
 import { Page } from "../components/shell/page";
 import { Card } from "../components/card";
 import { pickLocalized } from "../i18n";
@@ -35,7 +36,8 @@ export function AppPage() {
       actions={<AppSettingsButton app={app} />}
     >
       <Card className="min-h-[200px] max-w-[760px]" data-app-page={app.id}>
-        <AppView app={app} part="page" />
+        {/* An app made in Hearth draws its whole page here, in the sandbox, as tall as it is. */}
+        {app.made ? <MadeAppFrame app={app} view="page" maxHeight={100_000} /> : <AppView app={app} part="page" />}
       </Card>
     </Page>
   );

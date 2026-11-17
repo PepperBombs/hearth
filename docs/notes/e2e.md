@@ -43,38 +43,17 @@ Notes for whoever changes this part, people and agents alike. They are read when
   started, so a test that refreshes waits that long; the copy that ran a
   failed run logs a line, which shows in Playwright's output. The
   stranger's copy runs no job (`HEARTH_JOBS=off` in `realServerCommand`).
-- `e2e/mini-apps` tests apps of another repository, today the grocery
-  list, GitHub Trending and Ideas of `hearth-stones`. That
-  repository has no Playwright of its own (it installs
-  nothing but the SDK's link). `pnpm e2e` leaves the folder out; `pnpm
-  e2e:mini-apps` (`playwright.mini-apps.config.ts`) builds Hearth with
-  those apps and starts the owner's and Lin's copies of the server on ports
-  4183 and 4184 over a database of their own (`MINI_APPS_*` in
-  `e2e/servers.ts`). Both run their jobs over one file of stand-in answers
-  beside that database (`MINI_APPS_STAND_INS`), as in `pnpm e2e`.
-  A file runs only when the folders hold the app it is
-  named after, so CI's `mini-apps` job passes against a `hearth-stones`
-  without that app. CI in `hearth-stones` does not run these tests: a
-  change there to an app's texts or layout needs its file here changed
-  with it, and shows first in this repository's next CI run. So does a
-  change to GitHub Trending's searches: `trending.spec.ts` answers each
-  search by the text of its `q` (the filters against spam, the fewest forks
-  of its range, the language), those of the two languages the family
-  follows first; then an entry that holds `language:` alone turns down the
-  search for any other language, and a search no stand-in answers fails
-  the run. The exact queries, dates and numbers of forks are the app's own
-  tests' to hold. Its browsers follow a link to GitHub only into a stand-in
-  page: a route on each context answers `https://github.com` itself and
-  refuses every other host but the test's servers. Lin's browser is on a
-  clock 8 hours from UTC, the owner's on UTC's. One check needs the
-  server's 5 seconds between runs: the owner asks for a run once one has
-  ended, and Lin's page and the owner's card must show "Refreshing…"
-  before that run starts. `ideas.spec.ts` needs no stand-ins, since Ideas
-  has no job: the owner alone first (an idea written on the card, then on
-  the page #tags in two scripts, a search held back to see the timeline
-  stay, dimmed, pin, edit, archive, delete), then the owner and Lin, who
-  reads on her phone in Chinese and writes once the owner lets members
-  edit. It reads the timeline as the text of each idea's first paragraph
-  and names a tag's chip "#tag n". Do not run
-  the two Playwright commands at the same time: both build into the same
-  `dist` folders.
+- `e2e/mini-apps` is for the tests of apps of another repository, built in
+  by `pnpm e2e:mini-apps` (`playwright.mini-apps.config.ts`): Hearth built
+  with those apps, the owner's and Lin's copies of the server on ports 4183
+  and 4184 over a database of their own (`MINI_APPS_*` in `e2e/servers.ts`),
+  their jobs over one file of stand-in answers (`MINI_APPS_STAND_INS`). A
+  file runs only when the folders hold the app it is named after, and the
+  command passes with none. It is empty now: the grocery list, GitHub
+  Trending and Ideas of `hearth-stones` moved into Hearth as built-in apps
+  (`docs/platform.md`), and their tests went with them; the built-in apps
+  are tried in `real-server.spec.ts`. Do not run the two Playwright
+  commands at the same time: both build into the same `dist` folders.
+- Playwright's `serviceWorkers: "block"` (the default in `playwright.config.ts`) runs a script in every frame that reads `navigator.serviceWorker`, which a made app's sandboxed frame refuses with a page error. A test that draws a made app allows service workers (`test.use({ serviceWorkers: "allow" })`), so that every error it collects is a real one.
+- A made app's page lives in an iframe: reach it with `page.frameLocator('iframe[data-made-app="<id>"]')`. A grocery card keeps only what is still to buy, so an item ticked there leaves it.
+

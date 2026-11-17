@@ -12,7 +12,7 @@ that exist today (the app shell) and the rules later steps build on.
 | `packages/server` | A Hono app on Node. Answers `/api`, serves the built web app for every other path, and keeps data in one SQLite file. `src/apps` holds the mini-apps this build was given, decides who may use which app in which space, runs an app's queries and mutations against its own rows, reads and saves its settings, and runs its jobs on a schedule. `src/groups` creates groups and manages the people in them. |
 | `packages/fixture-apps` | The framework's own sample mini-apps, which its tests run against: `checklist`, which keeps rows and has a page, `feed`, which has a widget and no server file, and `headlines`, whose job fetches a sample news feed every hour. |
 | `packages/web` | A React single-page app built with Vite: sidebar, dashboard, phone tab bar, settings (with a card for each group), quick switcher, themes, English and Chinese. It is built from the SDK's UI kit, as mini-apps are, and draws each app's widget on the dashboard and its page at `/apps/:spaceId/:appId`. |
-| `e2e` | Playwright end-to-end tests: the framework with its sample apps, and in `e2e/mini-apps` the mini-apps of `hearth-stones`. |
+| `e2e` | Playwright end-to-end tests: the framework with its sample apps, and the built-in apps. `e2e/mini-apps` is for the mini-apps of another repository (none now: those of `hearth-stones` moved into Hearth as built-in apps, `docs/platform.md`). |
 | `deploy` | The pull-based deploy script and service files. |
 
 Mini-apps are being built in steps. The server can already hold apps, add
@@ -143,7 +143,9 @@ An app's end-to-end test, two people of a family using it in their
 browsers, is in this repository too, in `e2e/mini-apps`, named after the
 app: `hearth-stones` has no Playwright. `pnpm e2e:mini-apps` runs it here
 against Hearth built with `../hearth-stones` (see "Checks"). So a change to
-an app's texts or layout there changes its file here as well.
+an app's texts or layout there changes its file here as well. (The three
+apps of `hearth-stones` have since moved into Hearth as built-in apps,
+`docs/platform.md`, and their files here went with them.)
 
 `hearth-stones` holds two apps so far. The grocery list (`grocery/`): a
 shopping list the people of a space share, grouped by the aisles the space

@@ -59,6 +59,7 @@ describe("migrate", () => {
       "app_rows",
       "app_settings",
       "invitations",
+      "made_app_versions",
       "made_apps",
       "migrations",
       "space_apps",

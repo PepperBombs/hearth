@@ -51,8 +51,11 @@ Cloudflare's Managed OAuth (`docs/self-hosting.md`, section 10).
 
 The new direction is `docs/platform.md`: each person's own model makes their
 apps in a chat, and an app is a page in the browser's sandbox with no code on
-the server. Its first slice is built: the chat, each person's model and key,
-and made apps on the dashboard. The build's own apps work beside them.
+the server. Built: the chat, each person's model and key, made apps on the
+dashboard, changes by chat as versions that can be undone, and the built-in
+apps (`packages/server/catalog`): the grocery list, Ideas and GitHub
+Trending, to which the build's installs of them move at start-up. The
+build's pipeline for apps goes next, once that is checked on a real server.
 
 ## Layout
 

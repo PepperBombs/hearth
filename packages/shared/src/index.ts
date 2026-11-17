@@ -168,6 +168,15 @@ export const appSummarySchema = z.object({
    * its own, run in a sandbox, not a widget of the build.
    */
   made: z.boolean().optional(),
+  /** A made app's version in use: it changes with every change to the app, so its page is drawn afresh. */
+  version: z.number().int().positive().optional(),
+  /** The built-in app a made app was added from, when it was. */
+  template: z.string().optional(),
+  /**
+   * A made app's settings, declared as an SDK manifest declares them, for
+   * the settings dialog; the build's apps have theirs in the build.
+   */
+  settings: z.record(z.string(), z.unknown()).optional(),
 });
 export type AppSummary = z.infer<typeof appSummarySchema>;
 
@@ -440,6 +449,8 @@ export const installedAppSchema = z.object({
   members: z.record(z.string(), memberAccessSchema),
   /** False when the space's owners left the app out of what an assistant may use. */
   assistant: z.boolean(),
+  /** The built-in app a made app was added from, when it was: the Add dialog brings a removed one back. */
+  template: z.string().optional(),
 });
 export type InstalledApp = z.infer<typeof installedAppSchema>;
 
@@ -615,7 +626,7 @@ export const chatRequestSchema = z.strictObject({
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 
 /** What the model did in an app, for the conversation to show. */
-export const CHAT_ACTIONS = ["app_created", "row_added", "row_updated"] as const;
+export const CHAT_ACTIONS = ["app_created", "app_updated", "app_restored", "row_added", "row_updated"] as const;
 
 /** What happened when the chat ended without an answer. */
 export const CHAT_FAILURES = [
@@ -642,6 +653,11 @@ export const chatEventSchema = z.discriminatedUnion("type", [
     action: z.enum(CHAT_ACTIONS),
     appId: z.string(),
     appName: z.string(),
+    /** For a change to the app itself: the version it made, and the one before, which undoing it brings back. */
+    version: z.number().int().positive().optional(),
+    previous: z.number().int().positive().optional(),
+    /** For "app_restored": the earlier version it brought back. */
+    restored: z.number().int().positive().optional(),
   }),
   z.object({ type: z.literal("error"), failure: z.enum(CHAT_FAILURES), detail: z.string() }),
   z.object({ type: z.literal("done") }),
@@ -660,4 +676,28 @@ export type MadeRow = Record<string, unknown> & {
 
 /** POST and PATCH of a made app's row: the fields to store. */
 export const madeRowWriteSchema = z.strictObject({ data: z.record(z.string(), z.unknown()) });
+
+/** POST /api/spaces/:spaceId/apps/:appId/versions/:version/restore: a made app back at an earlier version, as a new one. */
+export const madeRestoreSchema = z.object({
+  version: z.number().int().positive(),
+  previous: z.number().int().positive(),
+  restored: z.number().int().positive(),
+});
+export type MadeRestore = z.infer<typeof madeRestoreSchema>;
+
+/** GET /api/catalog: the apps shipped with Hearth, which anyone who may add apps adds as a made app of their own. */
+export const catalogAppSchema = z.object({
+  id: z.string(),
+  name: z.object({ en: z.string(), zh: z.string() }),
+  description: z.object({ en: z.string(), zh: z.string() }),
+  icon: z.string(),
+  color: z.string(),
+  /** The hosts its page fetches from, through the server. */
+  network: z.array(z.string()),
+});
+export type CatalogApp = z.infer<typeof catalogAppSchema>;
+
+/** POST /api/spaces/:spaceId/catalog/:templateId: what the other members of a group get, as when adding any app. */
+export const addFromCatalogRequestSchema = z.strictObject({ memberAccess: memberAccessSchema.optional() });
+export type AddFromCatalogRequest = z.infer<typeof addFromCatalogRequestSchema>;
 

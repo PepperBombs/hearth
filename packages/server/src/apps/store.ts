@@ -516,6 +516,42 @@ export function writeSettingsData(
   ).run(bindings);
 }
 
+/** A stored row that would not fit a collection's schema, and why. */
+export type RowMisfit = { collection: string; rowId: string; reason: string };
+
+/**
+ * The rows one app holds in one space that would not fit these schemas: a
+ * row of a collection they lack, or one its collection's schema refuses.
+ * For a change to an app made in Hearth (src/made/apps.ts), which must
+ * leave every stored row readable. Gives the first `limit` and how many in
+ * all; the reasons name fields, never their content.
+ */
+export function rowsNotFitting(
+  db: Db,
+  install: { spaceId: string; appId: string },
+  schemas: Schemas,
+  limit = 5,
+): { misfits: RowMisfit[]; total: number } {
+  const misfits: RowMisfit[] = [];
+  let total = 0;
+  const rows = db
+    .prepare("SELECT id, collection, data FROM app_rows WHERE space_id = @spaceId AND app_id = @appId ORDER BY created_at, id")
+    .iterate(install) as IterableIterator<{ id: string; collection: string; data: string }>;
+  for (const row of rows) {
+    const schema = Object.hasOwn(schemas, row.collection) ? schemas[row.collection] : undefined;
+    let reason: string | null = null;
+    if (!schema) reason = "its collection would be gone";
+    else {
+      const parsed = safeParse(schema, JSON.parse(row.data));
+      if (!parsed.success) reason = describeIssue(parsed.error.issues[0]);
+    }
+    if (reason === null) continue;
+    total++;
+    if (misfits.length < limit) misfits.push({ collection: row.collection, rowId: row.id, reason });
+  }
+  return { misfits, total };
+}
+
 /**
  * How many rows one app holds in one space, in all its collections. The
  * caller has checked that the person asking may know.

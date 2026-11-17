@@ -75,6 +75,10 @@ export type TestAppOptions = {
   wakeJobs?: AppOptions["wakeJobs"];
   /** What answers in place of a person's model (src/model/providers.ts). */
   modelFetch?: AppOptions["modelFetch"];
+  /** The way out for a made app's fetch. Defaults to the configuration's, which no test may reach. */
+  outbound?: AppOptions["outbound"];
+  /** The built-in apps. Defaults to those of packages/server/catalog. */
+  catalog?: AppOptions["catalog"];
 };
 
 export function testApp(options: TestAppOptions = {}) {
@@ -91,6 +95,8 @@ export function testApp(options: TestAppOptions = {}) {
     warn: options.warn ?? ((message) => warnings.push(message)),
     wakeJobs: options.wakeJobs,
     ...(options.modelFetch ? { modelFetch: options.modelFetch } : {}),
+    ...(options.outbound ? { outbound: options.outbound } : {}),
+    ...(options.catalog ? { catalog: options.catalog } : {}),
   });
   return { app, db, errors, warnings };
 }

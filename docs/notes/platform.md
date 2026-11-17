@@ -11,3 +11,14 @@ Notes for whoever changes this part, people and agents alike. They are read when
 - `made_apps` refers to its install with a deferred foreign key, so that `createMadeApp` writes the app first and lets `addApp` (which asks the registry) find it in the same transaction.
 - A dev server without `HEARTH_SECRET` makes one up per process: after a restart every saved key is unreadable and the chat answers `no_key` until it is entered again.
 - The chat's history is plain text only, cut to 40 kB in the browser: `/api/*` takes bodies of up to 64 kB.
+- A change to a made app is checked against every stored row (`rowsNotFitting` in `store.ts`), going back to a version too: a strict schema refuses a row with a field the app no longer has, so removing a field that holds data is refused rather than hiding the data.
+- A built-in app's rows must fit its manifest exactly, as the build's app stored them (`packages/server/catalog/*/manifest.json`): change a field there and the move of the build's installs refuses every one that holds such a row.
+- A made field that is `required` only has to be there: an empty text passes. A page that needs text checks it itself.
+- `hearth.fetch` shares the jobs' pace (one request to a host every 6.5 s): a page that makes several waits for each in turn, and shows its progress.
+- A page can be tried without a server: render it with `frameDocument` in an iframe whose parent answers the bridge from memory, checking rows with `collectionSchemas`. The built-in pages were checked that way.
+- `frame.tsx` tells an app's other frames to read again after a write alone (`WRITES`): after a read too, two frames of one app on screen (a card and the chat's) would wake each other for ever.
+- A rule across rows that a page keeps (one grocery item per name) holds only against what the page last read: the server checks each row by itself, and two people in the same second can both add.
+- `MadeAppFrame` keys its iframe by space and app: React keeps a component when only the route's IDs change, and a reused iframe would answer the page shown before, still loading or still sending, as the next app.
+- The settings dialog starts its form from the first answer it gets. A made app's pages read settings through the bridge, not the query cache, so a cached answer may be old: `AppSettingsButton` drops one nothing observes before opening.
+- The bridge's height report skips the echo of a page sized to its frame (`min-height: 100vh` with padding): the frame grew and the page still overflows it by as much as before. Models write such pages often.
+

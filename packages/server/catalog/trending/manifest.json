@@ -1,0 +1,182 @@
+{
+  "name": {
+    "en": "GitHub Trending",
+    "zh": "GitHub 热门"
+  },
+  "description": {
+    "en": "New repositories on GitHub with the most stars, by day, week and month.",
+    "zh": "GitHub 上按天、周、月统计星标最多的新仓库。"
+  },
+  "icon": "trending-up",
+  "color": "purple",
+  "size": "tall",
+  "network": [
+    "api.github.com"
+  ],
+  "collections": {
+    "repos": {
+      "fields": {
+        "range": {
+          "type": "choice",
+          "options": [
+            "day",
+            "week",
+            "month"
+          ],
+          "required": true
+        },
+        "set": {
+          "type": "text",
+          "required": true
+        },
+        "position": {
+          "type": "number",
+          "required": true
+        },
+        "githubId": {
+          "type": "number",
+          "required": true
+        },
+        "fullName": {
+          "type": "text",
+          "required": true
+        },
+        "description": {
+          "type": "text"
+        },
+        "language": {
+          "type": "text"
+        },
+        "stars": {
+          "type": "number",
+          "required": true
+        },
+        "forks": {
+          "type": "number",
+          "required": true
+        },
+        "repoCreatedAt": {
+          "type": "text",
+          "required": true
+        }
+      }
+    },
+    "hidden": {
+      "fields": {
+        "githubId": {
+          "type": "number",
+          "required": true
+        },
+        "fullName": {
+          "type": "text",
+          "required": true
+        }
+      }
+    },
+    "refreshes": {
+      "fields": {
+        "at": {
+          "type": "date",
+          "required": true
+        },
+        "ok": {
+          "type": "boolean",
+          "required": true
+        },
+        "error": {
+          "type": "text"
+        }
+      }
+    }
+  },
+  "instructions": "repos holds the lists of the last refresh that went well: for each range (day, week, month) and set (\"\" for every language, else the key of a language the space follows, such as rust), the new repositories GitHub's search found with the most stars, in its order from position 0, at most 25, spam left out. hidden is the space's Hide list (githubId and fullName): every list leaves those repositories out, for everyone in the space; add a row to hide one, remove it to show it again. refreshes holds the newest 20 refreshes, one row each: at (when it started), ok, and error (\"running\" while it goes on, \"\" when it went well, else why it failed). The page refreshes the lists itself from api.github.com when someone who may edit opens it and the last refresh started more than an hour ago, or on Refresh now. Do not write repos or refreshes yourself.",
+  "settings": {
+    "languages": {
+      "type": "multi-select",
+      "scope": "space",
+      "default": [],
+      "label": {
+        "en": "Languages to follow",
+        "zh": "关注的语言"
+      },
+      "help": {
+        "en": "Each language adds three searches to every refresh.",
+        "zh": "每关注一种语言，每次刷新就多三次搜索。"
+      },
+      "options": {
+        "typescript": {
+          "en": "TypeScript",
+          "zh": "TypeScript"
+        },
+        "javascript": {
+          "en": "JavaScript",
+          "zh": "JavaScript"
+        },
+        "python": {
+          "en": "Python",
+          "zh": "Python"
+        },
+        "go": {
+          "en": "Go",
+          "zh": "Go"
+        },
+        "rust": {
+          "en": "Rust",
+          "zh": "Rust"
+        },
+        "java": {
+          "en": "Java",
+          "zh": "Java"
+        },
+        "cpp": {
+          "en": "C++",
+          "zh": "C++"
+        },
+        "csharp": {
+          "en": "C#",
+          "zh": "C#"
+        },
+        "swift": {
+          "en": "Swift",
+          "zh": "Swift"
+        },
+        "kotlin": {
+          "en": "Kotlin",
+          "zh": "Kotlin"
+        }
+      }
+    },
+    "range": {
+      "type": "select",
+      "scope": "user",
+      "default": "week",
+      "label": {
+        "en": "Show first",
+        "zh": "默认显示"
+      },
+      "options": {
+        "day": {
+          "en": "Today",
+          "zh": "今天"
+        },
+        "week": {
+          "en": "This week",
+          "zh": "本周"
+        },
+        "month": {
+          "en": "This month",
+          "zh": "本月"
+        }
+      }
+    },
+    "hideDescriptions": {
+      "type": "switch",
+      "scope": "user",
+      "default": false,
+      "label": {
+        "en": "Hide descriptions",
+        "zh": "隐藏描述"
+      }
+    }
+  }
+}

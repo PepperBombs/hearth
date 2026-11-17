@@ -1,0 +1,33 @@
+{
+  "name": {
+    "en": "Ideas",
+    "zh": "想法"
+  },
+  "description": {
+    "en": "Write an idea down the moment it comes: a timeline with #tags, pins, search and an archive.",
+    "zh": "想到就记：一条想法时间线，支持 #标签、置顶、搜索和归档。"
+  },
+  "icon": "star",
+  "color": "amber",
+  "size": "tall",
+  "collections": {
+    "ideas": {
+      "fields": {
+        "text": {
+          "type": "text",
+          "required": true
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "list"
+        }
+      }
+    }
+  },
+  "instructions": "One row per idea. text: the idea as the person wrote it, plain text (no Markdown), line breaks kept, 1 to 4000 characters, no spaces around it; never translate or reword it. tags: the #tags of the text, without the '#', folded (NFKC, then lower case: '#Garden' and '＃ＧＡＲＤＥＮ' are both 'garden'), each once, in the order they first appear in the text. A tag is '#' or '＃' and 1 to 30 letters, digits, '_' or '-' in any script, ending where those end (in Chinese, put a space or a punctuation mark after it); a longer run is no tag, and a '#' inside a web address starts none. Write tags whenever you write text. The page finds and counts tags in the text itself, so to tag an idea, put the #tag into its text. pinned: kept at the top of the timeline. archived: put away (done or given up), kept, and out of the timeline until brought back. A new idea has pinned and archived false. Archiving sets pinned false too: an archived idea is never pinned, and one brought back (archived false) stays unpinned. The timeline shows pinned ideas first, then the newest first; an idea's time is when it was created. A space holds at most 5000 ideas, archived ones included; the page turns a new one down after that."
+}

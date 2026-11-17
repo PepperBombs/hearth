@@ -1,0 +1,56 @@
+{
+  "name": {
+    "en": "Grocery list",
+    "zh": "购物清单"
+  },
+  "description": {
+    "en": "A shared shopping list, grouped by aisle.",
+    "zh": "按货架分组的共享购物清单。"
+  },
+  "icon": "shopping-bag",
+  "color": "green",
+  "size": "tall",
+  "collections": {
+    "items": {
+      "fields": {
+        "name": {
+          "type": "text",
+          "required": true
+        },
+        "aisle": {
+          "type": "text"
+        },
+        "done": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "instructions": "The space's shared shopping list. One row per thing to buy, with three fields. name: what to buy, 1 to 80 characters, without spaces around it. aisle: one of the space's aisles, which are kept in the app's setting \"aisles\" and may not be shown to you: use an aisle the other rows already have, written exactly the same, or \"\" for none. An empty aisle, or one the setting no longer has, is listed under Other. done: false while it is still to buy, true once it is ticked off as bought. Give a new row all three fields: done false, and aisle \"\" when no aisle fits. One name is one item, whatever its case, its spaces or full-width letters (\"Milk\", \" milk \" and \"ＭＩＬＫ\" are the same): read the rows before adding, and when the name is on the list already, add nothing but update that row to done false, and to the aisle asked for if one was. To tick an item off, update it to done true; ticked items stay until someone presses \"Clear ticked\" on the app's page, which deletes them.",
+  "settings": {
+    "aisles": {
+      "type": "list",
+      "scope": "space",
+      "default": [],
+      "maxItems": 20,
+      "maxLength": 40,
+      "label": {
+        "en": "Aisles",
+        "zh": "货架"
+      },
+      "help": {
+        "en": "Items are grouped in this order.",
+        "zh": "物品按此顺序分组。"
+      }
+    },
+    "hideDone": {
+      "type": "switch",
+      "scope": "user",
+      "default": false,
+      "label": {
+        "en": "Hide ticked items",
+        "zh": "隐藏已勾选的物品"
+      }
+    }
+  }
+}

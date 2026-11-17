@@ -319,6 +319,9 @@ export class FakeApi {
       return route.fulfill({ json: this.current.user });
     }
 
+    // The apps shipped with Hearth (docs/platform.md): none here, where the build's sample apps are the subject.
+    if (path === "/api/catalog" && request.method() === "GET") return route.fulfill({ json: [] });
+
     const forGroups = this.answerForGroups(path, request.method(), request.postDataJSON() as unknown);
     if (forGroups) {
       if ("status" in forGroups) return fail(forGroups);

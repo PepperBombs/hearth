@@ -27,14 +27,23 @@ chat, "make me a ledger" makes an app, which appears on the dashboard;
 It is three things, kept in the database (`made_apps`, migration 5):
 
 - **A manifest** (`packages/server/src/made/manifest.ts`): a name and
-  description in its maker's words (never translated), an icon and a colour
-  from the SDK's lists, the size of its card, its collections, and
-  instructions for whoever changes its data later. A collection has 1 to 30
-  fields, each `text`, `number`, `boolean`, `date` (`YYYY-MM-DD`, or a date
-  and time) or `choice` (with its options), optional unless `required`.
-  The store checks every row against exactly those fields: a row with
-  another field, or a value of another kind, is refused with the reason.
-- **A page**: one HTML document, everything inline, at most 300 kB.
+  description in its maker's words (never translated), or in both languages
+  for a built-in app, an icon and a colour from the SDK's lists, the size of
+  its card, its collections, and instructions for whoever changes its data
+  later. A collection has 1 to 30 fields, each `text`, `number`, `boolean`,
+  `date` (`YYYY-MM-DD`, or a date and time), `choice` (with its options) or
+  `list` (up to 2000 short texts: every #tag an idea can hold), optional
+  unless `required`. The store checks every row against exactly those
+  fields: a row with another field, or a value of another kind, is refused
+  with the reason. It may also declare `settings` exactly as an SDK manifest
+  does, checked by the SDK's own rules (`checkMadeManifest`), and Hearth's
+  settings dialog and settings routes then serve it like any app's. Only a
+  built-in app names hosts to fetch from (`network`): an app a model makes
+  names none, and a change keeps a built-in copy's hosts as they are, since
+  a host a page names is one the server fetches from, with its own address.
+- **A page**: one HTML document, everything inline, at most 300 kB. It is
+  drawn small in the app's card (`hearth.view` is `"card"`) and whole on
+  the app's own page (`"page"`), so every made app has a page.
 - **An install**: the same `space_apps` row every app has, added through
   `addApp` with its rules (owners, and members allowed to add apps; nothing
   shared with a group's other members until an owner chooses). So `VISIBLE`
@@ -50,24 +59,44 @@ working as before, side by side.
 ## The sandbox
 
 A made app's page is served at `GET /api/spaces/:space/apps/:app/frame`
-and drawn in an iframe with `sandbox="allow-scripts allow-forms"`. Its
-response carries its own Content-Security-Policy
-(`SANDBOX_CONTENT_SECURITY_POLICY` in `src/made/frame.ts`): nothing may be
-loaded or fetched from anywhere (`default-src 'none'`), no form may be sent
-(`form-action 'none'`), only Hearth may frame it, and `sandbox` gives it an
-opaque origin even when opened by itself. `allow-forms` only lets a form's
-submit event fire for the page to handle; without it browsers drop the
-event.
+and drawn in an iframe with `sandbox="allow-scripts allow-forms
+allow-popups allow-popups-to-escape-sandbox"`. Its response carries its own
+Content-Security-Policy (`SANDBOX_CONTENT_SECURITY_POLICY` in
+`src/made/frame.ts`): nothing may be loaded or fetched from anywhere
+(`default-src 'none'`), no form may be sent (`form-action 'none'`), only
+Hearth may frame it, and `sandbox` gives it an opaque origin even when
+opened by itself. `allow-forms` only lets a form's submit event fire for
+the page to handle; without it browsers drop the event. The popups let a
+link open another site in a new tab (GitHub Trending opens repositories);
+dialogs (`alert`, `confirm`) stay blocked.
 
 So the page cannot read Hearth's pages, cookies or storage, and cannot call
 Hearth's API. All it can do with data is `window.hearth`, which the server
-puts in front of the page's own scripts: `list`, `add`, `update` and
-`remove` of its own collections, and `onChange` to hear that the data
-changed elsewhere. Each call is a message to the page around it
+puts in front of the page's own scripts:
+
+- `list`, `add`, `update` and `remove` of its own collections, and
+  `replace(collection, where, rows)`, which swaps every row matching
+  `where` for new ones at once, all or nothing (at most 1000). `where` is
+  always given, `{}` for every row: a missing one, or a field in it left
+  undefined, is refused rather than taken for every row;
+- `settings()` and `saveSettings({ space?, user? })`, through the same
+  routes and rules as every app's settings;
+- `fetch(url, { headers })`: a GET made by the server under the rules of a
+  job's `ctx.fetch` (`src/apps/fetch.ts`), to the hosts the manifest names
+  alone, paced with every job's requests, and without the person's cookies;
+- `onChange` to hear that the data or settings changed elsewhere;
+- `locale`, `theme`, `access` (`"view"` or `"edit"`), `view`, and `user`
+  and `space` (its kind, name and members, each an ID and a name), so that a
+  page can say who wrote a row, as the build's apps could.
+
+Each call is a message to the page around it
 (`packages/web/src/made/frame.tsx`), which answers only messages from that
 iframe and always for the app and space it drew the iframe for, whatever the
-message says. The page reports its height, and gets the theme's colours as
-CSS variables.
+message says. Each app gets an iframe of its own, so that going from one
+app's page to another's leaves nothing of the first to be answered as the
+second. The page reports its height (a page sized to its frame, `100vh`, is
+told apart, or it would grow the frame for ever), and gets the theme's
+colours as CSS variables.
 
 What the sandbox does not stop: a page can still navigate its own frame to
 another address, and a browser may let it open a WebRTC connection, so an
@@ -120,6 +149,85 @@ answer, such as a whole app's page, outlasts any proxy's timeout.
   there, as on the dashboard. The conversation lives in the page only; the
   server keeps none of it.
 
+## Changing an app
+
+The owner chose (decision 7, as recommended): what the model adds and
+changes it does at once, shows in the conversation, and can be undone;
+what it deletes it asks about first (not built yet: the chat deletes
+nothing).
+
+- **Versions.** Every change to an app is a new version
+  (`made_app_versions`, migration 6); the newest 30 are kept. Going back
+  to an earlier version is itself a new version, so it can be undone too.
+  The version in use is in the session, and a frame draws the new page
+  when it changes.
+- **The rule for fields.** A change must leave every row stored now valid:
+  adding collections and optional fields, adding options to a choice and
+  making a field optional always work. A change that some row would not
+  fit (a field made required that a row lacks, a type a value does not
+  have, a field or collection that holds data) is refused, with the rows
+  and why (`rowsNotFitting` in `store.ts`). Going back is held to the same
+  rule: rows written since must fit the version brought back.
+- **Who may.** Changing what an app is reaches everyone who uses it, so it
+  is for those who may add apps to the space and have edit access to the
+  app; an assistant also needs the space's owners to allow it to change
+  things there.
+- **In the chat** the model has `read_app` (the whole manifest and page,
+  and recent versions), `update_app` (a whole new manifest, page or both,
+  with a note of what changed) and `restore_app_version`. Each change shows
+  in the conversation with an Undo button, which brings back the version
+  before it (`POST .../versions/:version/restore`).
+
+## Built-in apps
+
+The apps Hearth ships are made apps too: each is a folder of
+`packages/server/catalog` with its `manifest.json` (names and texts in both
+languages) and `page.html`, written by hand and checked at start-up like any
+made app (`src/made/catalog.ts`), so that a broken one stops the server
+before it serves anything. They are the grocery list, Ideas and GitHub
+Trending, rewritten from the build's apps of `hearth-stones` to the same
+data.
+
+- **Adding one.** `GET /api/catalog` lists them, and the Apps page's Add
+  dialog offers them first. `POST /api/spaces/:space/catalog/:id` adds one as
+  a made app of the space's own (`made_apps.template`, migration 7), which
+  can be changed in the chat like any other; a space has one of each, and
+  adding one the space removed brings that one back, with its data.
+- **The move of the build's apps.** When the server starts, every install
+  of a build's app whose ID is a built-in app's becomes that built-in app,
+  in place (`moveLegacyInstalls` in `src/made/builtin.ts`): the install gets
+  a made app's ID, which every table about it follows (`ON UPDATE CASCADE`),
+  so its rows, settings, who may use it, pins and switches stay as they
+  were, and removed installs move too. Each install moves alone, in one
+  transaction, and only if every row it holds fits the built-in app; one
+  that does not stays as it was, keeps working with the build's code, and is
+  named in the server's log. The deploy's trial start tries the move on a
+  copy of the real database first.
+- **Updates.** A built-in app's copies follow what Hearth ships: when the
+  server starts, every copy nobody changed is brought up to the built-in app
+  of this release, as a new version ("Updated with Hearth"), which can be
+  undone like any (`updateBuiltInApps`; `made_apps.template_hash` says which
+  release a copy is, and is cleared by any other change). A copy someone
+  changed, in the chat or by going back to a version, is theirs and stays as
+  it is; so does one whose rows would not fit, which the log names.
+- **No jobs.** GitHub Trending refreshes its lists itself, through
+  `hearth.fetch`, when someone who may edit it opens it and its last
+  refresh is more than an hour old, or on "Refresh now". A row in
+  `refreshes` marks a refresh in progress, so that two pages do not run one
+  at the same time.
+- **What changed with the move.** The rules the build's apps kept on the
+  server now live in their pages: the grocery list's one row per name, Ideas'
+  #tags and its 5000 ideas, GitHub Trending's searches and deny-list. A page
+  checks them against what it last read, so two people acting in the same
+  second can still both add the same item, and a page reads every row of its
+  collection again every 15 seconds (Ideas up to 5000). A refresh of GitHub
+  Trending runs in the page that started it: leaving that page stops it, and
+  the next page to open waits until the refresh has not moved for a minute
+  before it starts its own. Claude over MCP does not see made apps yet (see
+  "Not built yet").
+- The build's own copies of these apps are still compiled in, hidden from
+  the Add dialog, until their pipeline is deleted.
+
 ## Testing
 
 `src/made/made.test.ts` and `src/model/chat.test.ts`, against a fake fetch
@@ -132,19 +240,18 @@ trying the web app without a real model.
 
 ## Not built yet
 
-- **Changing and deleting apps from the chat** (`update_app`). A changed
-  field can leave stored rows that no longer fit, which the store refuses to
-  read: this needs a rule for changing fields first. Rows cannot be deleted
-  from the chat yet either: decision 7 said the assistant confirms every
-  change, and the chat does not ask yet. Which changes need asking is the
-  owner's to decide.
+- **Deleting from the chat**, rows or apps, with the person's confirmation
+  first (decision 7). Undoing a row the model added or changed.
 - **The center**: publishing an app, finding others', installing a copy and
   changing it to fit.
 - **Developers' path** (answer 3): uploading an app written by hand.
 - **Jobs for made apps** (a scheduled fetch the platform runs for an app).
-- **Made apps over MCP**: Claude through the connector does not see them yet.
+- **Made apps over MCP**: Claude through the connector does not see them yet,
+  so since the move it no longer sees the grocery list, Ideas or GitHub
+  Trending; the chat with each person's own model does.
 - **Sign-in for a public platform**: Cloudflare Access is fine while the
   platform is invitation-only.
-- **The old way of building apps in**: the three apps of `hearth-stones` are
-  still compiled into the build. Once made apps can do what they need, they
-  move over and that pipeline goes.
+- **Deleting the old way of building apps in**: the three apps of
+  `hearth-stones` moved over (see "Built-in apps"); once that is checked on a
+  real server, the SDK's server side, `hearth-apps`, the build-time registry
+  and the deploy's second repository go.

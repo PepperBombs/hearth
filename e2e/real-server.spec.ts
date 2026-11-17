@@ -7,8 +7,9 @@
  * screen for someone who was not invited, and a family of two people: the
  * owner and Lin, each with a copy of the server of their own over one
  * database, who share a group and an app the owner then moves out of it and
- * back, and an app whose job fetches its headlines, from a file of stand-in
- * answers both copies read.
+ * back, an app whose job fetches its headlines, from a file of stand-in
+ * answers both copies read, and a built-in app (docs/platform.md), whose
+ * page runs in the sandbox.
  */
 import { expect, test, type Page } from "@playwright/test";
 import { PHONE, expectNothingPastTheEdge } from "./fixtures.ts";
@@ -646,6 +647,87 @@ test("an app with a job: the dialog names its host, its first run follows at onc
     await linContext.close();
   }
   expect((await ownerSession()).apps).toEqual([]);
+});
+
+test.describe("a built-in app", () => {
+  // Playwright blocks service workers with a script it runs in every frame, which reads
+  // navigator.serviceWorker; a sandboxed frame refuses that, and the page would report an error
+  // that is the test's own. With service workers allowed nothing is injected, so every error is real.
+  test.use({ serviceWorkers: "allow" });
+
+  test("is a page in the sandbox: the owner adds the family's grocery list from the Add dialog, and Lin ticks what they buy", async ({
+    page,
+    request,
+    browser,
+    playwright,
+  }) => {
+    // Two people, each in a browser of their own, and each page in its sandbox.
+    test.setTimeout(60_000);
+    type Session = { user: { id: string }; apps: { id: string; spaceId: string; template?: string }[] };
+    const groupName = `Shop ${Date.now().toString(36)}`;
+    const milk = `Milk ${Date.now().toString(36)}`;
+    const problems = watchForProblems(page);
+    const linContext = await browser.newContext({ baseURL: MEMBER_URL });
+    const linPage = await linContext.newPage();
+    const linProblems = watchForProblems(linPage);
+    const linApi = await playwright.request.newContext({ baseURL: MEMBER_URL });
+    const sandbox = (on: Page, appId: string) => on.frameLocator(`iframe[data-made-app="${appId}"]`);
+    let groupId = "";
+    let appId = "";
+
+    try {
+      groupId = ((await (await request.post("/api/spaces", { data: { name: groupName } })).json()) as { id: string }).id;
+      expect((await request.post(`/api/spaces/${groupId}/members`, { data: { email: MEMBER_EMAIL } })).status()).toBe(200);
+      // Lin arrives, so that she is in the group.
+      expect((await linApi.get("/api/session")).status()).toBe(200);
+
+      // The owner adds the built-in grocery list to the group from the Add dialog, for everyone to edit.
+      await page.goto("/apps");
+      await page.getByRole("main").getByRole("region", { name: groupName }).getByRole("button", { name: "Add an app" }).click();
+      const add = page.getByRole("dialog", { name: `Add an app to ${groupName}` });
+      await add.getByRole("radio", { name: /Grocery list/ }).check();
+      await add.getByRole("radio", { name: "Everyone can edit" }).check();
+      await add.getByRole("button", { name: "Add", exact: true }).click();
+      await expect(add).toBeHidden();
+      const session = (await (await request.get("/api/session")).json()) as Session;
+      appId = session.apps.find((app) => app.spaceId === groupId && app.template === "grocery")?.id ?? "";
+      expect(appId).toMatch(/^m-[a-z0-9]{10}$/);
+
+      // On the app's own page, in the sandbox, the owner puts milk on the list.
+      await page.goto(`/apps/${groupId}/${appId}`);
+      await sandbox(page, appId).getByLabel("Add an item").fill(milk);
+      await sandbox(page, appId).getByRole("button", { name: "Add", exact: true }).click();
+      await expect(sandbox(page, appId).getByRole("checkbox", { name: milk })).not.toBeChecked();
+
+      // Lin, in her own browser on her copy of the server, finds it in the card on her dashboard and ticks
+      // it; the card keeps only what is still to buy.
+      await linPage.goto("/");
+      const linMilk = sandbox(linPage, appId).getByRole("checkbox", { name: milk });
+      await expect(linMilk).not.toBeChecked();
+      await linMilk.click();
+      await expect(linMilk).toHaveCount(0);
+
+      // The server keeps one row, ticked by Lin, and the owner's page shows it so once read again.
+      const linId = ((await (await linApi.get("/api/session")).json()) as Session).user.id;
+      const stored = (await (await request.get(`/api/spaces/${groupId}/apps/${appId}/rows/items`)).json()) as {
+        rows: { name: string; done: boolean; updatedBy: string }[];
+      };
+      expect(stored.rows).toEqual([expect.objectContaining({ name: milk, done: true, updatedBy: linId })]);
+      await page.reload();
+      await expect(sandbox(page, appId).getByRole("checkbox", { name: milk })).toBeChecked();
+      expect(problems).toEqual([]);
+      expect(linProblems).toEqual([]);
+    } finally {
+      // The group stays (nothing deletes a space); its app and its member go.
+      if (groupId) {
+        if (appId) await request.delete(`/api/spaces/${groupId}/apps/${appId}`);
+        const lin = ((await (await linApi.get("/api/session")).json()) as { user?: { id: string } }).user;
+        if (lin) await request.delete(`/api/spaces/${groupId}/members/${lin.id}`);
+      }
+      await linApi.dispose();
+      await linContext.close();
+    }
+  });
 });
 
 test.describe("installed", () => {

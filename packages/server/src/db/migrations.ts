@@ -283,4 +283,42 @@ export const MIGRATIONS: readonly Migration[] = [
       ) STRICT;
     `,
   },
+  {
+    // Every version of an app made in Hearth, so that a change can be undone
+    // (docs/platform.md, "Changing an app"). Its SQL is in src/made/apps.ts.
+    id: 6,
+    name: "made-app-versions",
+    sql: `
+      -- One version of a made app: what it was, who made it so, and what changed, in their words.
+      -- made_apps holds the version in use; this table holds it too, and the ones before.
+      CREATE TABLE made_app_versions (
+        app_id     TEXT NOT NULL REFERENCES made_apps (app_id) ON DELETE CASCADE,
+        version    INTEGER NOT NULL CHECK (version >= 1),
+        manifest   TEXT NOT NULL CHECK (json_valid(manifest)),
+        html       TEXT NOT NULL,
+        note       TEXT NOT NULL DEFAULT '' CHECK (length(note) <= 200),
+        created_by TEXT NOT NULL REFERENCES users (id),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (app_id, version)
+      ) STRICT;
+
+      -- Apps made before this have the one version they are at.
+      INSERT INTO made_app_versions (app_id, version, manifest, html, note, created_by, created_at)
+        SELECT app_id, version, manifest, html, '', updated_by, updated_at FROM made_apps;
+    `,
+  },
+  {
+    // The apps shipped with Hearth, which every install of the build's own
+    // apps of the same name moves to (docs/platform.md, "Built-in apps").
+    id: 7,
+    name: "made-app-templates",
+    sql: `
+      -- The built-in app a made app was added from (src/made/catalog.ts), or NULL for one a model made.
+      ALTER TABLE made_apps ADD COLUMN template TEXT;
+      -- What the built-in app was (a hash of its manifest and page) when this copy was made or last
+      -- brought up to date by Hearth; NULL once a person or their model changed the copy, which
+      -- Hearth then leaves as it is (src/made/builtin.ts).
+      ALTER TABLE made_apps ADD COLUMN template_hash TEXT;
+    `,
+  },
 ];
