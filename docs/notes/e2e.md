@@ -54,3 +54,6 @@ Notes for whoever changes this part, people and agents alike. They are read when
   (`docs/platform.md`), and their tests went with them; the built-in apps
   are tried in `real-server.spec.ts`. Do not run the two Playwright
   commands at the same time: both build into the same `dist` folders.
+- Playwright's `serviceWorkers: "block"` (the default in `playwright.config.ts`) runs a script in every frame that reads `navigator.serviceWorker`, which a made app's sandboxed frame refuses with a page error. A test that draws a made app allows service workers (`test.use({ serviceWorkers: "allow" })`), so that every error it collects is a real one.
+- A made app's page lives in an iframe: reach it with `page.frameLocator('iframe[data-made-app="<id>"]')`. A grocery card keeps only what is still to buy, so an item ticked there leaves it.
+
