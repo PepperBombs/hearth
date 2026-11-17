@@ -1,4 +1,4 @@
-import { Globe, House, LayoutGrid, Moon, Search, SlidersHorizontal, Sun } from "lucide-react";
+import { Globe, House, LayoutGrid, MessageCircle, Moon, Search, SlidersHorizontal, Sun } from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router";
 import type { AppSummary } from "@hearth/shared";
@@ -89,6 +89,11 @@ export function Sidebar({ className }: { className?: string }) {
         <NavLink to="/apps" end className={NAV_ITEM}>
           <LayoutGrid size={16} aria-hidden="true" />
           <span className="clip">{t("nav.apps")}</span>
+        </NavLink>
+        {/* The chat with the person's own model, which makes apps and keeps their data (docs/platform.md). */}
+        <NavLink to="/chat" end className={NAV_ITEM}>
+          <MessageCircle size={16} aria-hidden="true" />
+          <span className="clip">{t("nav.chat")}</span>
         </NavLink>
 
         <section aria-label={t("nav.personal")}>

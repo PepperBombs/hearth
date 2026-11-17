@@ -43,6 +43,8 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     // Tests run no job unless one asks; createApp starts no scheduler anyway.
     jobs: "off",
     fetchStandIns: null,
+    secret: null,
+    modelStandIn: null,
     ...overrides,
   };
 }
@@ -71,6 +73,8 @@ export type TestAppOptions = {
   warn?: AppOptions["warn"];
   /** What the routes call to wake the scheduler, which no test server has. */
   wakeJobs?: AppOptions["wakeJobs"];
+  /** What answers in place of a person's model (src/model/providers.ts). */
+  modelFetch?: AppOptions["modelFetch"];
 };
 
 export function testApp(options: TestAppOptions = {}) {
@@ -86,6 +90,7 @@ export function testApp(options: TestAppOptions = {}) {
     logError: options.logError ?? ((error) => errors.push(error)),
     warn: options.warn ?? ((message) => warnings.push(message)),
     wakeJobs: options.wakeJobs,
+    ...(options.modelFetch ? { modelFetch: options.modelFetch } : {}),
   });
   return { app, db, errors, warnings };
 }

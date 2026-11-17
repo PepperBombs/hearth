@@ -1,0 +1,13 @@
+# Notes: apps made in Hearth, the sandbox and the chat
+
+`packages/server/src/made`, `packages/server/src/model`, `packages/web/src/made`, `packages/web/src/pages/chat.tsx`. The design is `docs/platform.md`.
+
+Notes for whoever changes this part, people and agents alike. They are read when needed, not at the start of every session: add what you learn as one line, and correct a note in the change that makes it untrue.
+
+- The frame's sandbox needs `allow-forms` (attribute and CSP alike): without it a browser never fires a form's submit event, so every form of a page is dead. `form-action 'none'` is what keeps a form from being sent.
+- A frame reports the body's height, with its margins: the document's `scrollHeight` is never less than the iframe's own height, so a frame sized by it only ever grows.
+- Newer Chromium returns a promise from `scrollIntoView()`: an effect written as `useEffect(() => el.scrollIntoView())` returns it, and React later calls it as the cleanup and throws. Write effects with a block body.
+- Version 1 of `@anthropic-ai/sdk` sends the key as `Authorization: Bearer`, not `x-api-key`; a stand-in that checks the header must look there.
+- `made_apps` refers to its install with a deferred foreign key, so that `createMadeApp` writes the app first and lets `addApp` (which asks the registry) find it in the same transaction.
+- A dev server without `HEARTH_SECRET` makes one up per process: after a restart every saved key is unreadable and the chat answers `no_key` until it is entered again.
+- The chat's history is plain text only, cut to 40 kB in the browser: `/api/*` takes bodies of up to 64 kB.

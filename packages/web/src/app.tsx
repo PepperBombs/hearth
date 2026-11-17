@@ -7,6 +7,7 @@ import { Apps } from "./pages/apps";
 import { Dashboard } from "./pages/dashboard";
 import { NotFound } from "./pages/not-found";
 import { Settings } from "./pages/settings";
+import { Chat } from "./pages/chat";
 import { PreferencesProvider } from "./session/preferences";
 import { SessionGate } from "./session/session-gate";
 
@@ -18,6 +19,7 @@ export function AppRoutes() {
         <Route index element={<Dashboard />} />
         <Route path="apps" element={<Apps />} />
         <Route path="apps/:spaceId/:appId/*" element={<AppPage />} />
+        <Route path="chat" element={<Chat />} />
         <Route path="settings" element={<Settings />} />
         <Route path="*" element={<NotFound />} />
       </Route>

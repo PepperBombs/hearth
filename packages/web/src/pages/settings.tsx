@@ -6,6 +6,7 @@ import { Page } from "../components/shell/page";
 import { Avatar } from "../components/avatar";
 import { Card, CardHeader } from "../components/card";
 import { AssistantCard } from "../assistant/assistant-card";
+import { ModelCard } from "../made/model-card";
 import { GroupsSection } from "../groups/groups";
 import type { PlainMessageKey } from "../i18n";
 import { HTML_LANG, LOCALE_NAMES } from "../i18n/locale";
@@ -28,6 +29,7 @@ export function Settings() {
       <div className="flex max-w-[760px] flex-col gap-4">
         <AppearanceCard />
         <AccountCard />
+        <ModelCard />
         <AssistantCard />
         <GroupsSection />
       </div>

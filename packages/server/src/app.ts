@@ -18,6 +18,9 @@ import { identifyFromConfig, type Identify } from "./auth";
 import type { Config } from "./config";
 import type { Db } from "./db/database";
 import { listSpacesForUser, updatePreferences } from "./db/people";
+import { withMadeApps } from "./made/apps";
+import { registerMadeRoutes } from "./made/routes";
+import { registerModelRoutes } from "./model/routes";
 import { groupRights } from "./groups/policy";
 import { registerGroupRoutes } from "./groups/routes";
 import { readBody } from "./http/body";
@@ -50,6 +53,8 @@ export type AppOptions = {
    * since createApp starts no scheduler.
    */
   wakeJobs?: () => void;
+  /** For tests: the fetch every request to a person's model goes through (src/model/providers.ts). */
+  modelFetch?: typeof fetch;
 };
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -63,7 +68,8 @@ export const MCP_PATH = "/mcp";
  */
 export function createApp(options: AppOptions): Hono<Env> {
   const { config, db } = options;
-  const registry = createRegistry(options.apps);
+  // The build's apps, and the apps made in Hearth, which live in the database (docs/platform.md).
+  const registry = withMadeApps(db, createRegistry(options.apps));
   const identify = options.identify ?? identifyFromConfig(config.auth);
   const logError = options.logError ?? ((error: unknown) => console.error(error));
   const warn = options.warn ?? ((message: string) => console.warn(message));
@@ -139,6 +145,8 @@ export function createApp(options: AppOptions): Hono<Env> {
     wakeJobs: options.wakeJobs ?? (() => {}),
     requestGapMs: requestGapFor(config),
   });
+  registerMadeRoutes(app, { db, registry, requireMember });
+  registerModelRoutes(app, { db, registry, config, requireMember, logError, ...(options.modelFetch ? { fetch: options.modelFetch } : {}) });
 
   app.all("/api", (c) => apiError(c, 404, "not_found", NOTHING_HERE));
   app.all("/api/*", (c) => apiError(c, 404, "not_found", NOTHING_HERE));

@@ -1,10 +1,11 @@
-import { ArrowRight, LayoutDashboard } from "lucide-react";
+import { ArrowRight, LayoutDashboard, MessageCircle } from "lucide-react";
 import { useMemo } from "react";
 import { Link } from "react-router";
 import type { AppSummary, WidgetSize } from "@hearth/shared";
 import { EmptyState, Tag, buttonClass } from "@hearth/sdk/web";
 import { AppView } from "../apps/app-view";
 import { AppSettingsButton } from "../apps/manage";
+import { MadeAppFrame } from "../made/frame";
 import { AppIcon } from "../components/app-icon";
 import { Page } from "../components/shell/page";
 import { Card, CardFooter, CardHeader } from "../components/card";
@@ -44,7 +45,17 @@ export function Dashboard() {
   const today = useMemo(() => formatToday(date, locale), [date, locale]);
 
   return (
-    <Page title={t("dashboard.title")} note={<span className="num">{today}</span>}>
+    <Page
+      title={t("dashboard.title")}
+      note={<span className="num">{today}</span>}
+      actions={
+        // The chat, on phones too, where the sidebar is not shown.
+        <Link to="/chat" className={buttonClass({ size: "sm" })}>
+          <MessageCircle size={16} aria-hidden="true" />
+          {t("dashboard.chat")}
+        </Link>
+      }
+    >
       {apps.length === 0 ? (
         <Card className="min-h-[320px] justify-center">
           <EmptyState
@@ -96,7 +107,8 @@ function AppCard({ app }: { app: AppSummary }) {
         tag={group === null ? undefined : <Tag>{group}</Tag>}
         aside={<AppSettingsButton app={app} className="-my-2 -mr-1.5" />}
       />
-      <AppView app={app} part="widget" />
+      {/* An app made in Hearth draws its own page, in the sandbox (docs/platform.md). */}
+      {app.made ? <MadeAppFrame app={app} /> : <AppView app={app} part="widget" />}
       {app.hasPage ? (
         <CardFooter>
           <Link to={appPath(app)} className="inline-flex items-center gap-1 font-medium text-accent hover:underline">

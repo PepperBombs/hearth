@@ -39,6 +39,9 @@ describe("loadConfig", () => {
       // The mini-apps' jobs run, and fetch from the hosts themselves.
       jobs: "on",
       fetchStandIns: null,
+      // No key is sealed until the owner gives a secret, and every chat asks the model its person chose.
+      secret: null,
+      modelStandIn: null,
     });
     expect(config.webDist).toBe(resolve(import.meta.dirname, "../../web/dist"));
   });
@@ -82,6 +85,22 @@ describe("loadConfig", () => {
       jobs: "on",
       fetchStandIns: "/tmp/standins.json",
     });
+  });
+
+  it("takes a secret of 32 characters or more, and a stand-in model only in dev mode", () => {
+    const dev = { HEARTH_AUTH: "dev", HEARTH_OWNER_EMAIL: "owner@example.com" };
+    const secret = "s".repeat(32);
+    expect(load({ ...dev, HEARTH_SECRET: secret }).secret).toBe(secret);
+    expect(() => load({ ...dev, HEARTH_SECRET: "short" })).toThrow(/HEARTH_SECRET must be at least 32 characters/);
+    expect(load({ ...dev, HEARTH_MODEL_STANDIN: "http://127.0.0.1:4999" }).modelStandIn).toBe("http://127.0.0.1:4999");
+    expect(() =>
+      load({
+        HEARTH_CF_TEAM_DOMAIN: "team.example.com",
+        HEARTH_CF_AUDIENCE: "aud",
+        HEARTH_OWNER_EMAIL: "owner@example.com",
+        HEARTH_MODEL_STANDIN: "http://127.0.0.1:4999",
+      }),
+    ).toThrow(/HEARTH_MODEL_STANDIN answers every chat from a stand-in model/);
   });
 
   it("lower-cases email addresses and tidies the team domain", () => {

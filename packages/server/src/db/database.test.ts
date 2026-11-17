@@ -59,11 +59,13 @@ describe("migrate", () => {
       "app_rows",
       "app_settings",
       "invitations",
+      "made_apps",
       "migrations",
       "space_apps",
       "space_invitations",
       "space_members",
       "spaces",
+      "user_models",
       "users",
     ]);
     const recorded = db.prepare("SELECT id, name FROM migrations ORDER BY id").all();

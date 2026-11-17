@@ -59,6 +59,19 @@ export type Config = {
    * tests, and only with HEARTH_AUTH=dev (src/apps/fetch.ts).
    */
   fetchStandIns: string | null;
+  /**
+   * The secret that seals each person's model key in the database
+   * (src/model/settings.ts), or null. Without it a server that checks
+   * sign-ins saves no keys, and its chat answers that it has none; a dev
+   * server makes up one that lasts until it stops.
+   */
+  secret: string | null;
+  /**
+   * The address of a stand-in model that answers every chat in place of the
+   * one each person chose, so that nothing reaches a real model. For tests,
+   * and only with HEARTH_AUTH=dev (src/model/chat.ts).
+   */
+  modelStandIn: string | null;
 };
 
 /** Thrown when the settings are missing or wrong. The message is meant to be shown as is. */
@@ -93,6 +106,8 @@ const SETTING_NAMES = [
   "HEARTH_VERSION",
   "HEARTH_JOBS",
   "HEARTH_FETCH_STANDINS",
+  "HEARTH_SECRET",
+  "HEARTH_MODEL_STANDIN",
 ] as const;
 type SettingName = (typeof SETTING_NAMES)[number];
 
@@ -139,6 +154,8 @@ const settingsSchema = z.object({
     .default("dev"),
   HEARTH_JOBS: z.enum(JOBS_SWITCH, { error: 'must be "on" or "off"' }).default("on"),
   HEARTH_FETCH_STANDINS: z.string().optional(),
+  HEARTH_SECRET: z.string().min(32, { error: "must be at least 32 characters, for example the output of: openssl rand -base64 32" }).optional(),
+  HEARTH_MODEL_STANDIN: z.url({ protocol: /^https?$/, error: "must be an http or https address" }).optional(),
 });
 
 /** True for addresses that only this machine can reach. */
@@ -294,6 +311,13 @@ export function loadConfig(
     );
   }
 
+  // Likewise a stand-in for every person's model: a real server always asks the model they chose.
+  if (settings.HEARTH_MODEL_STANDIN && settings.HEARTH_AUTH !== "dev") {
+    problems.push(
+      "HEARTH_MODEL_STANDIN answers every chat from a stand-in model, which is for tests, so it needs HEARTH_AUTH=dev. A real server asks the model each person chose: leave it unset.",
+    );
+  }
+
   if (problems.length > 0 || !auth || !settings.HEARTH_OWNER_EMAIL) {
     throw new ConfigError(problems);
   }
@@ -313,5 +337,7 @@ export function loadConfig(
     version: settings.HEARTH_VERSION,
     jobs: settings.HEARTH_JOBS,
     fetchStandIns: optionalPath(settings.HEARTH_FETCH_STANDINS),
+    secret: settings.HEARTH_SECRET ?? null,
+    modelStandIn: settings.HEARTH_MODEL_STANDIN ?? null,
   };
 }

@@ -1,6 +1,8 @@
 import type { MiddlewareHandler } from "hono";
 import { isLoopbackHost } from "../config";
+import { SANDBOX_CONTENT_SECURITY_POLICY } from "../made/frame";
 import { apiError } from "./errors";
+import type { Env } from "./env";
 
 /**
  * The web app is self-contained: its scripts, fonts and images come from this
@@ -32,11 +34,22 @@ const SECURITY_HEADERS: Record<string, string> = {
   "Cross-Origin-Resource-Policy": "same-origin",
 };
 
+/**
+ * A made app's page, in its iframe: the sandbox's own policy, and framed by
+ * Hearth's pages alone (src/made/frame.ts).
+ */
+const SANDBOX_HEADERS: Record<string, string> = {
+  ...SECURITY_HEADERS,
+  "Content-Security-Policy": SANDBOX_CONTENT_SECURITY_POLICY,
+  "X-Frame-Options": "SAMEORIGIN",
+};
+
 /** Sets the security headers on every response, including errors and static files. */
-export function securityHeaders(): MiddlewareHandler {
+export function securityHeaders(): MiddlewareHandler<Env> {
   return async (c, next) => {
     await next();
-    for (const [name, value] of Object.entries(SECURITY_HEADERS)) c.header(name, value);
+    const headers = c.get("sandboxed") === true ? SANDBOX_HEADERS : SECURITY_HEADERS;
+    for (const [name, value] of Object.entries(headers)) c.header(name, value);
   };
 }
 
