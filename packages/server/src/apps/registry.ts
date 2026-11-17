@@ -38,6 +38,8 @@ export type RegisteredApp = {
   hasPage: boolean;
   /** The app's collections, queries, mutations and jobs. Absent for an app without a server file. */
   server?: ServerDefinition;
+  /** True for an app made in Hearth (src/made/apps.ts): no code of the build, a page run in the sandbox. */
+  made?: true;
 };
 
 export type Registry = {

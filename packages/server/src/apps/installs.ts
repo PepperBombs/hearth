@@ -164,6 +164,7 @@ export function listAppsForUser(db: Db, registry: Registry, userId: string): App
       enabled: row.enabled === 1,
       pinned: row.pinned === 1,
       hasPage: app.hasPage,
+      ...(app.made ? { made: true } : {}),
     });
   }
   return apps;

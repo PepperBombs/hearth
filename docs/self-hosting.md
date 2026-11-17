@@ -120,6 +120,13 @@ The mini-apps' jobs run in the server (GitHub Trending's hourly searches of
 the server connects to" below. `HEARTH_JOBS=off` in
 `hearth.env` stops every job, and with it every such connection: the apps
 show what their last runs left.
+
+Set `HEARTH_SECRET` in `hearth.env` (`openssl rand -base64 32`): it seals
+the key each person gives for their own model (docs/platform.md), and
+without it the chat cannot keep one. Keep it safe and keep it the same: a
+new secret makes every saved key unreadable. Never set
+`HEARTH_MODEL_STANDIN` on a server; Hearth refuses it outside dev mode.
+
 Never set `HEARTH_FETCH_STANDINS` on a server: it answers every job from a
 file of made-up answers, for end-to-end tests, and the server refuses it
 unless sign-in is switched off.
@@ -567,6 +574,10 @@ request to it, Claude's too (section 10). It makes these connections itself:
   for an address without a token. `HEARTH_JOBS=off` in `hearth.env` stops
   them all; the deploy's trial start always runs with it, so a release on
   trial fetches nothing.
+- **Each person's own model**, when they use the chat (docs/platform.md):
+  the address they gave in Settings, which must be https on a public name,
+  with their own key. What it is sent is the conversation, a description of
+  the apps made in that space, and the rows the model asks to read there.
 
 `cloudflared` connects to Cloudflare to carry the tunnel. The deploy script
 fetches the repositories from their remotes (GitHub) and, for each release

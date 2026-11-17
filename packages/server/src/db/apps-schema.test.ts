@@ -330,7 +330,7 @@ describe("migration 4 on a database that migration 3 made", () => {
     // The release with the assistant starts on the same file.
     db = openDatabase(path);
     try {
-      expect(migrate(db).map((migration) => migration.id)).toEqual([4]);
+      expect(migrate(db).map((migration) => migration.id)).toEqual([4, 5]);
       expect(all(db, "SELECT id, name FROM migrations ORDER BY id")).toEqual(
         MIGRATIONS.map(({ id, name }) => ({ id, name })),
       );
@@ -840,7 +840,7 @@ describe("every table that belongs to an app in a space", () => {
       const columns = (db.pragma(`table_info(${table})`) as { name: string }[]).map((c) => c.name);
       return table !== "space_apps" && columns.includes("space_id") && columns.includes("app_id");
     });
-    expect(scoped.sort()).toEqual(["app_access", "app_jobs", "app_prefs", "app_rows", "app_settings"]);
+    expect(scoped.sort()).toEqual(["app_access", "app_jobs", "app_prefs", "app_rows", "app_settings", "made_apps"]);
 
     for (const table of scoped) {
       const keys = db.pragma(`foreign_key_list(${table})`) as {

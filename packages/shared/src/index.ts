@@ -163,6 +163,11 @@ export const appSummarySchema = z.object({
   enabled: z.boolean(),
   pinned: z.boolean(),
   hasPage: z.boolean(),
+  /**
+   * True for an app made in Hearth (docs/platform.md): its card is a page of
+   * its own, run in a sandbox, not a widget of the build.
+   */
+  made: z.boolean().optional(),
 });
 export type AppSummary = z.infer<typeof appSummarySchema>;
 
@@ -559,3 +564,100 @@ export function jobStateOf(status: JobStatus): { succeededAt: string | null; fai
     running: status.state === "running" || status.state === "requested",
   };
 }
+
+// ---------------------------------------------------------------------------
+// Each person's own model, and the chat with it (docs/platform.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * How Hearth talks to a model: "openai" for any service that answers like
+ * OpenAI's chat completions (DeepSeek, OpenAI, Kimi, Qwen, OpenRouter and
+ * others), "anthropic" for Claude through Anthropic's own API.
+ */
+export const MODEL_PROTOCOLS = ["openai", "anthropic"] as const;
+export const modelProtocolSchema = z.enum(MODEL_PROTOCOLS);
+export type ModelProtocol = z.infer<typeof modelProtocolSchema>;
+
+/** GET /api/me/model: what the person saved, without the key, or null. */
+export const modelSettingsSchema = z.object({
+  protocol: modelProtocolSchema,
+  baseUrl: z.string(),
+  model: z.string(),
+  /** Whether a key is saved. The key itself never leaves the server. */
+  hasKey: z.boolean(),
+});
+export type ModelSettings = z.infer<typeof modelSettingsSchema>;
+
+/**
+ * PUT /api/me/model. Without `apiKey`, the key saved before is kept, so
+ * that changing the model does not ask for the key again.
+ */
+export const modelSettingsRequestSchema = z.strictObject({
+  protocol: modelProtocolSchema,
+  baseUrl: z.string().trim().min(1).max(300),
+  model: z.string().trim().min(1).max(100),
+  apiKey: z.string().trim().min(1).max(1000).optional(),
+});
+export type ModelSettingsRequest = z.infer<typeof modelSettingsRequestSchema>;
+
+/** One message of the conversation as the browser keeps it: plain text. */
+export const chatMessageSchema = z.strictObject({
+  role: z.enum(["user", "assistant"]),
+  content: z.string().max(20_000),
+});
+export type ChatMessage = z.infer<typeof chatMessageSchema>;
+
+/** POST /api/chat: the conversation so far, last of all the person's new message. */
+export const chatRequestSchema = z.strictObject({
+  spaceId: z.string().min(1).max(100),
+  messages: z.array(chatMessageSchema).min(1).max(60),
+});
+export type ChatRequest = z.infer<typeof chatRequestSchema>;
+
+/** What the model did in an app, for the conversation to show. */
+export const CHAT_ACTIONS = ["app_created", "row_added", "row_updated"] as const;
+
+/** What happened when the chat ended without an answer. */
+export const CHAT_FAILURES = [
+  "no_model",
+  "no_key",
+  "no_secret",
+  "model_refused_key",
+  "model_failed",
+  "model_declined",
+  "too_many_steps",
+  "assistant_off",
+] as const;
+export type ChatFailure = (typeof CHAT_FAILURES)[number];
+
+/**
+ * One event of POST /api/chat's answer, a stream of server-sent events whose
+ * data is this JSON. "text" is what the model said in one step; "action" a
+ * change it made; the stream ends with "done" or "error".
+ */
+export const chatEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("text"), text: z.string() }),
+  z.object({
+    type: z.literal("action"),
+    action: z.enum(CHAT_ACTIONS),
+    appId: z.string(),
+    appName: z.string(),
+  }),
+  z.object({ type: z.literal("error"), failure: z.enum(CHAT_FAILURES), detail: z.string() }),
+  z.object({ type: z.literal("done") }),
+  z.object({ type: z.literal("ping") }),
+]);
+export type ChatEvent = z.infer<typeof chatEventSchema>;
+
+/** A row of an app made in Hearth, as its sandboxed page and the chat see it. */
+export type MadeRow = Record<string, unknown> & {
+  id: string;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** POST and PATCH of a made app's row: the fields to store. */
+export const madeRowWriteSchema = z.strictObject({ data: z.record(z.string(), z.unknown()) });
+

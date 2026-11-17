@@ -246,4 +246,41 @@ export const MIGRATIONS: readonly Migration[] = [
         CHECK (assistant IN (0, 1));
     `,
   },
+  {
+    // Apps made in Hearth, and each person's own model (docs/platform.md).
+    // Their SQL is in src/made/apps.ts and src/model/settings.ts.
+    id: 5,
+    name: "made-apps",
+    sql: `
+      -- An app made in Hearth: what it is, as a person's model wrote it. Its install is the
+      -- space_apps row of the same app, so VISIBLE decides who may use it like any other app,
+      -- and its rows are in app_rows. Deferred, so that the app and its install can be written
+      -- in one transaction in either order; deleting the install deletes the app, which exists
+      -- nowhere else.
+      CREATE TABLE made_apps (
+        app_id     TEXT PRIMARY KEY,
+        space_id   TEXT NOT NULL,
+        manifest   TEXT NOT NULL CHECK (json_valid(manifest)),
+        html       TEXT NOT NULL,
+        version    INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+        created_by TEXT NOT NULL REFERENCES users (id),
+        updated_by TEXT NOT NULL REFERENCES users (id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (space_id, app_id) REFERENCES space_apps (space_id, app_id)
+          ON UPDATE CASCADE ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+      ) STRICT;
+
+      -- Each person's own model: how to reach it and which one. The key is sealed with the
+      -- server's secret (HEARTH_SECRET) and never leaves the server again.
+      CREATE TABLE user_models (
+        user_id    TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+        protocol   TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+        base_url   TEXT NOT NULL,
+        model      TEXT NOT NULL,
+        sealed_key TEXT,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+    `,
+  },
 ];

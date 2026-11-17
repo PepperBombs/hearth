@@ -49,6 +49,11 @@ and each step's as-built notes are in `docs/mini-app-contract.md`. Not yet
 tried on a real server: the assistant against the real Claude and
 Cloudflare's Managed OAuth (`docs/self-hosting.md`, section 10).
 
+The new direction is `docs/platform.md`: each person's own model makes their
+apps in a chat, and an app is a page in the browser's sandbox with no code on
+the server. Its first slice is built: the chat, each person's model and key,
+and made apps on the dashboard. The build's own apps work beside them.
+
 ## Layout
 
 | Folder | Holds |
@@ -60,7 +65,7 @@ Cloudflare's Managed OAuth (`docs/self-hosting.md`, section 10).
 | `packages/web` | The React app: shell, pages, `src/i18n` (English and Chinese). |
 | `e2e` | Playwright end-to-end tests. |
 | `deploy` | The deploy script, its tests, systemd units. |
-| `docs` | `architecture.md`, `self-hosting.md`, `mini-app-contract.md`, `notes/`. |
+| `docs` | `architecture.md`, `self-hosting.md`, `mini-app-contract.md`, `platform.md`, `notes/`. |
 
 ## Commands (Node 22, pnpm 10, from the root)
 
@@ -85,6 +90,7 @@ Cloudflare's Managed OAuth (`docs/self-hosting.md`, section 10).
 | `docs/notes/e2e.md` | The Playwright tests and the servers they share. |
 | `docs/notes/deploy.md` | The deploy script. Read all of it before changing one line. |
 | `docs/notes/assistant.md` | The MCP endpoint, its tools, the Assistant card. |
+| `docs/notes/platform.md` | Apps made in Hearth, their sandbox, the chat and each person's model. |
 | `docs/notes/progress.md` | What was built, in what order. |
 
 ## What bites everywhere
