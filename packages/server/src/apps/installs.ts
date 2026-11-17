@@ -227,7 +227,8 @@ export function addApp(
         throw new Refusal(403, "forbidden", "Adding apps to this space is for its owners and the members they allow.");
       }
       const app = registry.get(appId);
-      if (!app) throw notFound();
+      // A made app is its space's own: it is not there to be added anywhere else.
+      if (!app || (app.madeIn !== undefined && app.madeIn !== spaceId)) throw notFound();
       if (app.manifest.spaces && !app.manifest.spaces.includes(member.kind)) {
         throw new Refusal(409, "conflict", `This app cannot be added to a ${member.kind} space.`);
       }

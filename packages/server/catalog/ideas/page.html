@@ -364,7 +364,8 @@ button:disabled, button[aria-disabled="true"] { cursor: not-allowed; }
   /** From this many characters on, a box says how many of the 4000 are used. */
   const COUNT_FROM = LONGEST_IDEA - 500;
   /** How many tags a row's list field holds. */
-  const MOST_TAGS = 100;
+  // As many as a list field holds (MOST_LIST_ITEMS on the server): every tag of a text, as the build's Ideas kept.
+  const MOST_TAGS = 2000;
   /** How often the clock and the ideas are read again, so that what others write shows here too. */
   const TICK_MS = 15000;
   /** Where the focus goes when the idea that had it left the timeline. */

@@ -14,6 +14,13 @@ import { z } from "zod";
 
 export const FIELD_TYPES = ["text", "number", "boolean", "date", "choice", "list"] as const;
 
+/**
+ * The most texts a "list" field holds: as many #tags as the 4000 characters
+ * of an idea can have, since the build's Ideas kept them all, and its rows
+ * move to the built-in Ideas as they are.
+ */
+export const MOST_LIST_ITEMS = 2000;
+
 /** A collection's or a field's name: what a model and the store both read easily. */
 const NAME = /^[a-z][a-zA-Z0-9_]{0,39}$/;
 const NAME_RULE = "must start with a lower-case letter and hold only letters, digits and underscores, up to 40 in all";
@@ -102,7 +109,7 @@ function valueSchema(field: MadeManifest["collections"][string]["fields"][string
     case "choice":
       return z.enum(field.options as [string, ...string[]]);
     case "list":
-      return z.array(z.string().max(100)).max(100);
+      return z.array(z.string().max(100)).max(MOST_LIST_ITEMS);
   }
 }
 

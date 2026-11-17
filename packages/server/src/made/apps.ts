@@ -81,6 +81,7 @@ function registered(app: MadeApp): RegisteredApp {
     // A made app's texts are its maker's words, never translated, or a built-in app's, in both languages.
     manifest: asSdkManifest(app.appId, app.manifest),
     hasPage: true,
+    madeIn: app.spaceId,
     made: true,
     version: app.version,
     ...(app.template === null ? {} : { template: app.template }),
@@ -136,6 +137,7 @@ export function createMadeApp(
 ): { appId: string } {
   const problem = checkMadeManifest(request.manifest);
   if (problem !== null) throw new Refusal(400, "invalid_request", `The manifest is not valid: ${problem}`);
+  if (!request.template && (request.manifest.network ?? []).length > 0) throw new Refusal(400, "invalid_request", HOSTS_ARE_HEARTHS);
   return db.transaction(() => {
     let appId = newMadeId();
     while (registry.has(appId)) appId = newMadeId();
@@ -399,6 +401,14 @@ function switchTo(
 export type Changed = { version: number; previous: number; name: MadeManifest["name"] };
 
 /**
+ * The hosts a made app's page may fetch from (its manifest's `network`) are
+ * those a built-in app ships with, never chosen by a person's model: a host
+ * a page names is one the server fetches from, with its own address.
+ */
+const HOSTS_ARE_HEARTHS =
+  "An app made in Hearth fetches from no host of its own: only the apps Hearth ships name hosts, and theirs stay as they are.";
+
+/**
  * Changes what an app is: its manifest, its page, or both, as a new
  * version. Refused when nothing would change, when the person (or the
  * assistant for them) may not change the app, and when a stored row would
@@ -417,6 +427,9 @@ export function changeMadeApp(
     if (problem !== null) throw new Refusal(400, "invalid_request", `The manifest is not valid: ${problem}`);
     if (JSON.stringify(manifest) === JSON.stringify(app.manifest) && html === app.html) {
       throw new Refusal(409, "conflict", "That would change nothing: the app is like that already.");
+    }
+    if (JSON.stringify(manifest.network ?? []) !== JSON.stringify(app.manifest.network ?? [])) {
+      throw new Refusal(400, "invalid_request", `${HOSTS_ARE_HEARTHS} Keep "network" exactly as the app has it.`);
     }
     keepEveryRow(db, app, manifest);
     const version = switchTo(db, app, { manifest, html, note: request.note, userId: request.userId });

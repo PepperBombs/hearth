@@ -24,7 +24,7 @@ import { SESSION_QUERY_KEY, useSession } from "../session/session";
 import { addFromCatalog, CATALOG_QUERY_KEY, fetchCatalog } from "../made/api";
 import { addAppToSpace, moveAppToSpace, patchAppPrefs, removeAppFromSpace, type Install } from "./api";
 import { useBundledApps } from "./bundled";
-import { hasSettings } from "./scope";
+import { hasSettings, settingsQueryKey } from "./scope";
 import { AppSettingsDialog } from "./settings-dialog";
 
 /** The manifest this build holds for an app, or null when it holds none (the browser has an older build). */
@@ -175,17 +175,28 @@ export function useFullAppName(app: AppSummary): string {
  */
 export function AppSettingsButton({ app, className }: { app: AppSummary; className?: string }) {
   const { t } = useI18n();
+  const client = useQueryClient();
   const manifest = useAppManifest(app);
   const fullName = useFullAppName(app);
   const [open, setOpen] = useState(false);
   if (!manifest || !hasSettings(manifest)) return null;
+  // The form starts from the first answer it is given. One kept from an earlier opening, which
+  // nothing on screen reads now, may be old (a made app's pages read their settings through the
+  // bridge, not this cache): it is asked for afresh, so that a save keeps what others saved since.
+  const openDialog = () => {
+    const key = settingsQueryKey({ spaceId: app.spaceId, appId: app.id });
+    if ((client.getQueryCache().find({ queryKey: key, exact: true })?.getObserversCount() ?? 0) === 0) {
+      client.removeQueries({ queryKey: key, exact: true });
+    }
+    setOpen(true);
+  };
   return (
     <>
       <IconButton
         label={t("appSettings.open", { app: fullName })}
         aria-haspopup="dialog"
         className={className}
-        onClick={() => setOpen(true)}
+        onClick={openDialog}
       >
         <Settings2 size={16} aria-hidden="true" />
       </IconButton>

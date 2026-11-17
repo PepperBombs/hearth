@@ -51,9 +51,16 @@ async function answer(app: AppSummary, op: unknown, args: unknown): Promise<unkn
   if (typeof args.collection !== "string") throw new Error("Every call about rows names a collection.");
   const { collection } = args;
   switch (op) {
-    case "replace":
+    case "replace": {
       if (!Array.isArray(args.rows) || !args.rows.every(isRecord)) throw new Error("replace takes a list of rows.");
-      return replaceRows(app.spaceId, app.id, collection, isRecord(args.where) ? args.where : {}, args.rows);
+      // What it replaces is named, every time: nothing missing or unreadable may stand for "every row",
+      // and a field left undefined, which JSON would drop on the way, must not either.
+      const { where } = args;
+      if (!isRecord(where)) throw new Error("replace takes where: the fields and values of the rows it replaces ({} for every row).");
+      const unset = Object.keys(where).find((field) => where[field] === undefined);
+      if (unset !== undefined) throw new Error(`where.${unset} is undefined: leave the field out, or give its value.`);
+      return replaceRows(app.spaceId, app.id, collection, where, args.rows);
+    }
     case "list": {
       const options = isRecord(args.options) ? args.options : {};
       const list: ListOptions = {
@@ -132,6 +139,9 @@ export function MadeAppFrame({ app, view = "card", maxHeight = 560 }: { app: App
 
   return (
     <iframe
+      // One frame per app: another app's page gets a frame of its own, so that the page shown before,
+      // and its messages still on their way, are gone with their frame and never answered as the next app.
+      key={`${app.spaceId}/${app.id}`}
       ref={frame}
       title={pickLocalized(app.name, locale)}
       src={src}

@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { createRegistry } from "../apps/registry";
-import { family, grant, LIN, SAM } from "../apps/test-world";
+import { family, grant, LIN, NOA, SAM } from "../apps/test-world";
 import { migrate, openDatabase, type Db } from "../db/database";
 import { MIGRATIONS } from "../db/migrations";
 import { createUserWithPersonalSpace } from "../db/people";
@@ -117,6 +117,15 @@ describe("an app made in Hearth", () => {
     expect((await call(LIN, rows)).status).toBe(200);
     const write = await call(LIN, rows, { method: "POST", body: JSON.stringify({ data: { item: "Tea", amount: 4 } }) });
     expect(write.status).toBe(403);
+  });
+
+  it("lives in its own space: no one adds it to another, even knowing its ID", async () => {
+    const { sam, samsSpace, make, call } = world();
+    const appId = make(sam.id, samsSpace);
+    const noas = ((await (await call(NOA, "/api/session")).json()) as { spaces: { id: string }[] }).spaces[0]!.id;
+    expect((await call(NOA, `/api/spaces/${noas}/apps/${appId}`, { method: "PUT", body: "{}" })).status).toBe(404);
+    const session = (await (await call(NOA, "/api/session")).json()) as { apps: { id: string }[] };
+    expect(session.apps).toEqual([]);
   });
 
   it("serves its page with the sandbox's policy, and Hearth's own pages keep theirs", async () => {
@@ -263,7 +272,9 @@ describe("what the platform offers a made app's page", () => {
     const people = family();
     const { app } = testApp({ db: people.db, outbound });
     const registry = withMadeApps(people.db, createRegistry([]));
-    const appId = createMadeApp(people.db, registry, { userId: people.sam.id, spaceId: "family", manifest: FEED, html: HTML }).appId;
+    // A copy of a built-in app: only those name hosts to fetch from.
+    const template = { id: "feed", hash: "a release" };
+    const appId = createMadeApp(people.db, registry, { userId: people.sam.id, spaceId: "family", manifest: FEED, html: HTML, template }).appId;
     const base = `/api/spaces/family/apps/${appId}`;
     const call = (email: string, path: string, body?: unknown, method = body === undefined ? "GET" : "POST") =>
       app.request(`${base}${path}`, {
@@ -296,8 +307,9 @@ describe("what the platform offers a made app's page", () => {
 
     const replaced = await call(SAM, "/rows/posts/replace", { where: { set: "x" }, rows: [{ title: "New 1", set: "x", tags: [] }, { title: "New 2", set: "x" }] });
     expect(await replaced.json()).toEqual({ removed: 1, added: 2 });
-    // One row that does not fit, and nothing changes.
+    // One row that does not fit, and nothing changes; nor without saying which rows it replaces.
     expect((await call(SAM, "/rows/posts/replace", { where: { set: "x" }, rows: [{ title: "New 3", set: "x" }, { set: "x" }] })).status).toBe(400);
+    expect((await call(SAM, "/rows/posts/replace", { rows: [] })).status).toBe(400);
     const titles = ((await (await call(SAM, "/rows/posts")).json()) as { rows: { title: string }[] }).rows.map((row) => row.title);
     expect(titles.sort()).toEqual(["Kept", "New 1", "New 2"]);
   });
@@ -310,6 +322,17 @@ describe("what the platform offers a made app's page", () => {
     // Lin, who may only look, keeps her own switch and cannot change the space's.
     expect(await (await call(LIN, "/settings", { user: { compact: true } }, "PATCH")).json()).toEqual({ space: { topics: ["rust"] }, user: { compact: true } });
     expect((await call(LIN, "/settings", { space: { topics: [] } }, "PATCH")).status).toBe(403);
+  });
+
+  it("names hosts only as a built-in app ships them: an app a model makes names none, and a change keeps them", () => {
+    const { db, sam, appId } = feed();
+    const registry = withMadeApps(db, createRegistry([]));
+    expect(() => createMadeApp(db, registry, { userId: sam.id, spaceId: "family", manifest: FEED, html: HTML })).toThrow(/fetches from no host of its own/);
+    const change = (manifest: typeof FEED) => changeMadeApp(db, registry, { userId: sam.id, spaceId: "family", appId, by: "person", manifest, note: "x" });
+    expect(() => change(madeManifestSchema.parse({ ...FEED, network: ["news.example.com"] }))).toThrow(/Keep "network" exactly/);
+    // Leaving the hosts out is a change of hosts too.
+    expect(() => change(madeManifestSchema.parse({ ...FEED, network: undefined }))).toThrow(/Keep "network" exactly/);
+    expect(change(madeManifestSchema.parse({ ...FEED, name: "Posts" })).version).toBe(2);
   });
 
   it("fetches through the server, from the hosts it names alone, for whoever may see it", async () => {
@@ -377,6 +400,19 @@ describe("the built-in apps", () => {
     expect(db.prepare("SELECT count(*) AS n FROM space_apps WHERE app_id = 'grocery'").get()).toEqual({ n: 0 });
     expect(db.prepare("SELECT count(*) AS n FROM app_jobs").get()).toEqual({ n: 0 });
     expect(moveLegacyInstalls(db, registry, catalog)).toEqual({ moved: [], failed: [] });
+  });
+
+  it("take an old idea with every one of its #tags, however many the text holds", () => {
+    const { db, sam } = world();
+    const tags = Array.from({ length: 150 }, (_, index) => `t${index}`);
+    db.prepare("INSERT INTO space_apps (space_id, app_id, created_by, created_at) VALUES ('family', 'ideas', ?, ?)").run(sam.id, AT);
+    db.prepare("INSERT INTO app_rows (id, space_id, app_id, collection, data, created_by, updated_by, created_at, updated_at) VALUES ('r-many', 'family', 'ideas', 'ideas', ?, ?, ?, ?, ?)")
+      .run(JSON.stringify({ text: tags.map((tag) => `#${tag}`).join(" "), pinned: false, archived: false, tags }), sam.id, sam.id, AT, AT);
+    const { moved, failed } = moveLegacyInstalls(db, withMadeApps(db, createRegistry([])), catalog);
+    expect(failed).toEqual([]);
+    expect(moved).toEqual([{ spaceId: "family", from: "ideas", to: expect.stringMatching(/^m-/) }]);
+    const row = db.prepare("SELECT data FROM app_rows WHERE id = 'r-many'").get() as { data: string };
+    expect((JSON.parse(row.data) as { tags: string[] }).tags).toHaveLength(150);
   });
 
   it("leave an install that holds a row the built-in app would not take as it was, and say why", () => {

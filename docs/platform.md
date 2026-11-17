@@ -32,12 +32,15 @@ It is three things, kept in the database (`made_apps`, migration 5):
   its card, its collections, and instructions for whoever changes its data
   later. A collection has 1 to 30 fields, each `text`, `number`, `boolean`,
   `date` (`YYYY-MM-DD`, or a date and time), `choice` (with its options) or
-  `list` (up to 100 short texts), optional unless `required`. The store
-  checks every row against exactly those fields: a row with another field,
-  or a value of another kind, is refused with the reason. It may also name
-  hosts in `network` and declare `settings`, both exactly as an SDK
-  manifest does, and checked by the SDK's own rules (`checkMadeManifest`):
-  Hearth's settings dialog and settings routes then serve it like any app.
+  `list` (up to 2000 short texts: every #tag an idea can hold), optional
+  unless `required`. The store checks every row against exactly those
+  fields: a row with another field, or a value of another kind, is refused
+  with the reason. It may also declare `settings` exactly as an SDK manifest
+  does, checked by the SDK's own rules (`checkMadeManifest`), and Hearth's
+  settings dialog and settings routes then serve it like any app's. Only a
+  built-in app names hosts to fetch from (`network`): an app a model makes
+  names none, and a change keeps a built-in copy's hosts as they are, since
+  a host a page names is one the server fetches from, with its own address.
 - **A page**: one HTML document, everything inline, at most 300 kB. It is
   drawn small in the app's card (`hearth.view` is `"card"`) and whole on
   the app's own page (`"page"`), so every made app has a page.
@@ -73,7 +76,9 @@ puts in front of the page's own scripts:
 
 - `list`, `add`, `update` and `remove` of its own collections, and
   `replace(collection, where, rows)`, which swaps every row matching
-  `where` for new ones at once, all or nothing (at most 1000);
+  `where` for new ones at once, all or nothing (at most 1000). `where` is
+  always given, `{}` for every row: a missing one, or a field in it left
+  undefined, is refused rather than taken for every row;
 - `settings()` and `saveSettings({ space?, user? })`, through the same
   routes and rules as every app's settings;
 - `fetch(url, { headers })`: a GET made by the server under the rules of a
@@ -87,8 +92,11 @@ puts in front of the page's own scripts:
 Each call is a message to the page around it
 (`packages/web/src/made/frame.tsx`), which answers only messages from that
 iframe and always for the app and space it drew the iframe for, whatever the
-message says. The page reports its height, and gets the theme's colours as
-CSS variables.
+message says. Each app gets an iframe of its own, so that going from one
+app's page to another's leaves nothing of the first to be answered as the
+second. The page reports its height (a page sized to its frame, `100vh`, is
+told apart, or it would grow the frame for ever), and gets the theme's
+colours as CSS variables.
 
 What the sandbox does not stop: a page can still navigate its own frame to
 another address, and a browser may let it open a WebRTC connection, so an

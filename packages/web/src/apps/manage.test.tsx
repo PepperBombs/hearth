@@ -1036,3 +1036,58 @@ describe("the settings dialog", () => {
     expect(within(settings).getByRole("button", { name: "保存" })).toBeTruthy();
   });
 });
+
+describe("an app made in Hearth", () => {
+  const made = (id: string, name: string, extra: Partial<AppSummary> = {}): AppSummary => ({
+    id,
+    spaceId: PERSONAL,
+    name: { en: name, zh: name },
+    description: { en: name, zh: name },
+    icon: "star",
+    color: "amber",
+    widgetSize: "wide",
+    access: "edit",
+    enabled: true,
+    pinned: false,
+    hasPage: true,
+    made: true,
+    version: 1,
+    ...extra,
+  });
+  const frameOf = (appId: string) => document.querySelector(`iframe[data-made-app="${appId}"]`);
+
+  it("gets a frame of its own on each app's page, so that the page shown before is never answered as the next app", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made("m-aaaaaaaaaa", "Notes"), made("m-bbbbbbbbbb", "Ledger")]);
+    start(server, `/apps/${PERSONAL}/m-aaaaaaaaaa`);
+    await waitFor(() => expect(frameOf("m-aaaaaaaaaa")).not.toBeNull());
+    const first = frameOf("m-aaaaaaaaaa")!;
+
+    // To the other app's page from the sidebar, without leaving the web app.
+    fireEvent.click(screen.getAllByRole("link", { name: "Ledger" })[0]!);
+    await waitFor(() => expect(frameOf("m-bbbbbbbbbb")).not.toBeNull());
+    expect(frameOf("m-bbbbbbbbbb")).not.toBe(first);
+    expect(first.isConnected).toBe(false);
+  });
+
+  it("opens its settings on what the server holds now, not on what an earlier opening read", async () => {
+    const server = new FakeServer();
+    const settings = { shown: { type: "switch", scope: "user", default: false, label: { en: "Show done", zh: "显示已完成" } } };
+    server.session = sessionWith([made("m-aaaaaaaaaa", "Notes", { settings })]);
+    server.settings["m-aaaaaaaaaa"] = { space: {}, user: { shown: false } };
+    start(server, "/");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Settings of Notes" }));
+    const before = await dialog("Notes settings");
+    expect((await within(before).findByRole("switch", { name: "Show done" })).getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(within(before).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // Meanwhile the app's page changed it through the bridge, which this cache never sees.
+    server.settings["m-aaaaaaaaaa"] = { space: {}, user: { shown: true } };
+    fireEvent.click(screen.getByRole("button", { name: "Settings of Notes" }));
+    const after = await dialog("Notes settings");
+    await waitFor(() => expect(within(after).getByRole("switch", { name: "Show done" }).getAttribute("aria-checked")).toBe("true"));
+  });
+});
+

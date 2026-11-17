@@ -44,6 +44,8 @@ export type RegisteredApp = {
   version?: number;
   /** The built-in app a made app was added from, when it was. */
   template?: string;
+  /** The one space a made app lives in: it cannot be added to another. */
+  madeIn?: string;
 };
 
 export type Registry = {

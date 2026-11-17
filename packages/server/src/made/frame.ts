@@ -140,7 +140,7 @@ const BRIDGE = `(() => {
     add: (collection, data) => call("add", { collection, data }),
     update: (collection, id, data) => call("update", { collection, id, data }),
     remove: (collection, id) => call("remove", { collection, id }),
-    replace: (collection, where, rows) => call("replace", { collection, where: where || {}, rows }),
+    replace: (collection, where, rows) => call("replace", { collection, where, rows }),
     settings: () => call("settings", {}),
     saveSettings: (patch) => call("saveSettings", { patch }),
     fetch: (url, options) => call("fetch", { url, headers: (options && options.headers) || {} }),
@@ -148,12 +148,23 @@ const BRIDGE = `(() => {
   });
   // The height of what the page holds: the body's, with its margins. The
   // document's own is never less than the iframe's, so it could not shrink.
+  // A page sized to its frame (height: 100vh, with padding) grows with it:
+  // when the frame grew and the page still overflows it by as much as
+  // before, that is the echo of the last report, which is left unsent, or
+  // the frame would grow for ever.
+  let sent = -1;
+  let frame = -1;
   const report = () => {
     const body = document.body;
     if (!body) return;
     const style = getComputedStyle(body);
-    const height = body.scrollHeight + parseFloat(style.marginTop) + parseFloat(style.marginBottom);
-    parent.postMessage({ type: "hearth:size", height: Math.ceil(height) }, "*");
+    const height = Math.ceil(body.scrollHeight + parseFloat(style.marginTop) + parseFloat(style.marginBottom));
+    const inner = innerHeight;
+    const echo = sent >= 0 && inner !== frame && height > inner && height - inner === sent - frame;
+    frame = inner;
+    if (echo) return;
+    sent = height;
+    parent.postMessage({ type: "hearth:size", height }, "*");
   };
   const watch = () => {
     report();

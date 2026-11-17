@@ -34,7 +34,8 @@ import { frameDocument, THEMES, type FramePeople, type FrameTheme } from "./fram
 const BASE = "/api/spaces/:spaceId/apps/:appId";
 
 const replaceSchema = z.strictObject({
-  where: z.record(z.string(), z.unknown()).default({}),
+  // Required: {} replaces every row, and only when the page says so.
+  where: z.record(z.string(), z.unknown()),
   rows: z.array(z.record(z.string(), z.unknown())),
 });
 const fetchSchema = z.strictObject({

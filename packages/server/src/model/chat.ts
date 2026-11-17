@@ -85,7 +85,7 @@ Apps made in this space:
 ${describeApps(apps)}
 
 To make an app, call create_app with a manifest and its page:
-- manifest: a short name in the person's language, a description, an icon, a colour, the size of its card on the dashboard (small, wide, tall or large), its collections and their fields (text, number, boolean, date as YYYY-MM-DD, or choice with options), and instructions for whoever changes its data later.
+- manifest: a short name in the person's language, a description, an icon, a colour, the size of its card on the dashboard (small, wide, tall or large), its collections and their fields (text, number, boolean, date as YYYY-MM-DD, or choice with options), and instructions for whoever changes its data later. It names no hosts ("network"): an app made here fetches nothing from outside.
 - html: one complete HTML document, everything inline. It runs in a sandbox that blocks every request, so no external script, style, font or image, and no fetch: plain JavaScript, no frameworks. It reaches its data only through window.hearth, which is there before its scripts run:
     await hearth.list(collection, { orderBy, desc, limit }) gives the rows, each with id, createdAt, updatedAt and its fields
     await hearth.add(collection, data) gives the new row

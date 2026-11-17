@@ -18,4 +18,7 @@ Notes for whoever changes this part, people and agents alike. They are read when
 - A page can be tried without a server: render it with `frameDocument` in an iframe whose parent answers the bridge from memory, checking rows with `collectionSchemas`. The built-in pages were checked that way.
 - `frame.tsx` tells an app's other frames to read again after a write alone (`WRITES`): after a read too, two frames of one app on screen (a card and the chat's) would wake each other for ever.
 - A rule across rows that a page keeps (one grocery item per name) holds only against what the page last read: the server checks each row by itself, and two people in the same second can both add.
+- `MadeAppFrame` keys its iframe by space and app: React keeps a component when only the route's IDs change, and a reused iframe would answer the page shown before, still loading or still sending, as the next app.
+- The settings dialog starts its form from the first answer it gets. A made app's pages read settings through the bridge, not the query cache, so a cached answer may be old: `AppSettingsButton` drops one nothing observes before opening.
+- The bridge's height report skips the echo of a page sized to its frame (`min-height: 100vh` with padding): the frame grew and the page still overflows it by as much as before. Models write such pages often.
 
