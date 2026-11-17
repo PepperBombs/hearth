@@ -315,6 +315,10 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: `
       -- The built-in app a made app was added from (src/made/catalog.ts), or NULL for one a model made.
       ALTER TABLE made_apps ADD COLUMN template TEXT;
+      -- What the built-in app was (a hash of its manifest and page) when this copy was made or last
+      -- brought up to date by Hearth; NULL once a person or their model changed the copy, which
+      -- Hearth then leaves as it is (src/made/builtin.ts).
+      ALTER TABLE made_apps ADD COLUMN template_hash TEXT;
     `,
   },
 ];

@@ -187,7 +187,7 @@ data.
   adding one the space removed brings that one back, with its data.
 - **The move of the build's apps.** When the server starts, every install
   of a build's app whose ID is a built-in app's becomes that built-in app,
-  in place (`moveLegacyInstalls` in `src/made/legacy.ts`): the install gets
+  in place (`moveLegacyInstalls` in `src/made/builtin.ts`): the install gets
   a made app's ID, which every table about it follows (`ON UPDATE CASCADE`),
   so its rows, settings, who may use it, pins and switches stay as they
   were, and removed installs move too. Each install moves alone, in one
@@ -195,6 +195,13 @@ data.
   that does not stays as it was, keeps working with the build's code, and is
   named in the server's log. The deploy's trial start tries the move on a
   copy of the real database first.
+- **Updates.** A built-in app's copies follow what Hearth ships: when the
+  server starts, every copy nobody changed is brought up to the built-in app
+  of this release, as a new version ("Updated with Hearth"), which can be
+  undone like any (`updateBuiltInApps`; `made_apps.template_hash` says which
+  release a copy is, and is cleared by any other change). A copy someone
+  changed, in the chat or by going back to a version, is theirs and stays as
+  it is; so does one whose rows would not fit, which the log names.
 - **No jobs.** GitHub Trending refreshes its lists itself, through
   `hearth.fetch`, when someone who may edit it opens it and its last
   refresh is more than an hour old, or on "Refresh now". A row in

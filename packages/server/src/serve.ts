@@ -23,7 +23,7 @@ import { createApp } from "./app";
 import { outboundFor, processClock, type Clock } from "./apps/fetch";
 import { withMadeApps } from "./made/apps";
 import { loadCatalog } from "./made/catalog";
-import { moveLegacyInstalls } from "./made/legacy";
+import { moveLegacyInstalls, updateBuiltInApps } from "./made/builtin";
 import { AppRegistryError, createRegistry, type BundledApp } from "./apps/registry";
 import { createScheduler, type Scheduler } from "./apps/scheduler";
 import type { Identify } from "./auth";
@@ -108,9 +108,12 @@ export function startServer(options: StartOptions): RunningServer {
         })
       : null;
 
-  // The apps shipped with Hearth, and the move of the build's apps of the same name to them
-  // (docs/platform.md, "Built-in apps"): once, in place, data and all.
+  // The apps shipped with Hearth (docs/platform.md, "Built-in apps"): their untouched copies brought
+  // up to date, and the build's apps of the same name moved to them, once, in place, data and all.
   const catalog = loadCatalog();
+  const updates = updateBuiltInApps(db, catalog);
+  for (const copy of updates.updated) log.info(`Updated the built-in app "${copy.template}" of space ${copy.spaceId} (${copy.appId}) to version ${copy.version}.`);
+  for (const copy of updates.failed) log.error(`Could not update the built-in app "${copy.template}" of space ${copy.spaceId} (${copy.appId}): ${copy.reason}`);
   const { moved, failed } = moveLegacyInstalls(db, withMadeApps(db, registry), catalog);
   for (const install of moved) log.info(`Moved the app "${install.from}" of space ${install.spaceId} to the built-in app (${install.to}).`);
   for (const install of failed) log.error(`Could not move the app "${install.from}" of space ${install.spaceId}: ${install.reason}`);

@@ -89,7 +89,7 @@ export function registerMadeRoutes(
       spaceId,
       manifest: template.manifest,
       html: template.html,
-      template: template.id,
+      template: { id: template.id, hash: template.hash },
       ...(memberAccess ? { memberAccess } : {}),
     });
     return c.json({ appId, restored: false }, 201);

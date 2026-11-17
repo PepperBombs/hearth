@@ -14,9 +14,9 @@ import { CONTENT_SECURITY_POLICY } from "../http/security";
 import { as, testApp } from "../testing";
 import { processClock, standInResponse, type Outbound, type TransportRequest } from "../apps/fetch";
 import { changeMadeApp, createMadeApp, restoreMadeVersion, withMadeApps } from "./apps";
-import { loadCatalog } from "./catalog";
+import { loadCatalog, templateHash } from "./catalog";
 import { SANDBOX_CONTENT_SECURITY_POLICY } from "./frame";
-import { moveLegacyInstalls } from "./legacy";
+import { moveLegacyInstalls, updateBuiltInApps } from "./builtin";
 import { madeManifestSchema } from "./manifest";
 
 const MANIFEST = madeManifestSchema.parse({
@@ -389,6 +389,37 @@ describe("the built-in apps", () => {
     expect(db.prepare("SELECT count(*) AS n FROM app_rows WHERE app_id = 'grocery'").get()).toEqual({ n: 1 });
     expect(db.prepare("SELECT count(*) AS n FROM app_jobs WHERE app_id = 'grocery'").get()).toEqual({ n: 1 });
     expect(madeRows(db)).toBe(0);
+  });
+
+  it("keep each untouched copy up to date with what Hearth ships, as a version, and leave a changed copy alone", async () => {
+    const { db, sam, samsSpace, call } = world();
+    const registry = withMadeApps(db, createRegistry([]));
+    const add = async (spaceId: string) =>
+      ((await (await call(SAM, `/api/spaces/${spaceId}/catalog/ideas`, { method: "POST", body: "{}" })).json()) as { appId: string }).appId;
+    const mine = await add(samsSpace);
+    const ours = await add("family");
+    // The family's copy is changed in the chat: it is theirs now.
+    changeMadeApp(db, registry, { userId: sam.id, spaceId: "family", appId: ours, by: "person", html: "<p>our own</p>", note: "Ours" });
+
+    const ideas = catalog.find((template) => template.id === "ideas")!;
+    const fixed = `${ideas.html}<!-- fixed -->`;
+    const shipped = { ...ideas, html: fixed, hash: templateHash(ideas.manifest, fixed) };
+    expect(updateBuiltInApps(db, [shipped])).toEqual({ updated: [{ spaceId: samsSpace, appId: mine, template: "ideas", version: 2 }], failed: [] });
+    expect(await (await call(SAM, `/api/spaces/${samsSpace}/apps/${mine}/frame`)).text()).toContain("<!-- fixed -->");
+    expect(await (await call(SAM, `/api/spaces/family/apps/${ours}/frame`)).text()).toContain("our own");
+    expect(db.prepare("SELECT note FROM made_app_versions WHERE app_id = ? AND version = 2").get(mine)).toEqual({ note: "Updated with Hearth" });
+    expect(updateBuiltInApps(db, [shipped])).toEqual({ updated: [], failed: [] });
+
+    // A release whose fields a stored row would not fit leaves the copy as it is, and says why.
+    expect((await call(SAM, `/api/spaces/${samsSpace}/apps/${mine}/rows/ideas`, { method: "POST", body: JSON.stringify({ data: { text: "#a", tags: ["a"] } }) })).status).toBe(201);
+    const fields = Object.fromEntries(Object.entries(ideas.manifest.collections.ideas!.fields).filter(([name]) => name !== "tags"));
+    const narrower = madeManifestSchema.parse({ ...ideas.manifest, collections: { ideas: { fields } } });
+    const refused = updateBuiltInApps(db, [{ ...ideas, manifest: narrower, hash: templateHash(narrower, ideas.html) }]);
+    expect(refused).toEqual({ updated: [], failed: [{ spaceId: samsSpace, appId: mine, template: "ideas", reason: expect.stringMatching(/would no longer fit/) }] });
+
+    // Taken back to an earlier version, the copy is Sam's own, and Hearth leaves it be.
+    restoreMadeVersion(db, registry, { userId: sam.id, spaceId: samsSpace, appId: mine, by: "person", version: 1 });
+    expect(updateBuiltInApps(db, [{ ...shipped, hash: "a later release" }])).toEqual({ updated: [], failed: [] });
   });
 
   it("are added from the Apps page as made apps of their own, once per space, and a removed one comes back with its data", async () => {

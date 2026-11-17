@@ -10,12 +10,19 @@
  * release, and checked at start-up like any made app, so that a broken one
  * stops the server before it serves anything.
  */
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkMadeManifest, madeHtmlSchema, madeManifestSchema, type MadeManifest } from "./manifest";
 
-export type Template = { id: string; manifest: MadeManifest; html: string };
+/** A built-in app: its ID, manifest and page, and `hash`, which changes whenever either does. */
+export type Template = { id: string; manifest: MadeManifest; html: string; hash: string };
+
+/** What a template is, in a few characters: copies made of it keep it, to know whether it changed since. */
+export function templateHash(manifest: MadeManifest, html: string): string {
+  return createHash("sha256").update(JSON.stringify(manifest)).update("\0").update(html).digest("hex");
+}
 
 /** A built-in app's ID, which is also its folder's name. */
 const TEMPLATE_ID = /^[a-z][a-z0-9-]{1,30}$/;
@@ -52,7 +59,7 @@ export function loadCatalog(dir: string = catalogDir()): Template[] {
     if (problem !== null) throw new Error(`${where}: manifest.json is not valid: ${problem}`);
     const html = madeHtmlSchema.safeParse(readFileSync(join(dir, id, "page.html"), "utf8"));
     if (!html.success) throw new Error(`${where}: page.html is not valid: ${html.error.message}`);
-    templates.push({ id, manifest: manifest.data, html: html.data });
+    templates.push({ id, manifest: manifest.data, html: html.data, hash: templateHash(manifest.data, html.data) });
   }
   return templates;
 }

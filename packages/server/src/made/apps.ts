@@ -124,7 +124,15 @@ export function assistantMayChange(db: Db, spaceId: string): boolean {
 export function createMadeApp(
   db: Db,
   registry: Registry,
-  request: { userId: string; spaceId: string; manifest: MadeManifest; html: string; template?: string; memberAccess?: MemberAccess },
+  request: {
+    userId: string;
+    spaceId: string;
+    manifest: MadeManifest;
+    html: string;
+    /** The built-in app it is a copy of (src/made/catalog.ts). */
+    template?: { id: string; hash: string };
+    memberAccess?: MemberAccess;
+  },
 ): { appId: string } {
   const problem = checkMadeManifest(request.manifest);
   if (problem !== null) throw new Refusal(400, "invalid_request", `The manifest is not valid: ${problem}`);
@@ -133,9 +141,20 @@ export function createMadeApp(
     while (registry.has(appId)) appId = newMadeId();
     const now = new Date().toISOString();
     db.prepare(
-      `INSERT INTO made_apps (app_id, space_id, manifest, html, version, template, created_by, updated_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
-    ).run(appId, request.spaceId, JSON.stringify(request.manifest), request.html, request.template ?? null, request.userId, request.userId, now, now);
+      `INSERT INTO made_apps (app_id, space_id, manifest, html, version, template, template_hash, created_by, updated_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      appId,
+      request.spaceId,
+      JSON.stringify(request.manifest),
+      request.html,
+      request.template?.id ?? null,
+      request.template?.hash ?? null,
+      request.userId,
+      request.userId,
+      now,
+      now,
+    );
     writeVersion(db, { appId, version: 1, manifest: request.manifest, html: request.html, note: "", userId: request.userId, at: now });
     // The install comes second: addApp finds the app through the registry. The
     // foreign key between the two is checked when the transaction ends.
@@ -345,19 +364,35 @@ function keepEveryRow(db: Db, app: MadeApp, manifest: MadeManifest): void {
   );
 }
 
+/**
+ * Makes `next` the app's version in use. `templateHash` is the built-in app
+ * it is now an untouched copy of, when Hearth brings it up to date; a
+ * change of anyone else's leaves none, and Hearth leaves the app alone from
+ * then on.
+ */
 function switchTo(
   db: Db,
   app: MadeApp,
-  next: { manifest: MadeManifest; html: string; note: string; userId: string },
+  next: { manifest: MadeManifest; html: string; note: string; userId: string; templateHash?: string },
 ): number {
   const version = app.version + 1;
   const at = new Date().toISOString();
   writeVersion(db, { appId: app.appId, version, manifest: next.manifest, html: next.html, note: next.note, userId: next.userId, at });
   db.prepare(
     `UPDATE made_apps
-        SET manifest = @manifest, html = @html, version = @version, updated_by = @userId, updated_at = @at
+        SET manifest = @manifest, html = @html, version = @version, updated_by = @userId, updated_at = @at,
+            template_hash = @templateHash
       WHERE app_id = @appId AND space_id = @spaceId`,
-  ).run({ manifest: JSON.stringify(next.manifest), html: next.html, version, userId: next.userId, at, appId: app.appId, spaceId: app.spaceId });
+  ).run({
+    manifest: JSON.stringify(next.manifest),
+    html: next.html,
+    version,
+    userId: next.userId,
+    at,
+    templateHash: next.templateHash ?? null,
+    appId: app.appId,
+    spaceId: app.spaceId,
+  });
   return version;
 }
 
@@ -463,7 +498,7 @@ export function replaceMadeRows(
 export function adoptInstall(
   db: Db,
   registry: Registry,
-  install: { spaceId: string; appId: string; template: string; manifest: MadeManifest; html: string },
+  install: { spaceId: string; appId: string; template: { id: string; hash: string }; manifest: MadeManifest; html: string },
 ): { appId: string } {
   return db.transaction(() => {
     const row = db
@@ -475,9 +510,20 @@ export function adoptInstall(
     const at = new Date().toISOString();
     db.prepare("UPDATE space_apps SET app_id = ? WHERE space_id = ? AND app_id = ?").run(appId, install.spaceId, install.appId);
     db.prepare(
-      `INSERT INTO made_apps (app_id, space_id, manifest, html, version, template, created_by, updated_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
-    ).run(appId, install.spaceId, JSON.stringify(install.manifest), install.html, install.template, row.createdBy, row.createdBy, at, at);
+      `INSERT INTO made_apps (app_id, space_id, manifest, html, version, template, template_hash, created_by, updated_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      appId,
+      install.spaceId,
+      JSON.stringify(install.manifest),
+      install.html,
+      install.template.id,
+      install.template.hash,
+      row.createdBy,
+      row.createdBy,
+      at,
+      at,
+    );
     writeVersion(db, { appId, version: 1, manifest: install.manifest, html: install.html, note: "", userId: row.createdBy, at });
     const { misfits, total } = rowsNotFitting(db, { spaceId: install.spaceId, appId }, collectionSchemas(install.manifest));
     if (total > 0) {
@@ -500,5 +546,23 @@ export function madeFromTemplate(db: Db, spaceId: string, template: string): { a
     )
     .all(spaceId, template) as { appId: string; removed: 0 | 1 }[];
   return rows.map((row) => ({ appId: row.appId, removed: row.removed === 1 }));
+}
+
+/** The note of a version Hearth wrote to bring a built-in app up to date. */
+export const UPDATED_WITH_HEARTH = "Updated with Hearth";
+
+/**
+ * Brings an untouched copy of a built-in app up to what Hearth ships now, as
+ * a new version, which can be undone like any. Throws, changing nothing,
+ * when a stored row would not fit the new fields.
+ */
+export function updateFromTemplate(db: Db, appId: string, template: { manifest: MadeManifest; html: string; hash: string }): number {
+  return db.transaction(() => {
+    const app = loadMadeApp(db, appId);
+    if (!app) throw notFound();
+    keepEveryRow(db, app, template.manifest);
+    const maker = db.prepare("SELECT created_by AS createdBy FROM made_apps WHERE app_id = ?").get(appId) as { createdBy: string };
+    return switchTo(db, app, { manifest: template.manifest, html: template.html, note: UPDATED_WITH_HEARTH, userId: maker.createdBy, templateHash: template.hash });
+  })();
 }
 
