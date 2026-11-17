@@ -120,6 +120,35 @@ answer, such as a whole app's page, outlasts any proxy's timeout.
   there, as on the dashboard. The conversation lives in the page only; the
   server keeps none of it.
 
+## Changing an app
+
+The owner chose (decision 7, as recommended): what the model adds and
+changes it does at once, shows in the conversation, and can be undone;
+what it deletes it asks about first (not built yet: the chat deletes
+nothing).
+
+- **Versions.** Every change to an app is a new version
+  (`made_app_versions`, migration 6); the newest 30 are kept. Going back
+  to an earlier version is itself a new version, so it can be undone too.
+  The version in use is in the session, and a frame draws the new page
+  when it changes.
+- **The rule for fields.** A change must leave every row stored now valid:
+  adding collections and optional fields, adding options to a choice and
+  making a field optional always work. A change that some row would not
+  fit (a field made required that a row lacks, a type a value does not
+  have, a field or collection that holds data) is refused, with the rows
+  and why (`rowsNotFitting` in `store.ts`). Going back is held to the same
+  rule: rows written since must fit the version brought back.
+- **Who may.** Changing what an app is reaches everyone who uses it, so it
+  is for those who may add apps to the space and have edit access to the
+  app; an assistant also needs the space's owners to allow it to change
+  things there.
+- **In the chat** the model has `read_app` (the whole manifest and page,
+  and recent versions), `update_app` (a whole new manifest, page or both,
+  with a note of what changed) and `restore_app_version`. Each change shows
+  in the conversation with an Undo button, which brings back the version
+  before it (`POST .../versions/:version/restore`).
+
 ## Testing
 
 `src/made/made.test.ts` and `src/model/chat.test.ts`, against a fake fetch
@@ -132,12 +161,8 @@ trying the web app without a real model.
 
 ## Not built yet
 
-- **Changing and deleting apps from the chat** (`update_app`). A changed
-  field can leave stored rows that no longer fit, which the store refuses to
-  read: this needs a rule for changing fields first. Rows cannot be deleted
-  from the chat yet either: decision 7 said the assistant confirms every
-  change, and the chat does not ask yet. Which changes need asking is the
-  owner's to decide.
+- **Deleting from the chat**, rows or apps, with the person's confirmation
+  first (decision 7). Undoing a row the model added or changed.
 - **The center**: publishing an app, finding others', installing a copy and
   changing it to fit.
 - **Developers' path** (answer 3): uploading an app written by hand.

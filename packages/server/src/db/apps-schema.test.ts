@@ -330,7 +330,7 @@ describe("migration 4 on a database that migration 3 made", () => {
     // The release with the assistant starts on the same file.
     db = openDatabase(path);
     try {
-      expect(migrate(db).map((migration) => migration.id)).toEqual([4, 5]);
+      expect(migrate(db).map((migration) => migration.id)).toEqual([4, 5, 6]);
       expect(all(db, "SELECT id, name FROM migrations ORDER BY id")).toEqual(
         MIGRATIONS.map(({ id, name }) => ({ id, name })),
       );

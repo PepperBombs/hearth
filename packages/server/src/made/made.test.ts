@@ -7,10 +7,12 @@
 import { describe, expect, it } from "vitest";
 import { createRegistry } from "../apps/registry";
 import { family, grant, LIN, SAM } from "../apps/test-world";
-import type { Db } from "../db/database";
+import { migrate, openDatabase, type Db } from "../db/database";
+import { MIGRATIONS } from "../db/migrations";
+import { createUserWithPersonalSpace } from "../db/people";
 import { CONTENT_SECURITY_POLICY } from "../http/security";
 import { as, testApp } from "../testing";
-import { createMadeApp, withMadeApps } from "./apps";
+import { changeMadeApp, createMadeApp, restoreMadeVersion, withMadeApps } from "./apps";
 import { SANDBOX_CONTENT_SECURITY_POLICY } from "./frame";
 import { madeManifestSchema } from "./manifest";
 
@@ -133,5 +135,103 @@ describe("an app made in Hearth", () => {
     const session = await call(SAM, "/api/session");
     expect(session.headers.get("content-security-policy")).toBe(CONTENT_SECURITY_POLICY);
     expect(session.headers.get("x-frame-options")).toBe("DENY");
+  });
+});
+
+describe("changing an app made in Hearth", () => {
+  const withCategory = (required: boolean) =>
+    madeManifestSchema.parse({
+      ...MANIFEST,
+      collections: {
+        expenses: {
+          fields: { ...MANIFEST.collections.expenses!.fields, category: { type: "choice", options: ["food", "travel"], required } },
+        },
+      },
+    });
+
+  function changing() {
+    const people = world();
+    const appId = people.make(people.sam.id, people.samsSpace);
+    const registry = withMadeApps(people.db, createRegistry([]));
+    const as = (userId: string, spaceId = people.samsSpace) => ({ userId, spaceId, appId, by: "person" as const });
+    const rows = `/api/spaces/${people.samsSpace}/apps/${appId}/rows/expenses`;
+    const add = (data: Record<string, unknown>) =>
+      people.call(SAM, rows, { method: "POST", body: JSON.stringify({ data }) });
+    const versions = () =>
+      (people.db.prepare("SELECT version, note FROM made_app_versions WHERE app_id = ? ORDER BY version").all(appId) as { version: number; note: string }[]);
+    return { ...people, appId, registry, as, rows, add, versions };
+  }
+
+  it("keeps each change as a version, and refuses one that a stored row would not fit", async () => {
+    const { db, sam, samsSpace, appId, registry, as, rows, add, versions, call } = changing();
+    expect((await add({ item: "Lunch", amount: 35 })).status).toBe(201);
+
+    // A field no row has yet, optional: every stored row still fits.
+    const changed = changeMadeApp(db, registry, { ...as(sam.id), manifest: withCategory(false), note: "Added a category" });
+    expect(changed).toEqual({ version: 2, previous: 1, name: "Ledger" });
+    expect(versions()).toEqual([{ version: 1, note: "" }, { version: 2, note: "Added a category" }]);
+    expect(((await (await call(SAM, rows)).json()) as { rows: unknown[] }).rows).toHaveLength(1);
+    const session = (await (await call(SAM, "/api/session")).json()) as { apps: { id: string; version?: number }[] };
+    expect(session.apps.find((app) => app.id === appId)?.version).toBe(2);
+
+    for (const [manifest, reason] of [
+      [withCategory(true), /1 stored row would no longer fit the app \(expenses row \S+: category/],
+      [madeManifestSchema.parse({ ...MANIFEST, collections: { expenses: { fields: { item: { type: "text" }, amount: { type: "text" } } } } }), /amount/],
+      [madeManifestSchema.parse({ ...MANIFEST, collections: { trips: { fields: { place: { type: "text" } } } } }), /its collection would be gone/],
+    ] as const) {
+      expect(() => changeMadeApp(db, registry, { ...as(sam.id), manifest, note: "x" })).toThrow(reason);
+    }
+    expect(() => changeMadeApp(db, registry, { ...as(sam.id), manifest: withCategory(false), note: "x" })).toThrow(/change nothing/);
+    expect(versions()).toHaveLength(2);
+    expect(samsSpace).toBeTruthy();
+  });
+
+  it("goes back to an earlier version as a new one, unless a row written since would not fit it", async () => {
+    const { db, sam, lin, samsSpace, appId, registry, as, add, versions, call } = changing();
+    changeMadeApp(db, registry, { ...as(sam.id), manifest: withCategory(false), note: "Added a category" });
+    changeMadeApp(db, registry, { ...as(sam.id), html: "<p>new look</p>", note: "New look" });
+
+    const back = await call(SAM, `/api/spaces/${samsSpace}/apps/${appId}/versions/2/restore`, { method: "POST" });
+    expect(back.status).toBe(200);
+    expect(await back.json()).toEqual({ version: 4, previous: 3, restored: 2 });
+    expect(versions().at(-1)).toEqual({ version: 4, note: "Back to version 2" });
+    const page = await (await call(SAM, `/api/spaces/${samsSpace}/apps/${appId}/frame`)).text();
+    expect(page).not.toContain("new look");
+
+    // A row that uses the category: version 1, which has no category, would hide it.
+    expect((await add({ item: "Tea", amount: 4, category: "food" })).status).toBe(201);
+    expect(() => restoreMadeVersion(db, registry, { ...as(sam.id), version: 1 })).toThrow(/would no longer fit/);
+    expect(() => restoreMadeVersion(db, registry, { ...as(sam.id), version: 4 })).toThrow(/is the one in use/);
+    expect((await call(LIN, `/api/spaces/${samsSpace}/apps/${appId}/versions/2/restore`, { method: "POST" })).status).toBe(404);
+    expect(lin.id).toBeTruthy();
+  });
+
+  it("is changed only by those who may add apps to its space, with edit access to it", () => {
+    const { db, sam, lin, kim } = world();
+    const registry = withMadeApps(db, createRegistry([]));
+    const appId = createMadeApp(db, registry, { userId: sam.id, spaceId: "family", manifest: MANIFEST, html: HTML }).appId;
+    grant(db, "family", appId, lin.id, "edit", sam.id);
+    grant(db, "family", appId, kim.id, "edit", sam.id);
+    const change = (userId: string) =>
+      changeMadeApp(db, registry, { userId, spaceId: "family", appId, by: "person", html: `<p>${userId}</p>`, note: "x" });
+    // Lin may change its rows, not what it is; Kim may add apps here.
+    expect(() => change(lin.id)).toThrow(/for the space's owners and the members they allow/);
+    expect(change(kim.id).version).toBe(2);
+  });
+
+  it("keeps the version of an app made before versions were kept", () => {
+    const db = openDatabase(":memory:");
+    migrate(db, MIGRATIONS.filter((migration) => migration.id <= 5));
+    const sam = createUserWithPersonalSpace(db, { email: SAM, locale: "en" });
+    const space = (db.prepare("SELECT id FROM spaces WHERE created_by = ?").get(sam.id) as { id: string }).id;
+    const at = "2026-11-17T00:00:00.000Z";
+    db.transaction(() => {
+      db.prepare("INSERT INTO made_apps (app_id, space_id, manifest, html, version, created_by, updated_by, created_at, updated_at) VALUES ('m-aaaaaaaaaa', ?, ?, '<p>x</p>', 3, ?, ?, ?, ?)").run(space, JSON.stringify(MANIFEST), sam.id, sam.id, at, at);
+      db.prepare("INSERT INTO space_apps (space_id, app_id, created_by, created_at) VALUES (?, 'm-aaaaaaaaaa', ?, ?)").run(space, sam.id, at);
+    })();
+    expect(migrate(db).map((migration) => migration.id)).toEqual([6]);
+    expect(db.prepare("SELECT app_id AS appId, version, html, created_by AS by FROM made_app_versions").all()).toEqual([
+      { appId: "m-aaaaaaaaaa", version: 3, html: "<p>x</p>", by: sam.id },
+    ]);
   });
 });

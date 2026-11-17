@@ -11,3 +11,4 @@ Notes for whoever changes this part, people and agents alike. They are read when
 - `made_apps` refers to its install with a deferred foreign key, so that `createMadeApp` writes the app first and lets `addApp` (which asks the registry) find it in the same transaction.
 - A dev server without `HEARTH_SECRET` makes one up per process: after a restart every saved key is unreadable and the chat answers `no_key` until it is entered again.
 - The chat's history is plain text only, cut to 40 kB in the browser: `/api/*` takes bodies of up to 64 kB.
+- A change to a made app is checked against every stored row (`rowsNotFitting` in `store.ts`), going back to a version too: a strict schema refuses a row with a field the app no longer has, so removing a field that holds data is refused rather than hiding the data.

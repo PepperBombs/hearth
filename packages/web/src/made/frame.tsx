@@ -64,7 +64,8 @@ export function MadeAppFrame({ app, maxHeight = 560 }: { app: AppSummary; maxHei
   const [height, setHeight] = useState(200);
   const src =
     `/api/spaces/${encodeURIComponent(app.spaceId)}/apps/${encodeURIComponent(app.id)}/frame` +
-    `?theme=${resolvedTheme}&locale=${locale}`;
+    // The version, so that a change to the app draws its new page.
+    `?theme=${resolvedTheme}&locale=${locale}&v=${app.version ?? 1}`;
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {

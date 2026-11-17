@@ -142,6 +142,59 @@ describe("the chat", () => {
     expect(rows).toEqual([expect.objectContaining({ item: "午饭", amount: 35, createdBy: sam.id })]);
   });
 
+  it("reads an app, changes it as a new version, and goes back when asked", async () => {
+    const people = family();
+    const registry = withMadeApps(people.db, createRegistry([]));
+    const { appId } = createMadeApp(people.db, registry, {
+      userId: people.sam.id,
+      spaceId: people.samsSpace,
+      manifest: madeManifestSchema.parse(MANIFEST),
+      html: "<p>记账 v1</p>",
+    });
+    const withCategory = {
+      ...MANIFEST,
+      collections: { expenses: { fields: { ...MANIFEST.collections.expenses.fields, category: { type: "text" } } } },
+    };
+    const model = fakeModel([
+      () => openAiAnswer({ tool_calls: [toolCall("call_1", "read_app", { appId })] }, "tool_calls"),
+      (sent) => {
+        const read = JSON.parse((sent.body.messages as { content: string }[]).at(-1)!.content) as { version: number; html: string };
+        expect(read).toMatchObject({ version: 1, html: "<p>记账 v1</p>" });
+        return openAiAnswer(
+          { tool_calls: [toolCall("call_2", "update_app", { appId, manifest: withCategory, html: "<p>记账 v2</p>", note: "加了分类" })] },
+          "tool_calls",
+        );
+      },
+      () => openAiAnswer({ content: "加好了分类，可以撤销。" }),
+      () => openAiAnswer({ tool_calls: [toolCall("call_3", "restore_app_version", { appId, version: 1 })] }, "tool_calls"),
+      () => openAiAnswer({ content: "已经恢复到第 1 版。" }),
+    ]);
+    const { app } = testApp({ db: people.db, config: testConfig({ secret: SECRET }), modelFetch: model.fetch });
+    const post = (path: string, body: unknown, method = "POST") =>
+      app.request(path, { method, body: JSON.stringify(body), headers: as(SAM, { "Content-Type": "application/json" }) });
+    await post("/api/me/model", { protocol: "openai", baseUrl: "https://api.example.com/v1", model: "chat-1", apiKey: KEY }, "PUT");
+    people.db.prepare("UPDATE spaces SET assistant = 'edit' WHERE id = ?").run(people.samsSpace);
+    const events = async (text: string) =>
+      (await (await post("/api/chat", { spaceId: people.samsSpace, messages: [{ role: "user", content: text }] })).text())
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => JSON.parse(line.slice(6)) as unknown);
+
+    expect(await events("给记账加一个分类")).toEqual([
+      { type: "action", action: "app_updated", appId, appName: "记账", version: 2, previous: 1 },
+      { type: "text", text: "加好了分类，可以撤销。" },
+      { type: "done" },
+    ]);
+    expect(await events("撤销刚才的修改")).toEqual([
+      { type: "action", action: "app_restored", appId, appName: "记账", version: 3, previous: 2, restored: 1 },
+      { type: "text", text: "已经恢复到第 1 版。" },
+      { type: "done" },
+    ]);
+    // The page in use is version 1's again.
+    const frame = await app.request(`/api/spaces/${people.samsSpace}/apps/${appId}/frame`, { headers: as(SAM) });
+    expect(await frame.text()).toContain("记账 v1");
+  });
+
   it("does nothing in a space whose owners have not switched the assistant on, and only reads where they allow reading", async () => {
     const model = fakeModel([
       () => openAiAnswer({ tool_calls: [toolCall("call_1", "create_app", { manifest: MANIFEST, html: "<p>x</p>" })] }, "tool_calls"),

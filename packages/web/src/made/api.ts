@@ -6,9 +6,11 @@
  */
 import {
   chatEventSchema,
+  madeRestoreSchema,
   modelSettingsSchema,
   type ChatEvent,
   type ChatRequest,
+  type MadeRestore,
   type MadeRow,
   type ModelSettings,
   type ModelSettingsRequest,
@@ -111,4 +113,15 @@ export async function updateRow(
 
 export async function removeRow(spaceId: string, appId: string, collection: string, rowId: string): Promise<void> {
   await request(`${rowsPath(spaceId, appId, collection)}/${encodeURIComponent(rowId)}`, { method: "DELETE" });
+}
+
+/** Brings an earlier version of a made app back into use, as a new version: the chat's undo. */
+export async function restoreVersion(spaceId: string, appId: string, version: number): Promise<MadeRestore> {
+  const response = await request(
+    `/api/spaces/${encodeURIComponent(spaceId)}/apps/${encodeURIComponent(appId)}/versions/${version}/restore`,
+    { method: "POST" },
+  );
+  const parsed = madeRestoreSchema.safeParse(await response.json().catch(() => undefined));
+  if (!parsed.success) throw new ApiRequestError("invalid_response", response.status, "The answer did not match the expected shape.");
+  return parsed.data;
 }

@@ -40,6 +40,8 @@ export type RegisteredApp = {
   server?: ServerDefinition;
   /** True for an app made in Hearth (src/made/apps.ts): no code of the build, a page run in the sandbox. */
   made?: true;
+  /** A made app's version in use, which changes with every change to it. */
+  version?: number;
 };
 
 export type Registry = {

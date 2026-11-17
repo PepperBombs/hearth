@@ -3,7 +3,7 @@
  * sandbox shows, and the rows its bridge reads and writes through the page
  * around it. Who may do what is decided as for every app, by VISIBLE.
  */
-import { madeRowWriteSchema, type Locale } from "@hearth/shared";
+import { madeRowWriteSchema, type Locale, type MadeRestore } from "@hearth/shared";
 import type { Hono } from "hono";
 import type { Registry } from "../apps/registry";
 import type { Db } from "../db/database";
@@ -14,6 +14,7 @@ import {
   listMadeRows,
   madeAppForFrame,
   removeMadeRow,
+  restoreMadeVersion,
   updateMadeRow,
   type MadeRequest,
 } from "./apps";
@@ -64,6 +65,14 @@ export function registerMadeRoutes(
     const { data } = await readBody(c, madeRowWriteSchema);
     const row = updateMadeRow(db, registry, requestOf(c), c.req.param("collection"), c.req.param("rowId"), data);
     return c.json({ row });
+  });
+
+  // The person's own undo, from the chat: the app back at an earlier version.
+  app.post(`${BASE}/versions/:version/restore`, requireMember, (c) => {
+    const version = Number(c.req.param("version"));
+    if (!Number.isSafeInteger(version) || version < 1) return c.json({ error: { code: "not_found", message: "There is nothing at this address." } }, 404);
+    const restored = restoreMadeVersion(db, registry, { ...requestOf(c), version });
+    return c.json({ version: restored.version, previous: restored.previous, restored: restored.restored } satisfies MadeRestore);
   });
 
   app.delete(`${BASE}/rows/:collection/:rowId`, requireMember, (c) => {

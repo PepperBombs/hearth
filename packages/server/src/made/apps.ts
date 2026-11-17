@@ -16,10 +16,11 @@ import { randomBytes } from "node:crypto";
 import { AppError } from "@hearth/sdk/server";
 import type { MadeRow } from "@hearth/shared";
 import type { Db } from "../db/database";
+import { membershipOf } from "../db/people";
 import { notFound, Refusal } from "../http/errors";
 import { addApp, resolveInstall, type Caller } from "../apps/installs";
 import type { RegisteredApp, Registry } from "../apps/registry";
-import { MAX_LIST_LIMIT, readOnlyStore, writableStore, type StoreScope } from "../apps/store";
+import { MAX_LIST_LIMIT, readOnlyStore, rowsNotFitting, writableStore, type StoreScope } from "../apps/store";
 import { collectionSchemas, madeManifestSchema, type MadeManifest } from "./manifest";
 
 /** Every made app's ID starts so. No app of a build is named like it. */
@@ -39,7 +40,7 @@ export type MadeApp = { appId: string; spaceId: string; manifest: MadeManifest; 
 type MadeAppRow = { appId: string; spaceId: string; manifest: string; html: string; version: number };
 
 /** The made app with this ID, in whatever space it is, or null. */
-function readMadeApp(db: Db, appId: string): MadeApp | null {
+function loadMadeApp(db: Db, appId: string): MadeApp | null {
   if (!MADE_ID.test(appId)) return null;
   const row = db
     .prepare(
@@ -71,6 +72,7 @@ function registered(app: MadeApp): RegisteredApp {
     },
     hasPage: false,
     made: true,
+    version: app.version,
   };
 }
 
@@ -84,10 +86,10 @@ export function withMadeApps(db: Db, registry: Registry): Registry {
     get(appId) {
       const bundled = registry.get(appId);
       if (bundled) return bundled;
-      const made = readMadeApp(db, appId);
+      const made = loadMadeApp(db, appId);
       return made ? registered(made) : undefined;
     },
-    has: (appId) => registry.has(appId) || readMadeApp(db, appId) !== null,
+    has: (appId) => registry.has(appId) || loadMadeApp(db, appId) !== null,
     list: () => registry.list(),
   };
 }
@@ -121,6 +123,7 @@ export function createMadeApp(
       `INSERT INTO made_apps (app_id, space_id, manifest, html, version, created_by, updated_by, created_at, updated_at)
        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)`,
     ).run(appId, request.spaceId, JSON.stringify(request.manifest), request.html, request.userId, request.userId, now, now);
+    writeVersion(db, { appId, version: 1, manifest: request.manifest, html: request.html, note: "", userId: request.userId, at: now });
     // The install comes second: addApp finds the app through the registry. The
     // foreign key between the two is checked when the transaction ends.
     addApp(db, registry, { userId: request.userId, spaceId: request.spaceId, appId, memberAccess: "none" });
@@ -133,7 +136,7 @@ export type MadeRequest = { userId: string; spaceId: string; appId: string; by: 
 /** The made app, when the person, or an assistant for them, may use it in this space at all. */
 function reachable(db: Db, registry: Registry, request: MadeRequest) {
   const level = resolveInstall(db, registry, request.userId, request.spaceId, request.appId, request.by);
-  const app = level === null ? null : readMadeApp(db, request.appId);
+  const app = level === null ? null : loadMadeApp(db, request.appId);
   // The install was found in this space, so the app is there too; checked all the same.
   if (level === null || !app || app.spaceId !== request.spaceId) throw notFound();
   return { level, app };
@@ -156,7 +159,7 @@ export function madeAppsIn(
   const found: { app: MadeApp; level: "view" | "edit" }[] = [];
   for (const { appId } of ids) {
     const level = resolveInstall(db, registry, request.userId, request.spaceId, appId, request.by);
-    const app = level === null ? null : readMadeApp(db, appId);
+    const app = level === null ? null : loadMadeApp(db, appId);
     if (level !== null && app) found.push({ app, level });
   }
   return found;
@@ -254,3 +257,150 @@ export function updateMadeRow(
 export function removeMadeRow(db: Db, registry: Registry, request: MadeRequest, collection: string, rowId: string): void {
   withCollection(db, registry, request, collection, "edit", (rows) => rows.remove(rowId));
 }
+
+// ---------------------------------------------------------------------------
+// Changing an app, and going back (docs/platform.md, "Changing an app")
+// ---------------------------------------------------------------------------
+
+/** How many versions of an app are kept, the one in use among them. */
+export const KEPT_VERSIONS = 30;
+
+export type MadeVersion = { version: number; note: string; createdAt: string };
+
+function writeVersion(
+  db: Db,
+  version: { appId: string; version: number; manifest: MadeManifest; html: string; note: string; userId: string; at: string },
+): void {
+  db.prepare(
+    `INSERT INTO made_app_versions (app_id, version, manifest, html, note, created_by, created_at)
+     VALUES (@appId, @version, @manifest, @html, @note, @userId, @at)`,
+  ).run({ ...version, manifest: JSON.stringify(version.manifest) });
+  db.prepare("DELETE FROM made_app_versions WHERE app_id = ? AND version <= ?").run(version.appId, version.version - KEPT_VERSIONS);
+}
+
+/** The versions of an app, newest first. */
+function versionsOf(db: Db, appId: string): MadeVersion[] {
+  return db
+    .prepare(
+      `SELECT version, note, created_at AS createdAt
+         FROM made_app_versions
+        WHERE app_id = ?
+        ORDER BY version DESC`,
+    )
+    .all(appId) as MadeVersion[];
+}
+
+/** An app, its page and its versions, for whoever may use it, or an assistant for them. */
+export function readMadeApp(db: Db, registry: Registry, request: MadeRequest): MadeApp & { versions: MadeVersion[] } {
+  return db.transaction(() => {
+    const { app } = reachable(db, registry, request);
+    return { ...app, versions: versionsOf(db, app.appId) };
+  })();
+}
+
+/**
+ * Who may change what an app is: whoever may add apps to its space, with
+ * edit access to the app (and for an assistant, edit where the space's
+ * owners allow it). A change reaches everyone who uses the app.
+ */
+function changeable(db: Db, registry: Registry, request: MadeRequest) {
+  const found = reachable(db, registry, request);
+  const member = membershipOf(db, request.userId, request.spaceId);
+  if (found.level !== "edit" || !member || (member.role !== "owner" && member.canAddApps !== 1)) {
+    throw new Refusal(403, "forbidden", "Changing this app is for the space's owners and the members they allow to add apps.");
+  }
+  return found;
+}
+
+/**
+ * Refuses a manifest that some stored row would not fit: a change must
+ * leave every row the app holds readable, or data would be hidden. The
+ * message names the rows and why, and what to do instead.
+ */
+function keepEveryRow(db: Db, app: MadeApp, manifest: MadeManifest): void {
+  const { misfits, total } = rowsNotFitting(db, { spaceId: app.spaceId, appId: app.appId }, collectionSchemas(manifest));
+  if (total === 0) return;
+  const which = misfits.map((misfit) => `${misfit.collection} row ${misfit.rowId}: ${misfit.reason}`).join("; ");
+  throw new Refusal(
+    409,
+    "conflict",
+    `${total} stored ${total === 1 ? "row" : "rows"} would no longer fit the app (${which}${total > misfits.length ? "; …" : ""}). ` +
+      "Change those rows first, or keep the fields and options they use.",
+  );
+}
+
+function switchTo(
+  db: Db,
+  app: MadeApp,
+  next: { manifest: MadeManifest; html: string; note: string; userId: string },
+): number {
+  const version = app.version + 1;
+  const at = new Date().toISOString();
+  writeVersion(db, { appId: app.appId, version, manifest: next.manifest, html: next.html, note: next.note, userId: next.userId, at });
+  db.prepare(
+    `UPDATE made_apps
+        SET manifest = @manifest, html = @html, version = @version, updated_by = @userId, updated_at = @at
+      WHERE app_id = @appId AND space_id = @spaceId`,
+  ).run({ manifest: JSON.stringify(next.manifest), html: next.html, version, userId: next.userId, at, appId: app.appId, spaceId: app.spaceId });
+  return version;
+}
+
+export type Changed = { version: number; previous: number; name: string };
+
+/**
+ * Changes what an app is: its manifest, its page, or both, as a new
+ * version. Refused when nothing would change, when the person (or the
+ * assistant for them) may not change the app, and when a stored row would
+ * not fit the new fields.
+ */
+export function changeMadeApp(
+  db: Db,
+  registry: Registry,
+  request: MadeRequest & { manifest?: MadeManifest; html?: string; note: string },
+): Changed {
+  return db.transaction(() => {
+    const { app } = changeable(db, registry, request);
+    const manifest = request.manifest ?? app.manifest;
+    const html = request.html ?? app.html;
+    if (JSON.stringify(manifest) === JSON.stringify(app.manifest) && html === app.html) {
+      throw new Refusal(409, "conflict", "That would change nothing: the app is like that already.");
+    }
+    keepEveryRow(db, app, manifest);
+    const version = switchTo(db, app, { manifest, html, note: request.note, userId: request.userId });
+    return { version, previous: app.version, name: manifest.name };
+  })();
+}
+
+/**
+ * Makes an earlier version the one in use again, as a new version: going
+ * back is itself a change, which can be undone in turn. Refused like a
+ * change when a row written since would not fit that version.
+ */
+export function restoreMadeVersion(
+  db: Db,
+  registry: Registry,
+  request: MadeRequest & { version: number },
+): Changed & { restored: number } {
+  return db.transaction(() => {
+    const { app } = changeable(db, registry, request);
+    if (request.version === app.version) {
+      throw new Refusal(409, "conflict", `Version ${request.version} is the one in use.`);
+    }
+    const row = db
+      .prepare("SELECT manifest, html FROM made_app_versions WHERE app_id = ? AND version = ?")
+      .get(app.appId, request.version) as { manifest: string; html: string } | undefined;
+    const manifest = row ? madeManifestSchema.safeParse(JSON.parse(row.manifest)) : null;
+    if (!row || !manifest?.success) {
+      throw new Refusal(404, "not_found", `This app has no version ${request.version} any more.`);
+    }
+    keepEveryRow(db, app, manifest.data);
+    const version = switchTo(db, app, {
+      manifest: manifest.data,
+      html: row.html,
+      note: `Back to version ${request.version}`,
+      userId: request.userId,
+    });
+    return { version, previous: app.version, restored: request.version, name: manifest.data.name };
+  })();
+}
+
