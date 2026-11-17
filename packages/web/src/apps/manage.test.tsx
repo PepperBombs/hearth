@@ -6,7 +6,7 @@
  * setting types the samples do not use, and a stand-in for the server.
  */
 import { defineApp, type Manifest } from "@hearth/sdk";
-import type { AppSettings, AppSummary, Session, SpaceApps } from "@hearth/shared";
+import type { AppSettings, AppSummary, CatalogApp, Session, SpaceApps } from "@hearth/shared";
 import { QueryClient } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentType } from "react";
@@ -127,6 +127,8 @@ type Failure = { status: number; code: string };
  */
 class FakeServer {
   session: Session = sessionWith([]);
+  /** The apps shipped with Hearth. None unless a test gives some. */
+  catalog: CatalogApp[] = [];
   /** Apps removed from a space whose data was kept, by space ID, with how many entries each holds. */
   removed: Record<string, { id: string; rowCount: number }[]> = {};
   settings: Record<string, AppSettings> = {
@@ -156,6 +158,27 @@ class FakeServer {
       return json(this.fail.with.status, { error: { code: this.fail.with.code, message: "Sample failure" } });
     }
     if (path === "/api/session") return json(200, this.session);
+    if (path === "/api/catalog") return json(200, this.catalog);
+    const fromCatalog = /^\/api\/spaces\/([^/]+)\/catalog\/([^/]+)$/.exec(path);
+    const template = this.catalog.find((candidate) => candidate.id === fromCatalog?.[2]);
+    if (fromCatalog && template && method === "POST") {
+      const spaceId = fromCatalog[1]!;
+      const made: AppSummary = {
+        ...template,
+        id: `m-${template.id.padEnd(10, "0").slice(0, 10)}`,
+        spaceId,
+        widgetSize: "wide",
+        access: "edit",
+        enabled: true,
+        pinned: false,
+        hasPage: false,
+        made: true,
+        version: 1,
+        template: template.id,
+      };
+      this.session = { ...this.session, apps: [...this.session.apps, made] };
+      return json(201, { appId: made.id, restored: false });
+    }
 
     const owners = /^\/api\/spaces\/([^/]+)\/apps$/.exec(path);
     if (owners && method === "GET") {
@@ -361,6 +384,36 @@ describe("the Apps page", () => {
     await waitFor(() => expect(server.changes).toEqual([`PUT /api/spaces/${PERSONAL}/apps/counter {}`]));
     expect(await within(await spaceCard("Personal")).findByRole("switch", { name: "Show Counter" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("offers the apps shipped with Hearth first, a build's app of the same ID as that alone, and adds one to the space", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([summary(checklistManifest, PERSONAL)]);
+    const builtIn = (id: string, en: string, network: string[] = []): CatalogApp => ({
+      id,
+      name: { en, zh: en },
+      description: { en: `${en}, built in.`, zh: `${en}，内置。` },
+      icon: "star",
+      color: "amber",
+      network,
+    });
+    server.catalog = [builtIn("ideas", "Ideas"), builtIn("feed", "Headlines", ["news.example.com"])];
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
+    const add = await dialog("Add an app to your personal space");
+    expect(within(add).getAllByRole("radio").map((radio) => (radio as HTMLInputElement).value)).toEqual(["ideas", "feed", "counter"]);
+    expect(within(add).getByRole("radio", { name: /Headlines/ })).toBeTruthy();
+    expect(within(add).getByText("Fetches data from news.example.com on its own.")).toBeTruthy();
+    fireEvent.click(within(add).getByRole("radio", { name: /Headlines/ }));
+    fireEvent.click(within(add).getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(server.changes).toEqual([`POST /api/spaces/${PERSONAL}/catalog/feed {}`]));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // Added, it is not offered again.
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
+    const again = await dialog("Add an app to your personal space");
+    expect(within(again).getAllByRole("radio").map((radio) => (radio as HTMLInputElement).value)).toEqual(["ideas", "counter"]);
   });
 
   it("asks who else may use an app added to a group, with only me for now chosen first", async () => {

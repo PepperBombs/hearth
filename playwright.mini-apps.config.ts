@@ -38,7 +38,8 @@ import {
  * apps come and go with the other repository, and a folder without the app
  * has nothing for its file to test. With none of them, nothing runs and the
  * command passes. When an app's texts or layout change there, its file here
- * changes with them.
+ * changes with them. The folder is empty now: the apps of hearth-stones
+ * moved into Hearth as built-in apps (docs/platform.md).
  *
  * Afterwards the generated lists and both dist folders hold those apps,
  * until the next `pnpm build`. Ports are 4183 and 4184; set

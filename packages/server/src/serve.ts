@@ -21,6 +21,9 @@ import { FetchError } from "@hearth/sdk/server";
 import type { Hono } from "hono";
 import { createApp } from "./app";
 import { outboundFor, processClock, type Clock } from "./apps/fetch";
+import { withMadeApps } from "./made/apps";
+import { loadCatalog } from "./made/catalog";
+import { moveLegacyInstalls } from "./made/legacy";
 import { AppRegistryError, createRegistry, type BundledApp } from "./apps/registry";
 import { createScheduler, type Scheduler } from "./apps/scheduler";
 import type { Identify } from "./auth";
@@ -90,12 +93,14 @@ export function startServer(options: StartOptions): RunningServer {
   // HEARTH_JOBS=off: the deploy's trial start and the end-to-end servers
   // without stand-ins switch them off. Their way out is the stand-in file
   // when HEARTH_FETCH_STANDINS names one, and the network, paced, otherwise.
+  // One way out for the whole server: the jobs' fetches and the made apps' pages' share its pace.
+  const outbound = outboundFor(config, clock);
   const scheduler =
     config.jobs === "on"
       ? createScheduler({
           db,
           registry,
-          outbound: outboundFor(config, clock),
+          outbound,
           clock,
           now: () => new Date(),
           random: Math.random,
@@ -103,7 +108,14 @@ export function startServer(options: StartOptions): RunningServer {
         })
       : null;
 
-  const app = createApp({ config, db, apps, identify: options.identify, wakeJobs: scheduler?.wake });
+  // The apps shipped with Hearth, and the move of the build's apps of the same name to them
+  // (docs/platform.md, "Built-in apps"): once, in place, data and all.
+  const catalog = loadCatalog();
+  const { moved, failed } = moveLegacyInstalls(db, withMadeApps(db, registry), catalog);
+  for (const install of moved) log.info(`Moved the app "${install.from}" of space ${install.spaceId} to the built-in app (${install.to}).`);
+  for (const install of failed) log.error(`Could not move the app "${install.from}" of space ${install.spaceId}: ${install.reason}`);
+
+  const app = createApp({ config, db, apps, identify: options.identify, wakeJobs: scheduler?.wake, outbound, catalog });
 
   let markListening: (info: AddressInfo) => void = () => {};
   let markFailed: (error: unknown) => void = () => {};

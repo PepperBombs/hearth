@@ -16,6 +16,7 @@
  * read again, since a route may read its settings.
  */
 import type { Manifest, Setting } from "@hearth/sdk";
+import { notifyMadeAppChanged } from "../made/frame";
 import { settingValueProblems } from "@hearth/sdk/manifest-schema";
 import { Button, Chip, Dialog, Field, IconButton, Input, Segmented, Switch } from "@hearth/sdk/web";
 import type { AppSettings, AppSettingsPatch, AppSummary, SettingValue } from "@hearth/shared";
@@ -159,6 +160,8 @@ function SettingsForm({
     onSuccess: async (answer) => {
       client.setQueryData(settingsQueryKey(install), answer);
       onClose();
+      // A made app's page reads its settings itself, and is told to read them again.
+      if (app.made) notifyMadeAppChanged(app.id);
       // A route may read the settings, so the app's queries are read again too.
       await client.invalidateQueries({ queryKey: installQueryKey(install) });
     },

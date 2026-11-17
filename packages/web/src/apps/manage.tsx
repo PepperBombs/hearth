@@ -14,13 +14,14 @@
 import type { Manifest } from "@hearth/sdk";
 import { IconButton } from "@hearth/sdk/web";
 import type { AppPrefsPatch, AppSummary, MemberAccess, Session, Space } from "@hearth/shared";
-import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Settings2 } from "lucide-react";
 import { useState } from "react";
 import { spaceAppsKey } from "../groups/queries";
 import { pickLocalized } from "../i18n";
 import { useI18n } from "../session/preferences";
 import { SESSION_QUERY_KEY, useSession } from "../session/session";
+import { addFromCatalog, CATALOG_QUERY_KEY, fetchCatalog } from "../made/api";
 import { addAppToSpace, moveAppToSpace, patchAppPrefs, removeAppFromSpace, type Install } from "./api";
 import { useBundledApps } from "./bundled";
 import { hasSettings } from "./scope";
@@ -29,6 +30,30 @@ import { AppSettingsDialog } from "./settings-dialog";
 /** The manifest this build holds for an app, or null when it holds none (the browser has an older build). */
 export function useBundledManifest(appId: string): Manifest | null {
   return useBundledApps().find((candidate) => candidate.id === appId)?.manifest ?? null;
+}
+
+/**
+ * An app's manifest as the settings dialog and the move read it: the
+ * build's for one of its apps, and for an app made in Hearth the one the
+ * session describes, which the server checked as any app's.
+ */
+export function useAppManifest(app: AppSummary): Manifest | null {
+  const bundled = useBundledManifest(app.id);
+  if (!app.made) return bundled;
+  return {
+    id: app.id,
+    name: app.name,
+    description: app.description,
+    icon: app.icon as Manifest["icon"],
+    color: app.color as Manifest["color"],
+    widget: { size: app.widgetSize },
+    ...(app.settings ? { settings: app.settings as Manifest["settings"] } : {}),
+  };
+}
+
+/** The apps shipped with Hearth, which the Add dialog offers beside the build's. */
+export function useCatalog() {
+  return useQuery({ queryKey: CATALOG_QUERY_KEY, queryFn: ({ signal }) => fetchCatalog(signal), staleTime: Infinity });
 }
 
 const installOf = (app: Pick<AppSummary, "id" | "spaceId">): Install => ({ spaceId: app.spaceId, appId: app.id });
@@ -70,8 +95,11 @@ function reloadAfter(client: QueryClient, install: Install) {
 export function useAddApp() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ install, memberAccess }: { install: Install; memberAccess?: MemberAccess }) =>
-      addAppToSpace(install, memberAccess === undefined ? {} : { memberAccess }),
+    // `fromCatalog`: `install.appId` names a built-in app, added as a made app of the space's own.
+    mutationFn: ({ install, memberAccess, fromCatalog }: { install: Install; memberAccess?: MemberAccess; fromCatalog?: boolean }) =>
+      fromCatalog
+        ? addFromCatalog(install.spaceId, install.appId, memberAccess)
+        : addAppToSpace(install, memberAccess === undefined ? {} : { memberAccess }),
     onSettled: (_result, _error, { install }) => reloadAfter(client, install),
   });
 }
@@ -117,7 +145,7 @@ export function useMoveApp() {
  */
 export function useMoveTargets(app: AppSummary): Space[] {
   const session = useSession();
-  const manifest = useBundledManifest(app.id);
+  const manifest = useAppManifest(app);
   const from = session.spaces.find((space) => space.id === app.spaceId);
   if (from?.role !== "owner") return [];
   return session.spaces.filter(
@@ -147,7 +175,7 @@ export function useFullAppName(app: AppSummary): string {
  */
 export function AppSettingsButton({ app, className }: { app: AppSummary; className?: string }) {
   const { t } = useI18n();
-  const manifest = useBundledManifest(app.id);
+  const manifest = useAppManifest(app);
   const fullName = useFullAppName(app);
   const [open, setOpen] = useState(false);
   if (!manifest || !hasSettings(manifest)) return null;

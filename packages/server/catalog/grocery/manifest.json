@@ -1,0 +1,56 @@
+{
+  "name": {
+    "en": "Grocery list",
+    "zh": "购物清单"
+  },
+  "description": {
+    "en": "A shared shopping list, grouped by aisle.",
+    "zh": "按货架分组的共享购物清单。"
+  },
+  "icon": "shopping-bag",
+  "color": "green",
+  "size": "tall",
+  "collections": {
+    "items": {
+      "fields": {
+        "name": {
+          "type": "text",
+          "required": true
+        },
+        "aisle": {
+          "type": "text"
+        },
+        "done": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "instructions": "One row per thing to buy: name (1 to 80 characters), aisle (one of the space's aisles, the setting 'aisles', or empty for other) and done (true once ticked). Adding a name that is on the list already, ignoring case, spaces and full-width letters, marks that row as needed again (done: false) instead of adding a second one.",
+  "settings": {
+    "aisles": {
+      "type": "list",
+      "scope": "space",
+      "default": [],
+      "maxItems": 20,
+      "maxLength": 40,
+      "label": {
+        "en": "Aisles",
+        "zh": "货架"
+      },
+      "help": {
+        "en": "Items are grouped in this order.",
+        "zh": "物品按此顺序分组。"
+      }
+    },
+    "hideDone": {
+      "type": "switch",
+      "scope": "user",
+      "default": false,
+      "label": {
+        "en": "Hide ticked items",
+        "zh": "隐藏已勾选的物品"
+      }
+    }
+  }
+}

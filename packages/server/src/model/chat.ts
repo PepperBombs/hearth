@@ -24,12 +24,13 @@ import {
   madeAppsIn,
   updateMadeRow,
   changeMadeApp,
+  nameOf,
   readMadeApp,
   restoreMadeVersion,
   type MadeApp,
   type MadeRequest,
 } from "../made/apps";
-import { MAX_HTML_BYTES, madeHtmlSchema, madeManifestSchema, type MadeManifest } from "../made/manifest";
+import { MAX_HTML_BYTES, checkMadeManifest, madeHtmlSchema, madeManifestSchema, type MadeManifest } from "../made/manifest";
 import { ModelCallError, openConversation, type ToolCall, type ToolOutcome, type ToolSpec } from "./providers";
 import { modelAccess } from "./settings";
 
@@ -64,7 +65,7 @@ function describeApps(apps: readonly { app: MadeApp; level: "view" | "edit" }[])
         .map(([name, collection]) => `    - ${name} { ${describeFields(collection.fields)} }`)
         .join("\n");
       return [
-        `- appId ${app.appId}, version ${app.version}: ${JSON.stringify(manifest.name)}${manifest.description ? ` (${JSON.stringify(manifest.description)})` : ""}, you may ${level === "edit" ? "read and change" : "only read"} its rows`,
+        `- appId ${app.appId}, version ${app.version}: ${JSON.stringify(manifest.name)}${manifest.description ? ` (${JSON.stringify(manifest.description)})` : ""}${app.template ? `, the built-in app "${app.template}"` : ""}, you may ${level === "edit" ? "read and change" : "only read"} its rows`,
         `  collections:\n${collections}`,
         manifest.instructions ? `  its maker's instructions: ${JSON.stringify(manifest.instructions)}` : null,
       ]
@@ -214,7 +215,7 @@ async function runTool(
     appId,
     by: "assistant",
   });
-  const appName = (appId: string) => registry.get(appId)?.manifest.name.en ?? appId;
+  const appName = (appId: string) => registry.get(appId)?.manifest.name[context.user.locale] ?? appId;
 
   try {
     switch (name) {
@@ -224,6 +225,8 @@ async function runTool(
         }
         const manifest = madeManifestSchema.safeParse(input.manifest);
         if (!manifest.success) return fail(`The manifest is not valid: ${z.prettifyError(manifest.error)}`);
+        const sdkProblem = checkMadeManifest(manifest.data);
+        if (sdkProblem !== null) return fail(`The manifest is not valid: ${sdkProblem}`);
         const html = madeHtmlSchema.safeParse(input.html);
         if (!html.success) return fail(`The page is not valid: ${z.prettifyError(html.error)}`);
         const { appId } = createMadeApp(db, registry, {
@@ -232,8 +235,8 @@ async function runTool(
           manifest: manifest.data,
           html: html.data,
         });
-        await emit({ type: "action", action: "app_created", appId, appName: manifest.data.name });
-        return { id: call.id, content: output({ appId, name: manifest.data.name }), isError: false };
+        await emit({ type: "action", action: "app_created", appId, appName: nameOf(manifest.data, context.user.locale) });
+        return { id: call.id, content: output({ appId, name: nameOf(manifest.data, context.user.locale) }), isError: false };
       }
       case "list_rows": {
         const { appId, collection, orderBy, desc, limit } = input as z.infer<typeof INPUTS.list_rows>;
@@ -279,7 +282,7 @@ async function runTool(
           html = parsed.data;
         }
         const changed = changeMadeApp(db, registry, { ...request(appId), ...(manifest ? { manifest } : {}), ...(html !== undefined ? { html } : {}), note });
-        await emit({ type: "action", action: "app_updated", appId, appName: changed.name, version: changed.version, previous: changed.previous });
+        await emit({ type: "action", action: "app_updated", appId, appName: nameOf(changed, context.user.locale), version: changed.version, previous: changed.previous });
         return { id: call.id, content: output({ version: changed.version, previous: changed.previous }), isError: false };
       }
       case "restore_app_version": {
@@ -289,7 +292,7 @@ async function runTool(
           type: "action",
           action: "app_restored",
           appId,
-          appName: restored.name,
+          appName: nameOf(restored, context.user.locale),
           version: restored.version,
           previous: restored.previous,
           restored: restored.restored,

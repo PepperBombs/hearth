@@ -12,8 +12,11 @@ import { MIGRATIONS } from "../db/migrations";
 import { createUserWithPersonalSpace } from "../db/people";
 import { CONTENT_SECURITY_POLICY } from "../http/security";
 import { as, testApp } from "../testing";
+import { processClock, standInResponse, type Outbound, type TransportRequest } from "../apps/fetch";
 import { changeMadeApp, createMadeApp, restoreMadeVersion, withMadeApps } from "./apps";
+import { loadCatalog } from "./catalog";
 import { SANDBOX_CONTENT_SECURITY_POLICY } from "./frame";
+import { moveLegacyInstalls } from "./legacy";
 import { madeManifestSchema } from "./manifest";
 
 const MANIFEST = madeManifestSchema.parse({
@@ -123,7 +126,7 @@ describe("an app made in Hearth", () => {
     expect(page.status).toBe(200);
     expect(page.headers.get("content-security-policy")).toBe(SANDBOX_CONTENT_SECURITY_POLICY);
     expect(SANDBOX_CONTENT_SECURITY_POLICY).toMatch(/default-src 'none'/);
-    expect(SANDBOX_CONTENT_SECURITY_POLICY).toMatch(/sandbox allow-scripts allow-forms$/);
+    expect(SANDBOX_CONTENT_SECURITY_POLICY).toMatch(/sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox$/);
     expect(SANDBOX_CONTENT_SECURITY_POLICY).toMatch(/form-action 'none'/);
     expect(page.headers.get("x-frame-options")).toBe("SAMEORIGIN");
     const html = await page.text();
@@ -229,9 +232,184 @@ describe("changing an app made in Hearth", () => {
       db.prepare("INSERT INTO made_apps (app_id, space_id, manifest, html, version, created_by, updated_by, created_at, updated_at) VALUES ('m-aaaaaaaaaa', ?, ?, '<p>x</p>', 3, ?, ?, ?, ?)").run(space, JSON.stringify(MANIFEST), sam.id, sam.id, at, at);
       db.prepare("INSERT INTO space_apps (space_id, app_id, created_by, created_at) VALUES (?, 'm-aaaaaaaaaa', ?, ?)").run(space, sam.id, at);
     })();
-    expect(migrate(db).map((migration) => migration.id)).toEqual([6]);
+    expect(migrate(db).map((migration) => migration.id)).toEqual([6, 7]);
     expect(db.prepare("SELECT app_id AS appId, version, html, created_by AS by FROM made_app_versions").all()).toEqual([
       { appId: "m-aaaaaaaaaa", version: 3, html: "<p>x</p>", by: sam.id },
     ]);
   });
 });
+
+describe("what the platform offers a made app's page", () => {
+  const FEED = madeManifestSchema.parse({
+    name: { en: "Feed", zh: "订阅" },
+    collections: { posts: { fields: { title: { type: "text", required: true }, tags: { type: "list" }, set: { type: "text" } } } },
+    network: ["api.example.com"],
+    settings: {
+      topics: { type: "list", scope: "space", default: [], maxItems: 5, maxLength: 20, label: { en: "Topics", zh: "主题" } },
+      compact: { type: "switch", scope: "user", default: false, label: "Compact" },
+    },
+  });
+
+  function feed() {
+    const asked: TransportRequest[] = [];
+    const outbound: Outbound = {
+      transport: async (request) => {
+        asked.push(request);
+        return standInResponse({ body: { items: [{ id: 1 }] } });
+      },
+      pace: null,
+      clock: processClock,
+    };
+    const people = family();
+    const { app } = testApp({ db: people.db, outbound });
+    const registry = withMadeApps(people.db, createRegistry([]));
+    const appId = createMadeApp(people.db, registry, { userId: people.sam.id, spaceId: "family", manifest: FEED, html: HTML }).appId;
+    const base = `/api/spaces/family/apps/${appId}`;
+    const call = (email: string, path: string, body?: unknown, method = body === undefined ? "GET" : "POST") =>
+      app.request(`${base}${path}`, {
+        method,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        headers: as(email, body === undefined ? {} : { "Content-Type": "application/json" }),
+      });
+    return { ...people, appId, asked, call };
+  }
+
+  it("tells its page where it is drawn, who is looking and who is in the space", async () => {
+    const { sam, lin, call } = feed();
+    const html = await (await call(SAM, "/frame?view=page&locale=zh")).text();
+    const attribute = /data-info="([^"]*)"/.exec(html)?.[1] ?? "";
+    const info: unknown = JSON.parse(attribute.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"));
+    expect(info).toMatchObject({
+      view: "page",
+      locale: "zh",
+      access: "edit",
+      user: { id: sam.id },
+      space: { kind: "group", name: "Family", members: expect.arrayContaining([{ id: lin.id, name: expect.any(String) }]) },
+    });
+  });
+
+  it("keeps lists of words in a row, and replaces a set of rows at once, all or nothing", async () => {
+    const { call } = feed();
+    expect((await call(SAM, "/rows/posts", { data: { title: "Old", tags: ["a"], set: "x" } })).status).toBe(201);
+    expect((await call(SAM, "/rows/posts", { data: { title: "Kept", set: "y" } })).status).toBe(201);
+    expect((await call(SAM, "/rows/posts", { data: { title: "Bad", tags: "a" } })).status).toBe(400);
+
+    const replaced = await call(SAM, "/rows/posts/replace", { where: { set: "x" }, rows: [{ title: "New 1", set: "x", tags: [] }, { title: "New 2", set: "x" }] });
+    expect(await replaced.json()).toEqual({ removed: 1, added: 2 });
+    // One row that does not fit, and nothing changes.
+    expect((await call(SAM, "/rows/posts/replace", { where: { set: "x" }, rows: [{ title: "New 3", set: "x" }, { set: "x" }] })).status).toBe(400);
+    const titles = ((await (await call(SAM, "/rows/posts")).json()) as { rows: { title: string }[] }).rows.map((row) => row.title);
+    expect(titles.sort()).toEqual(["Kept", "New 1", "New 2"]);
+  });
+
+  it("has settings like any app's, in both languages, checked against what it declares", async () => {
+    const { db, sam, lin, appId, call } = feed();
+    grant(db, "family", appId, lin.id, "view", sam.id);
+    expect(await (await call(SAM, "/settings", { space: { topics: ["rust"] } }, "PATCH")).json()).toEqual({ space: { topics: ["rust"] }, user: { compact: false } });
+    expect((await call(SAM, "/settings", { space: { topics: ["x".repeat(21)] } }, "PATCH")).status).toBe(400);
+    // Lin, who may only look, keeps her own switch and cannot change the space's.
+    expect(await (await call(LIN, "/settings", { user: { compact: true } }, "PATCH")).json()).toEqual({ space: { topics: ["rust"] }, user: { compact: true } });
+    expect((await call(LIN, "/settings", { space: { topics: [] } }, "PATCH")).status).toBe(403);
+  });
+
+  it("fetches through the server, from the hosts it names alone, for whoever may see it", async () => {
+    const { db, sam, lin, appId, asked, call } = feed();
+    const answer = await call(SAM, "/fetch", { url: "https://api.example.com/search?q=hearth", headers: { accept: "application/json" } });
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toMatchObject({ ok: true, status: 200, text: JSON.stringify({ items: [{ id: 1 }] }) });
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ url: "https://api.example.com/search?q=hearth", headers: { accept: "application/json", "user-agent": "Hearth" } });
+    expect(asked[0]!.headers).not.toHaveProperty("cookie");
+
+    const elsewhere = await call(SAM, "/fetch", { url: "https://example.com/" });
+    expect(elsewhere.status).toBe(502);
+    expect(((await elsewhere.json()) as { error: { code: string } }).error.code).toBe("refused");
+    expect((await call(LIN, "/fetch", { url: "https://api.example.com/" })).status).toBe(404);
+    grant(db, "family", appId, lin.id, "view", sam.id);
+    expect((await call(LIN, "/fetch", { url: "https://api.example.com/" })).status).toBe(200);
+    expect(asked).toHaveLength(2);
+  });
+});
+
+describe("the built-in apps", () => {
+  const catalog = loadCatalog();
+  const AT = "2026-01-05T00:00:00.000Z";
+
+  /** The family's grocery list as the build's app kept it: a row, settings, Lin's access and pin, its job. */
+  function withOldGrocery() {
+    const people = world();
+    const { db, sam, lin } = people;
+    db.transaction(() => {
+      db.prepare("INSERT INTO space_apps (space_id, app_id, member_access, created_by, created_at) VALUES ('family', 'grocery', 'view', ?, ?)").run(sam.id, AT);
+      db.prepare("INSERT INTO app_rows (id, space_id, app_id, collection, data, created_by, updated_by, created_at, updated_at) VALUES ('r-milk', 'family', 'grocery', 'items', ?, ?, ?, ?, ?)")
+        .run(JSON.stringify({ name: "Milk", aisle: "Dairy", done: false }), lin.id, lin.id, AT, AT);
+      const setting = db.prepare("INSERT INTO app_settings (space_id, app_id, user_id, data, created_by, updated_by, updated_at) VALUES ('family', 'grocery', ?, ?, ?, ?, ?)");
+      setting.run(null, JSON.stringify({ aisles: ["Dairy", "Fruit"] }), sam.id, sam.id, AT);
+      setting.run(lin.id, JSON.stringify({ hideDone: true }), lin.id, lin.id, AT);
+      db.prepare("INSERT INTO app_access (space_id, app_id, user_id, level, created_by, updated_at) VALUES ('family', 'grocery', ?, 'edit', ?, ?)").run(lin.id, sam.id, AT);
+      db.prepare("INSERT INTO app_prefs (space_id, app_id, user_id, enabled, pinned) VALUES ('family', 'grocery', ?, 1, 1)").run(lin.id);
+      db.prepare("INSERT INTO app_jobs (space_id, app_id, job, next_run_at) VALUES ('family', 'grocery', 'refresh', ?)").run(AT);
+    })();
+    return people;
+  }
+
+  it("are valid made apps with names in both languages", () => {
+    expect(catalog.map((template) => template.id)).toEqual(["grocery", "ideas", "trending"]);
+    for (const template of catalog) expect(template.manifest.name, template.id).toEqual({ en: expect.any(String), zh: expect.any(String) });
+  });
+
+  it("take each install of the build's app of the same name, in place, its rows, settings, access and pins kept", async () => {
+    const { db, call } = withOldGrocery();
+    const registry = withMadeApps(db, createRegistry([]));
+    const { moved, failed } = moveLegacyInstalls(db, registry, catalog);
+    expect(failed).toEqual([]);
+    expect(moved).toEqual([{ spaceId: "family", from: "grocery", to: expect.stringMatching(/^m-[a-z0-9]{10}$/) }]);
+    const base = `/api/spaces/family/apps/${moved[0]!.to}`;
+
+    const rows = (await (await call(LIN, `${base}/rows/items`)).json()) as { rows: unknown[] };
+    expect(rows.rows).toEqual([expect.objectContaining({ id: "r-milk", name: "Milk", aisle: "Dairy", done: false })]);
+    expect(await (await call(LIN, `${base}/settings`)).json()).toEqual({ space: { aisles: ["Dairy", "Fruit"] }, user: { hideDone: true } });
+    // Lin may still change the list, as she could before.
+    expect((await call(LIN, `${base}/rows/items`, { method: "POST", body: JSON.stringify({ data: { name: "Eggs", aisle: "Dairy", done: false } }) })).status).toBe(201);
+    const session = (await (await call(LIN, "/api/session")).json()) as { apps: Record<string, unknown>[] };
+    expect(session.apps.find((app) => app.id === moved[0]!.to)).toMatchObject({ made: true, template: "grocery", pinned: true, name: { en: "Grocery list", zh: "购物清单" } });
+
+    expect(db.prepare("SELECT count(*) AS n FROM space_apps WHERE app_id = 'grocery'").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT count(*) AS n FROM app_jobs").get()).toEqual({ n: 0 });
+    expect(moveLegacyInstalls(db, registry, catalog)).toEqual({ moved: [], failed: [] });
+  });
+
+  it("leave an install that holds a row the built-in app would not take as it was, and say why", () => {
+    const { db } = withOldGrocery();
+    db.prepare("UPDATE app_rows SET data = ? WHERE id = 'r-milk'").run(JSON.stringify({ name: "Milk", aisle: "Dairy", done: false, note: "2%" }));
+    const { moved, failed } = moveLegacyInstalls(db, withMadeApps(db, createRegistry([])), catalog);
+    expect(moved).toEqual([]);
+    expect(failed).toEqual([{ spaceId: "family", from: "grocery", reason: expect.stringMatching(/1 row\(s\) of "grocery" do not fit .*note/) }]);
+    expect(db.prepare("SELECT app_id AS appId FROM space_apps").all()).toEqual([{ appId: "grocery" }]);
+    expect(db.prepare("SELECT count(*) AS n FROM app_rows WHERE app_id = 'grocery'").get()).toEqual({ n: 1 });
+    expect(db.prepare("SELECT count(*) AS n FROM app_jobs WHERE app_id = 'grocery'").get()).toEqual({ n: 1 });
+    expect(madeRows(db)).toBe(0);
+  });
+
+  it("are added from the Apps page as made apps of their own, once per space, and a removed one comes back with its data", async () => {
+    const { db, call } = world();
+    const listed = (await (await call(LIN, "/api/catalog")).json()) as { id: string; network: string[] }[];
+    expect(listed.map((app) => [app.id, app.network])).toEqual([["grocery", []], ["ideas", []], ["trending", ["api.github.com"]]]);
+
+    expect((await call(LIN, "/api/spaces/family/catalog/ideas", { method: "POST", body: "{}" })).status).toBe(403);
+    const added = await call(SAM, "/api/spaces/family/catalog/ideas", { method: "POST", body: JSON.stringify({ memberAccess: "edit" }) });
+    expect(added.status).toBe(201);
+    const { appId } = (await added.json()) as { appId: string };
+    expect((await call(LIN, `/api/spaces/family/apps/${appId}/rows/ideas`, { method: "POST", body: JSON.stringify({ data: { text: "Hi #idea", tags: ["idea"] } }) })).status).toBe(201);
+    expect((await call(SAM, "/api/spaces/family/catalog/ideas", { method: "POST", body: "{}" })).status).toBe(409);
+    expect((await call(SAM, "/api/spaces/family/catalog/nothing", { method: "POST", body: "{}" })).status).toBe(404);
+
+    expect((await call(SAM, `/api/spaces/family/apps/${appId}`, { method: "DELETE" })).status).toBe(204);
+    const back = await call(SAM, "/api/spaces/family/catalog/ideas", { method: "POST", body: JSON.stringify({ memberAccess: "view" }) });
+    expect(await back.json()).toEqual({ appId, restored: true });
+    const rows = (await (await call(LIN, `/api/spaces/family/apps/${appId}/rows/ideas`)).json()) as { rows: { text: string }[] };
+    expect(rows.rows.map((row) => row.text)).toEqual(["Hi #idea"]);
+    expect(madeRows(db)).toBe(1);
+  });
+});
+

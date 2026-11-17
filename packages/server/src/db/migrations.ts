@@ -307,4 +307,14 @@ export const MIGRATIONS: readonly Migration[] = [
         SELECT app_id, version, manifest, html, '', updated_by, updated_at FROM made_apps;
     `,
   },
+  {
+    // The apps shipped with Hearth, which every install of the build's own
+    // apps of the same name moves to (docs/platform.md, "Built-in apps").
+    id: 7,
+    name: "made-app-templates",
+    sql: `
+      -- The built-in app a made app was added from (src/made/catalog.ts), or NULL for one a model made.
+      ALTER TABLE made_apps ADD COLUMN template TEXT;
+    `,
+  },
 ];

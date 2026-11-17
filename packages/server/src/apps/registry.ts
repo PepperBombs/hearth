@@ -42,6 +42,8 @@ export type RegisteredApp = {
   made?: true;
   /** A made app's version in use, which changes with every change to it. */
   version?: number;
+  /** The built-in app a made app was added from, when it was. */
+  template?: string;
 };
 
 export type Registry = {

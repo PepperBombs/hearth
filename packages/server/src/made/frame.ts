@@ -20,7 +20,10 @@ import type { MadeManifest } from "./manifest";
  * the iframe. `allow-forms` only lets a form's submit event fire, which a
  * page handles itself: `form-action 'none'` still stops any submission.
  * Without it browsers drop the event, and every form of a page is dead.
- * Dialogs (alert, confirm, prompt) stay blocked.
+ * `allow-popups` with `allow-popups-to-escape-sandbox` lets a link open a
+ * site in a new tab, as itself (GitHub Trending opens repositories); a page
+ * can send nothing more that way than by navigating its own frame. Dialogs
+ * (alert, confirm, prompt) stay blocked.
  */
 export const SANDBOX_CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -32,11 +35,25 @@ export const SANDBOX_CONTENT_SECURITY_POLICY = [
   "form-action 'none'",
   "base-uri 'none'",
   "frame-ancestors 'self'",
-  "sandbox allow-scripts allow-forms",
+  "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox",
 ].join("; ");
 
 export const THEMES = ["light", "dark"] as const;
 export type FrameTheme = (typeof THEMES)[number];
+
+/** Where the page is drawn: in its card on the dashboard, or on a page of its own (`hearth.view`). */
+export type FrameView = "card" | "page";
+
+/**
+ * Who is looking, and the space the app is in with its members' names
+ * (`hearth.user`, `hearth.space`), as the build's apps had them: a page
+ * says who wrote a row from its `createdBy`. The people of the space see
+ * each other's names in Hearth already.
+ */
+export type FramePeople = {
+  user: { id: string; name: string };
+  space: { kind: "personal" | "group"; name: string; members: { id: string; name: string }[] };
+};
 
 /** The colours of Hearth's look ("A · Clean"), as packages/web/src/styles/tokens.css has them. */
 const COLOURS: Record<FrameTheme, Record<string, string>> = {
@@ -115,10 +132,18 @@ const BRIDGE = `(() => {
     app: info.app,
     locale: info.locale,
     theme: info.theme,
+    access: info.access,
+    view: info.view,
+    user: info.user,
+    space: info.space,
     list: (collection, options) => call("list", { collection, options: options || {} }),
     add: (collection, data) => call("add", { collection, data }),
     update: (collection, id, data) => call("update", { collection, id, data }),
     remove: (collection, id) => call("remove", { collection, id }),
+    replace: (collection, where, rows) => call("replace", { collection, where: where || {}, rows }),
+    settings: () => call("settings", {}),
+    saveSettings: (patch) => call("saveSettings", { patch }),
+    fetch: (url, options) => call("fetch", { url, headers: (options && options.headers) || {} }),
     onChange: (listener) => { listeners.push(listener); },
   });
   // The height of what the page holds: the body's, with its margins. The
@@ -145,9 +170,13 @@ const attributeJson = (value: unknown) =>
 
 export function frameDocument(
   app: { manifest: MadeManifest; html: string },
-  options: { theme: FrameTheme; locale: Locale },
+  options: { theme: FrameTheme; locale: Locale; access: "view" | "edit"; view: FrameView; people?: FramePeople },
 ): string {
   const info = {
+    access: options.access,
+    view: options.view,
+    user: options.people?.user ?? null,
+    space: options.people?.space ?? { kind: "personal", name: "", members: [] },
     app: {
       name: app.manifest.name,
       collections: Object.fromEntries(

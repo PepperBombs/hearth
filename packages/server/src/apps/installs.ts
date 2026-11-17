@@ -164,7 +164,14 @@ export function listAppsForUser(db: Db, registry: Registry, userId: string): App
       enabled: row.enabled === 1,
       pinned: row.pinned === 1,
       hasPage: app.hasPage,
-      ...(app.made ? { made: true, version: app.version ?? 1 } : {}),
+      ...(app.made
+        ? {
+            made: true,
+            version: app.version ?? 1,
+            ...(app.template ? { template: app.template } : {}),
+            ...(manifest.settings ? { settings: manifest.settings } : {}),
+          }
+        : {}),
     });
   }
   return apps;
@@ -334,6 +341,7 @@ export function listSpaceApps(db: Db, registry: Registry, request: { userId: str
             exceptions.filter((exception) => exception.appId === install.id).map((exception) => [exception.userId, exception.level]),
           ),
           assistant: install.assistant === 1,
+          ...((template) => (template ? { template } : {}))(registry.get(install.id)?.template),
         }),
       );
       return { apps, members: listMemberDetails(db, spaceId), invitations: listInvitations(db, spaceId) };

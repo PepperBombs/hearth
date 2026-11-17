@@ -1,0 +1,33 @@
+{
+  "name": {
+    "en": "Ideas",
+    "zh": "想法"
+  },
+  "description": {
+    "en": "Write an idea down the moment it comes: a timeline with #tags, pins, search and an archive.",
+    "zh": "想到就记：一条想法时间线，支持 #标签、置顶、搜索和归档。"
+  },
+  "icon": "star",
+  "color": "amber",
+  "size": "tall",
+  "collections": {
+    "ideas": {
+      "fields": {
+        "text": {
+          "type": "text",
+          "required": true
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "list"
+        }
+      }
+    }
+  },
+  "instructions": "One row per idea: text (plain, line breaks kept, 1 to 4000 characters, no spaces around it), pinned, archived (put away: kept, out of the timeline) and tags. A tag is '#' and 1 to 30 letters, digits, '_' or '-' in any script, not inside a web address; tags holds the text's tags folded (NFKC, lower case), each once, in the order they first appear. Write tags with the text whenever the text changes. Archiving unpins. At most 5000 ideas."
+}

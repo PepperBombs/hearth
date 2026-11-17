@@ -12,3 +12,7 @@ Notes for whoever changes this part, people and agents alike. They are read when
 - A dev server without `HEARTH_SECRET` makes one up per process: after a restart every saved key is unreadable and the chat answers `no_key` until it is entered again.
 - The chat's history is plain text only, cut to 40 kB in the browser: `/api/*` takes bodies of up to 64 kB.
 - A change to a made app is checked against every stored row (`rowsNotFitting` in `store.ts`), going back to a version too: a strict schema refuses a row with a field the app no longer has, so removing a field that holds data is refused rather than hiding the data.
+- A built-in app's rows must fit its manifest exactly, as the build's app stored them (`packages/server/catalog/*/manifest.json`): change a field there and the move of the build's installs refuses every one that holds such a row.
+- A made field that is `required` only has to be there: an empty text passes. A page that needs text checks it itself.
+- `hearth.fetch` shares the jobs' pace (one request to a host every 6.5 s): a page that makes several waits for each in turn, and shows its progress.
+- A page can be tried without a server: render it with `frameDocument` in an iframe whose parent answers the bridge from memory, checking rows with `collectionSchemas`. The built-in pages were checked that way.

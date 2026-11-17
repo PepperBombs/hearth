@@ -7,6 +7,7 @@ import {
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
+import { outboundFor, type Outbound } from "./apps/fetch";
 import { listAppsForUser } from "./apps/installs";
 import { requestGapFor } from "./apps/jobs";
 import { createRegistry, type BundledApp } from "./apps/registry";
@@ -19,6 +20,7 @@ import type { Config } from "./config";
 import type { Db } from "./db/database";
 import { listSpacesForUser, updatePreferences } from "./db/people";
 import { withMadeApps } from "./made/apps";
+import { loadCatalog, type Template } from "./made/catalog";
 import { registerMadeRoutes } from "./made/routes";
 import { registerModelRoutes } from "./model/routes";
 import { groupRights } from "./groups/policy";
@@ -55,6 +57,14 @@ export type AppOptions = {
   wakeJobs?: () => void;
   /** For tests: the fetch every request to a person's model goes through (src/model/providers.ts). */
   modelFetch?: typeof fetch;
+  /**
+   * The server's way out for apps' fetches (src/apps/fetch.ts): startServer
+   * gives the scheduler's, so that one pace holds every request to a host.
+   * Defaults to one made from the configuration.
+   */
+  outbound?: Outbound;
+  /** The apps shipped with Hearth (src/made/catalog.ts). Defaults to those of packages/server/catalog. */
+  catalog?: readonly Template[];
 };
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -145,7 +155,13 @@ export function createApp(options: AppOptions): Hono<Env> {
     wakeJobs: options.wakeJobs ?? (() => {}),
     requestGapMs: requestGapFor(config),
   });
-  registerMadeRoutes(app, { db, registry, requireMember });
+  registerMadeRoutes(app, {
+    db,
+    registry,
+    requireMember,
+    outbound: options.outbound ?? outboundFor(config),
+    catalog: options.catalog ?? loadCatalog(),
+  });
   registerModelRoutes(app, { db, registry, config, requireMember, logError, ...(options.modelFetch ? { fetch: options.modelFetch } : {}) });
 
   app.all("/api", (c) => apiError(c, 404, "not_found", NOTHING_HERE));
