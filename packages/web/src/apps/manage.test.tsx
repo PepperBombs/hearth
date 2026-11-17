@@ -272,6 +272,8 @@ async function spaceCard(name: string): Promise<HTMLElement> {
 const dialog = async (name: string) => screen.findByRole("dialog", { name });
 const pressed = (element: HTMLElement) => element.getAttribute("aria-pressed") === "true";
 const switchedOn = (element: HTMLElement) => element.getAttribute("aria-checked") === "true";
+/** What a failure says: an alert, which a screen reader says as it comes onto the page. */
+const alertText = (scope: HTMLElement) => within(scope).getByRole("alert").textContent;
 
 afterEach(() => {
   cleanup();
@@ -364,7 +366,7 @@ describe("the Apps page", () => {
 
     const personal = await spaceCard("Personal");
     fireEvent.click(within(personal).getByRole("switch", { name: "Show Feed" }));
-    expect(await within(personal).findByText("That change could not be saved. Try again.")).toBeTruthy();
+    await waitFor(() => expect(alertText(personal)).toBe("That change could not be saved. Try again."));
     await waitFor(() => expect(switchedOn(within(personal).getByRole("switch", { name: "Show Feed" }))).toBe(true));
   });
 
@@ -515,9 +517,9 @@ describe("the Apps page", () => {
     const sessions = server.count("GET /api/session");
     fireEvent.click(within(add).getByRole("button", { name: "Add" }));
 
-    expect(
-      await within(add).findByText("The app could not be added: it may have been added here meanwhile. This page now shows what the space has."),
-    ).toBeTruthy();
+    await waitFor(() =>
+      expect(alertText(add)).toBe("The app could not be added: it may have been added here meanwhile. This page now shows what the space has."),
+    );
     expect(server.count("GET /api/session")).toBe(sessions + 1);
     // The family has the checklist now, so it is no longer offered, and the next app is chosen instead.
     expect(within(add).queryByRole("radio", { name: /Checklist/ })).toBeNull();
@@ -841,16 +843,16 @@ describe("moving an app to another space", () => {
     const move = await dialog("Move Feed to another space");
     const sessions = server.count("GET /api/session");
     fireEvent.click(within(move).getByRole("button", { name: "Move" }));
-    expect(
-      await within(move).findByText("The app cannot be moved there. That space may have it already, or have kept its data from before."),
-    ).toBeTruthy();
+    await waitFor(() =>
+      expect(alertText(move)).toBe("The app cannot be moved there. That space may have it already, or have kept its data from before."),
+    );
     expect(server.count("GET /api/session")).toBe(sessions + 1);
     expect(screen.getByRole("dialog", { name: "Move Feed to another space" })).toBeTruthy();
 
     // Anything else is worth another try.
     server.fail = { ending: `POST /api/spaces/${PERSONAL}/apps/feed/move`, with: { status: 500, code: "internal" } };
     fireEvent.click(within(move).getByRole("button", { name: "Move" }));
-    expect(await within(move).findByText("The app could not be moved. Try again.")).toBeTruthy();
+    await waitFor(() => expect(alertText(move)).toBe("The app could not be moved. Try again."));
     fireEvent.click(within(move).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(within(await spaceCard("Personal")).getByRole("switch", { name: "Show Feed" })).toBeTruthy();

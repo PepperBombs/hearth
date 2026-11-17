@@ -234,9 +234,15 @@ function ManagedRow({ app, space, onMoved }: { app: AppSummary; space: Space; on
           onCheckedChange={(enabled) => prefs.mutate({ enabled })}
         />
       </span>
-      {off || prefs.isError ? (
-        <p role="status" className={cx("basis-full text-xs", prefs.isError ? "text-down" : "text-fg-3")}>
-          {prefs.isError ? t("apps.changeFailed") : t("apps.off")}
+      {/* The failure is an element of its own, not the note with its role changed: an alert is said as it arrives. */}
+      {prefs.isError ? (
+        <p role="alert" className="basis-full text-xs text-down">
+          {t("apps.changeFailed")}
+        </p>
+      ) : null}
+      {off && !prefs.isError ? (
+        <p role="status" className="basis-full text-xs text-fg-3">
+          {t("apps.off")}
         </p>
       ) : null}
       <MoveDialog app={app} from={space} targets={targets} open={moving} onClose={() => setMoving(false)} onMoved={onMoved} />
@@ -356,7 +362,7 @@ function MoveForm({ app, from, targets, onClose, onMoved, title }: MoveDialogPro
         <p className="text-fg-2">{t("apps.moveBody")}</p>
         {from.kind === "group" ? <p className="text-fg-2">{t("apps.moveOthers")}</p> : null}
         {failure ? (
-          <p role="status" className="text-xs text-down">
+          <p role="alert" className="text-xs text-down">
             {t(refused ? "apps.moveRefused" : "apps.moveFailed")}
           </p>
         ) : null}
@@ -392,7 +398,7 @@ function RemoveDialog({ app, open, onClose }: { app: AppSummary; open: boolean; 
         <h2 className="text-md font-semibold">{title}</h2>
         <p className="text-fg-2">{t("apps.removeBody")}</p>
         {problem ? (
-          <p role="status" className="text-xs text-down">
+          <p role="alert" className="text-xs text-down">
             {t(problem)}
           </p>
         ) : null}
@@ -625,7 +631,7 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
           </div>
         ) : null}
         {problem ? (
-          <p role="status" className="text-xs text-down">
+          <p role="alert" className="text-xs text-down">
             {t(problem)}
           </p>
         ) : null}

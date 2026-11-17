@@ -36,6 +36,20 @@ Notes for whoever changes this part, people and agents alike. They are read when
   that state while rendering once the page no longer shows what the dialog
   is about, as `People` and `AddApp` do; otherwise it opens by itself when
   that comes back.
+- The access table and the Assistant card's boxes show a choice before the
+  server answers, and when it fails put back at once what that choice set
+  and nothing else (`undoing` in `groups/access-table.tsx`): a dropped
+  connection fails the reading again too, and putting back the whole list
+  as it was would undo, or bring back, another choice on its way. Whether
+  a choice failed is kept in state: the mutation knows only of the latest.
+- A failure is said in a `role="alert"` that comes onto the page with its
+  text, as in the groups' cards, the access table, the Apps page and their
+  dialogs, or in a polite region that was on the page before it (the
+  Assistant card's `Problem`, `ChangeFailed` in `app-view.tsx`, the
+  settings dialog's footer). Never in a `role="status"` that arrives
+  holding its text: screen readers often say nothing of it. A failure that
+  takes another message's place is an element of its own, not the other
+  with its role changed. Tests find it by its role (`alertText`).
 - For an owner, the dialog that adds an app reads the owners' list
   (`useSpaceApps`, also for a personal space) and adds nothing until it has
   it, so that an app the space removed is shown as coming back with its

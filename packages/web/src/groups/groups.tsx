@@ -94,7 +94,7 @@ function CreateGroupForm({ onClose, onCreated }: { onClose: () => void; onCreate
           )}
         </Field>
         {failure ? (
-          <p role="status" className="text-xs text-down">
+          <p role="alert" className="text-xs text-down">
             {failure === "forbidden" ? t("groups.createRefused") : t("groups.createFailed")}
           </p>
         ) : null}
@@ -245,7 +245,7 @@ function LeaveGroup({ space }: { space: Space }) {
           <h2 className="text-md font-semibold">{title}</h2>
           <p className="text-fg-2">{t("groups.leaveBody")}</p>
           {problem ? (
-            <p role="status" className="text-xs text-down">
+            <p role="alert" className="text-xs text-down">
               {problem}
             </p>
           ) : null}

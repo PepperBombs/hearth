@@ -5,13 +5,15 @@
  * Owners have no column: they can always use every app.
  *
  * A choice is saved at once (PUT .../apps/:appId/access) and shown before
- * the server answers; whatever it answers, the owners' list is read again.
- * This only says what was decided. What a person may do is still worked out
- * on the server, by `resolveInstall`, from these same decisions.
+ * the server answers. One that was not saved is put back at once, since a
+ * dropped connection fails the reading again too; whatever the server
+ * answers, the owners' list is read again. This only says what was
+ * decided. What a person may do is still worked out on the server, by
+ * `resolveInstall`, from these same decisions.
  */
 import type { AppAccessRequest, MemberAccess, Space, SpaceApps, SpaceMemberDetail } from "@hearth/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useId } from "react";
+import { useId, useState } from "react";
 import { useBundledApps } from "../apps/bundled";
 import { AppIcon } from "../components/app-icon";
 import { LinkedText } from "../components/linked-text";
@@ -52,6 +54,22 @@ export function applied(list: SpaceApps, { appId, body }: Change): SpaceApps {
   };
 }
 
+/**
+ * The change that undoes a change which was not saved: what it sets, as the list holds it before it is
+ * applied. It names nothing else, so that another choice on its way keeps what it shows.
+ */
+export function undoing(list: SpaceApps, { appId, body }: Change): Change | undefined {
+  const app = list.apps.find((candidate) => candidate.id === appId);
+  if (!app) return undefined;
+  const back: AppAccessRequest = {};
+  if (body.memberAccess !== undefined) back.memberAccess = app.memberAccess;
+  if (body.members !== undefined) {
+    back.members = Object.fromEntries(Object.keys(body.members).map((memberId) => [memberId, app.members[memberId] ?? null]));
+  }
+  if (body.assistant !== undefined) back.assistant = app.assistant;
+  return { appId, body: back };
+}
+
 /** The name and icon of an app as this browser knows it: from the session, else the build, else its ID. */
 export function useAppLabel(): (appId: string) => { name: string; icon: string; color: string } {
   const session = useSession();
@@ -72,12 +90,24 @@ export function AccessTable({ space, list }: { space: Space; list: SpaceApps }) 
   const headingId = useId();
   const label = useAppLabel();
   const key = spaceAppsKey(space.id);
+  // Kept here, not read off the mutation: with two choices on their way it only knows of the later one.
+  const [failed, setFailed] = useState(false);
 
   const change = useMutation({
     mutationFn: ({ appId, body }: Change) => setAppAccess(space.id, appId, body),
     onMutate: async (variables) => {
+      setFailed(false);
       await client.cancelQueries({ queryKey: key });
+      const shown = client.getQueryData<SpaceApps>(key);
       client.setQueryData<SpaceApps>(key, (current) => (current ? applied(current, variables) : current));
+      return { undo: shown ? undoing(shown, variables) : undefined };
+    },
+    // What was shown ahead of the answer goes back at once, as in the Assistant card: without a connection the
+    // list cannot be read again either, and the table would go on showing a choice that was not saved.
+    onError: (_error, _variables, context) => {
+      setFailed(true);
+      const undo = context?.undo;
+      if (undo) client.setQueryData<SpaceApps>(key, (current) => (current ? applied(current, undo) : current));
     },
     // Whether it was saved or not, the server says what is.
     onSettled: () =>
@@ -172,8 +202,8 @@ export function AccessTable({ space, list }: { space: Space; list: SpaceApps }) 
           </table>
         </div>
       )}
-      {change.isError ? (
-        <p role="status" className="text-xs text-down">
+      {failed ? (
+        <p role="alert" className="text-xs text-down">
           {t("groups.accessFailed")}
         </p>
       ) : null}

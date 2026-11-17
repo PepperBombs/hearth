@@ -68,6 +68,8 @@ class FakeServer {
   fail: { ending: string; with: Failure } | null = null;
   /** Answer requests whose "METHOD path" ends like this only after a while, as a slow network would. */
   slow: { ending: string; ms: number } | null = null;
+  /** While true, nothing reaches the server: every request fails as a dropped connection does. */
+  offline = false;
   readonly changes: string[] = [];
 
   person(id: string): Person {
@@ -134,6 +136,7 @@ class FakeServer {
   }
 
   fetch = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
+    if (this.offline) throw new TypeError("Failed to fetch");
     const path = String(input);
     const method = init.method ?? "GET";
     const body = (typeof init.body === "string" ? JSON.parse(init.body) : undefined) as Record<string, unknown> | undefined;
@@ -223,15 +226,17 @@ class FakeServer {
   };
 }
 
-function start(server: FakeServer) {
+function start(server: FakeServer): QueryClient {
   vi.stubGlobal("fetch", server.fetch);
+  const client = new QueryClient();
   render(
     <MemoryRouter initialEntries={["/settings"]}>
       <BundledAppsProvider apps={BUNDLED}>
-        <App queryClient={new QueryClient()} />
+        <App queryClient={client} />
       </BundledAppsProvider>
     </MemoryRouter>,
   );
+  return client;
 }
 
 const main = () => screen.getByRole("main");
@@ -247,6 +252,8 @@ const peopleIn = (group: HTMLElement) =>
     .getAllByRole("listitem")
     .map((row) => row.textContent);
 const select = (scope: HTMLElement, name: string) => within(scope).getByRole("combobox", { name }) as HTMLSelectElement;
+/** What a failure says: an alert, which a screen reader says as it comes onto the page. */
+const alertText = (scope: HTMLElement) => within(scope).getByRole("alert").textContent;
 
 afterEach(() => {
   cleanup();
@@ -343,17 +350,17 @@ describe("groups in Settings", () => {
 
     fireEvent.change(email, { target: { value: "lin@example.com" } });
     fireEvent.click(submit);
-    expect(await within(add).findByText("This person is already in the group, or already invited.")).toBeTruthy();
+    await waitFor(() => expect(alertText(add)).toBe("This person is already in the group, or already invited."));
 
     fireEvent.change(email, { target: { value: "pat@example.com" } });
     fireEvent.click(submit);
-    expect(
-      await within(add).findByText("Nobody uses this server with this address yet, and only the server's owner can invite new people."),
-    ).toBeTruthy();
+    await waitFor(() =>
+      expect(alertText(add)).toBe("Nobody uses this server with this address yet, and only the server's owner can invite new people."),
+    );
 
     fireEvent.change(email, { target: { value: "pat" } });
     fireEvent.click(submit);
-    expect(await within(add).findByText("Enter an email address, for example lin@example.com.")).toBeTruthy();
+    await waitFor(() => expect(alertText(add)).toBe("Enter an email address, for example lin@example.com."));
     expect(email.getAttribute("aria-invalid")).toBe("true");
   });
 
@@ -457,13 +464,13 @@ describe("groups in Settings", () => {
     // Leaving is at the foot of the card, not here.
     expect(within(manage).queryByRole("button", { name: "Remove from the group" })).toBeNull();
     fireEvent.click(within(manage).getByRole("button", { name: "Member" }));
-    expect(await within(manage).findByText("A group must keep an owner. Make someone else an owner first.")).toBeTruthy();
+    await waitFor(() => expect(alertText(manage)).toBe("A group must keep an owner. Make someone else an owner first."));
     fireEvent.click(within(manage).getByRole("button", { name: "Close" }));
 
     fireEvent.click(within(family).getByRole("button", { name: "Leave the group" }));
     const leave = await dialog("Leave Family?");
     fireEvent.click(within(leave).getByRole("button", { name: "Leave" }));
-    expect(await within(leave).findByText("A group must keep an owner. Make someone else an owner first.")).toBeTruthy();
+    await waitFor(() => expect(alertText(leave)).toBe("A group must keep an owner. Make someone else an owner first."));
     expect(server.changes).toEqual([
       `PATCH /api/spaces/${FAMILY}/members/${SAM.id} {"role":"member"}`,
       `DELETE /api/spaces/${FAMILY}/members/${SAM.id} null`,
@@ -552,11 +559,63 @@ describe("groups in Settings", () => {
     const server = new FakeServer();
     server.fail = { ending: "/apps/feed/access", with: { status: 500, code: "internal" } };
     start(server);
-    const table = await within(await card("Family")).findByRole("table", { name: "Who can use each app" });
+    const family = await card("Family");
+    const table = await within(family).findByRole("table", { name: "Who can use each app" });
 
     fireEvent.change(select(table, "Everyone's access to Feed"), { target: { value: "edit" } });
-    expect(await within(await card("Family")).findByText("That change could not be saved. Try again.")).toBeTruthy();
+    await waitFor(() => expect(alertText(family)).toBe("That change could not be saved. Try again."));
     await waitFor(() => expect(select(table, "Everyone's access to Feed").value).toBe("none"));
+  });
+
+  it("puts a choice back and says so when it could not be sent, though the list cannot be read again either", async () => {
+    const server = new FakeServer();
+    start(server);
+    const family = await card("Family");
+    const linFeed = () => select(within(family).getByRole("table", { name: "Who can use each app" }), "Lin Example's access to Feed");
+    await waitFor(() => expect(linFeed().value).toBe("everyone"));
+    linFeed().focus();
+    server.offline = true;
+    fireEvent.change(linFeed(), { target: { value: "edit" } });
+
+    await waitFor(() => expect(alertText(family)).toBe("That change could not be saved. Try again."), { timeout: 5000 });
+    await waitFor(() => expect(linFeed().value).toBe("everyone"), { timeout: 5000 });
+    // The table stays as it was last read, and so does the focus on the cell.
+    expect(document.activeElement).toBe(linFeed());
+    expect(server.groups[0]!.apps[1]!.members).toEqual({});
+  }, 20_000);
+
+  it("puts back each of two choices on their way when neither could be sent", async () => {
+    const server = new FakeServer();
+    const client = start(server);
+    const family = await card("Family");
+    const table = await within(family).findByRole("table", { name: "Who can use each app" });
+    server.offline = true;
+    fireEvent.change(select(table, "Lin Example's access to Feed"), { target: { value: "edit" } });
+    fireEvent.change(select(table, "Kim Example's access to Checklist"), { target: { value: "none" } });
+    await waitFor(() => expect(client.isMutating()).toBe(0), { timeout: 5000 });
+
+    // Each cell goes back by itself: the list as it was before the second choice would bring back the first.
+    expect(select(table, "Lin Example's access to Feed").value).toBe("everyone");
+    expect(select(table, "Kim Example's access to Checklist").value).toBe("edit");
+    expect(alertText(family)).toBe("That change could not be saved. Try again.");
+  }, 20_000);
+
+  it("says that a choice was not saved even when a later one was", async () => {
+    const server = new FakeServer();
+    server.fail = { ending: "/apps/feed/access", with: { status: 500, code: "internal" } };
+    const client = start(server);
+    const family = await card("Family");
+    const table = await within(family).findByRole("table", { name: "Who can use each app" });
+
+    fireEvent.change(select(table, "Everyone's access to Feed"), { target: { value: "edit" } });
+    fireEvent.change(select(table, "Everyone's access to Checklist"), { target: { value: "edit" } });
+    await waitFor(() => expect(client.isMutating()).toBe(0));
+
+    expect(server.groups[0]!.apps[0]!.memberAccess).toBe("edit");
+    expect(select(table, "Everyone's access to Checklist").value).toBe("edit");
+    expect(select(table, "Everyone's access to Feed").value).toBe("none");
+    // The mutation's own state knows only of the later choice, which was saved.
+    expect(alertText(family)).toBe("That change could not be saved. Try again.");
   });
 
   it("shows a plain member the people by name alone, and lets them leave", async () => {

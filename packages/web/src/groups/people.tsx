@@ -68,7 +68,7 @@ export function People({ space, list }: { space: Space; list: SpaceApps | undefi
           : null}
       </Rows>
       {withdraw.isError ? (
-        <p role="status" className="text-xs text-down">
+        <p role="alert" className="text-xs text-down">
           {t("groups.withdrawFailed")}
         </p>
       ) : null}
@@ -230,7 +230,7 @@ function AddPersonForm({ space, onClose, onAdded, title }: { space: Space; onClo
         ) : null}
         <p className="text-xs text-fg-3">{session.canInvitePeople ? t("groups.addInviteHint") : t("groups.addExistingOnly")}</p>
         {problem ? (
-          <p role="status" className="text-xs text-down">
+          <p role="alert" className="text-xs text-down">
             {problem}
           </p>
         ) : null}
@@ -281,7 +281,7 @@ function ManageDialog(props: { space: Space; member: SpaceMember; detail: SpaceM
           <h2 className="text-md font-semibold">{t("groups.removeTitle", { name: member.name, group: space.name })}</h2>
           <p className="text-fg-2">{t("groups.removeBody")}</p>
           {removeProblem ? (
-            <p role="status" className="text-xs text-down">
+            <p role="alert" className="text-xs text-down">
               {removeProblem}
             </p>
           ) : null}
@@ -327,7 +327,7 @@ function ManageDialog(props: { space: Space; member: SpaceMember; detail: SpaceM
             {owner ? <span className="text-xs text-fg-3">{t("groups.canAddAppsHint")}</span> : null}
           </div>
           {changeProblem ? (
-            <p role="status" className="text-xs text-down">
+            <p role="alert" className="text-xs text-down">
               {changeProblem}
             </p>
           ) : null}
