@@ -1460,6 +1460,8 @@ Each step is one pull request into `main` of the repository it names; `pnpm chec
 
 ## F. The assistant: Hearth as a connector for Claude
 
+**Removed in November 2026.** The owner removed the connector this section designed: the MCP endpoint (`POST /mcp`) and its tools, its address and "Add to Claude" on the Settings card, the end-to-end project `assistant` and its guide in `docs/self-hosting.md`. Each person's own model, in Hearth's chat, does what it did (`docs/platform.md`). The switches it introduced remain ("The switches", step F1: each space's level, Off, Read only or Read and change, and the apps left out, as `VISIBLE` works them out) and now govern that model in the chat, set by each space's owners on the Assistant card in Settings. What follows is the record of how the connector was designed and built.
+
 Decision 7 said that an assistant would later manage data across apps, and made every query and mutation carry a description for it. This section is that assistant, designed before any of it was built. The owner chose, from two ways of having one, to reach Hearth from Claude rather than to build a chat into Hearth (decision 16 below). The owner's decisions 16 to 20 come first, and the rest of this section follows from them. Its build plan, at the end, marks each step once built, and once reviewed.
 
 ### Owner's decisions for section F (these override anything below that disagrees)

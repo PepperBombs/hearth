@@ -41,13 +41,14 @@ file and secrets live in none of them. Mini-apps need not live in
 
 ## Where it stands
 
-All six items of the build order are built and reviewed: the app shell, the
+All six items of the build order were built and reviewed: the app shell, the
 mini-app contract (SDK, storage, settings, UI kit), the scaffold command, the
-grocery list, scheduled jobs with GitHub Trending, and the assistant (Hearth
-as a connector for Claude, at `POST /mcp`). The design, the owner's decisions
-and each step's as-built notes are in `docs/mini-app-contract.md`. Not yet
-tried on a real server: the assistant against the real Claude and
-Cloudflare's Managed OAuth (`docs/self-hosting.md`, section 10).
+grocery list, scheduled jobs with GitHub Trending, and the assistant, built
+as a connector for Claude (`POST /mcp`) and removed by the owner's choice in
+November 2026: each person's own model in the chat does what it did. Its
+switches stay and serve the chat: each space's owners choose Off, Read only
+or Read and change, and the apps it may use. The design, the owner's
+decisions and each step's as-built notes are in `docs/mini-app-contract.md`.
 
 The new direction is `docs/platform.md`: each person's own model makes their
 apps in a chat, and an app is a page in the browser's sandbox with no code on
@@ -92,14 +93,13 @@ build's pipeline for apps goes next, once that is checked on a real server.
 | `docs/notes/web.md` | The web app: the session, lists and dialogs, the two languages. |
 | `docs/notes/e2e.md` | The Playwright tests and the servers they share. |
 | `docs/notes/deploy.md` | The deploy script. Read all of it before changing one line. |
-| `docs/notes/assistant.md` | The MCP endpoint, its tools, the Assistant card. |
-| `docs/notes/platform.md` | Apps made in Hearth, their sandbox, the chat and each person's model. |
+| `docs/notes/platform.md` | Apps made in Hearth, their sandbox, the chat, each person's model and the assistant's switches. |
 | `docs/notes/progress.md` | What was built, in what order. |
 
 ## What bites everywhere
 
 - `deploy/hearth-deploy.sh` on `main` is live code: a server runs it about a minute after a merge.
-- Nothing automated may reach an outside host, the real Claude or Cloudflare. Tests answer from stand-ins.
+- Nothing automated may reach an outside host, a real model or Cloudflare. Tests answer from stand-ins.
 - Every interface string goes in both `packages/web/src/i18n/en.ts` and `zh.ts`; a missing key is a type error.
 - Who may use an app is decided in one place, the SQL `VISIBLE` in `packages/server/src/apps/installs.ts`. Add no second one.
 - SQL for an app's rows and settings lives in `packages/server/src/apps/store.ts` alone; a test reads the source.

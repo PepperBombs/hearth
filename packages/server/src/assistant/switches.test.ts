@@ -7,9 +7,9 @@
 import { apiErrorSchema, sessionSchema, type ApiErrorCode, type MemberAccess } from "@hearth/shared";
 import { beforeEach, describe, expect, it } from "vitest";
 import { callApp } from "../apps/calls";
-import { listAssistantInstalls, resolveInstall, type Caller } from "../apps/installs";
+import { resolveInstall, type Caller } from "../apps/installs";
 import { createRegistry, type Registry } from "../apps/registry";
-import { APPS, family, grant, install, KIM, LIN, NOA, SAM, setPrefs } from "../apps/test-world";
+import { APPS, family, grant, install, KIM, LIN, NOA, SAM } from "../apps/test-world";
 import { as, testApp } from "../testing";
 
 const BASE = "http://hearth.example.com";
@@ -133,27 +133,6 @@ describe("what an assistant may do with an app for a person", () => {
     expect(levelOf(world.sam.id, "assistant", "checklist", world.samsSpace)).toBeNull();
     setLevelDirectly(world.samsSpace, "view");
     expect(levelOf(world.sam.id, "assistant", "checklist", world.samsSpace)).toBe("view");
-  });
-
-  it("lists, for the assistant, the apps the person has switched on, with what it may do", () => {
-    install(world.db, world.samsSpace, "checklist", world.sam.id, { createdAt: "2026-01-06T00:00:00.000Z" });
-    install(world.db, world.family, "feed", world.sam.id, { memberAccess: "view" });
-    setLevelDirectly(world.samsSpace, "edit");
-    setLevelDirectly(world.family, "view");
-    expect(listAssistantInstalls(world.db, registry, world.sam.id)).toEqual([
-      { spaceId: world.samsSpace, appId: "checklist", access: "edit" },
-      { spaceId: world.family, appId: "checklist", access: "view" },
-      { spaceId: world.family, appId: "feed", access: "view" },
-    ]);
-    // An app Sam switched off for himself is not the assistant's either.
-    setPrefs(world.db, world.family, "feed", world.sam.id, { enabled: false, pinned: false });
-    expect(listAssistantInstalls(world.db, registry, world.sam.id).map((entry) => entry.appId)).toEqual(["checklist", "checklist"]);
-    // Lin sees the family's apps, but her own space is Off.
-    expect(listAssistantInstalls(world.db, registry, world.lin.id)).toEqual([
-      { spaceId: world.family, appId: "checklist", access: "view" },
-      { spaceId: world.family, appId: "feed", access: "view" },
-    ]);
-    expect(listAssistantInstalls(world.db, registry, world.noa.id)).toEqual([]);
   });
 });
 

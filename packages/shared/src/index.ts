@@ -80,66 +80,15 @@ export const spaceSchema = z.object({
   /** Everyone in the space, that person included, in the order they joined. */
   members: z.array(spaceMemberSchema),
   /**
-   * What an assistant may do here for the people in it, as the space's
-   * owners chose: "none" (off, where every space starts), "view" (read only)
-   * or "edit" (read and change). A person's own access to each app still
-   * limits it (docs/mini-app-contract.md, section F).
+   * What the assistant, each person's own model in the chat, may do here
+   * for the people in it, as the space's owners chose: "none" (off, where
+   * every space starts), "view" (read only) or "edit" (read and change). A
+   * person's own access to each app still limits it (docs/platform.md,
+   * "The chat").
    */
   assistant: memberAccessSchema,
 });
 export type Space = z.infer<typeof spaceSchema>;
-
-/** What an assistant's tools call a person's own space, whatever the person's language. */
-export const PERSONAL_SPACE_LABEL = "Personal";
-
-/** How many characters of a space's ID mark a name that two of a person's spaces share. */
-const LABEL_ID_LENGTH = 6;
-
-/** How a marked label ends. A group whose own name ends so is always marked itself. */
-const MARKED_LABEL = / \(id [^()\s]+\)$/;
-
-/**
- * Names that read alike count as one name: "Family", "family", a full-width
- * "Ｆａｍｉｌｙ", and one with characters nobody sees (a zero-width space) or
- * with other spacing. Letters of another script that look the same do not.
- */
-const foldedName = (name: string) =>
-  name.normalize("NFKC").replace(/\p{Default_Ignorable_Code_Point}/gu, "").replace(/\s+/gu, " ").trim().toLowerCase();
-
-/**
- * The name an assistant's tools take for each of one person's spaces, by
- * space ID (docs/mini-app-contract.md, section F, "Spaces by name"):
- * "Personal" for their own space, and a group's name while no other space
- * of theirs is called alike. Spaces called alike are each marked with the
- * start of their own ID, "Family (id 7f3k2q)", and none of them keeps the
- * bare name.
- *
- * A person approves a change by the name they are shown, so no single
- * change (someone joining or leaving a group, or one rename) may make a
- * label mean another space while an assistant still holds it: a bare name
- * is one no other of their spaces has, and a marked one carries the ID of
- * its own space, so a label that stops being true is refused instead of
- * landing elsewhere. Only a name that one group gave up and another took
- * (two renames) follows the name, as it does everywhere in Hearth. The
- * server (the tools) and the web app (the Assistant card) both read the
- * labels here, never by a rule of their own.
- */
-export function assistantSpaceLabels(spaces: readonly Pick<Space, "id" | "kind" | "name">[]): Map<string, string> {
-  const named = spaces.map((space) => ({ space, name: space.kind === "personal" ? PERSONAL_SPACE_LABEL : space.name }));
-  const labels = new Map<string, string>();
-  for (const { space, name } of named) {
-    const alike = named.filter((other) => other.space.id !== space.id && foldedName(other.name) === foldedName(name));
-    if (space.kind === "personal" || (alike.length === 0 && !MARKED_LABEL.test(name))) {
-      labels.set(space.id, name);
-      continue;
-    }
-    // The start of its own ID, longer while a space called alike starts the same way.
-    let length = Math.min(LABEL_ID_LENGTH, space.id.length);
-    while (length < space.id.length && alike.some((other) => other.space.id.startsWith(space.id.slice(0, length)))) length += 1;
-    labels.set(space.id, `${name} (id ${space.id.slice(0, length)})`);
-  }
-  return labels;
-}
 
 /**
  * One mini-app as a person sees it in one space. Apps the person has no

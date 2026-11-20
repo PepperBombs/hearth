@@ -23,16 +23,16 @@ Notes for whoever changes this part, people and agents alike. They are read when
   decided (`member_access`, `app_access`) and decides nothing; only the web
   app's table reads an effective level off it, for display, and a test
   (`src/apps/access.test.ts`) checks that reading against the sessions.
-  What an assistant may do for a person (section F) is worked out there
-  too, as `VISIBLE`'s `assistant`: the lesser of the person's access and the
-  space's level (`spaces.assistant`: `none`, the default, `view` or
-  `edit`), and `none` for an app its owners left out
-  (`space_apps.assistant` = 0). `resolveInstall` with `by: "assistant"`
-  (a `Caller`, which `callApp`'s call carries) and `listAssistantInstalls`
-  read it; the session's spaces carry the level, the owners' list each
-  app's `assistant`, and only owners change either (`PUT
-  /api/spaces/:spaceId/assistant`, in `src/assistant`, and `assistant` in
-  the access route).
+  What an assistant (each person's own model, in the chat) may do for a
+  person (section F's switches) is worked out there too, as `VISIBLE`'s
+  `assistant`: the lesser of the person's access and the space's level
+  (`spaces.assistant`: `none`, the default, `view` or `edit`), and `none`
+  for an app its owners left out (`space_apps.assistant` = 0).
+  `resolveInstall` with `by: "assistant"` (a `Caller`, which `callApp`'s
+  call and the chat's `MadeRequest` carry) reads it; the session's spaces
+  carry the level, the owners' list each app's `assistant`, and only
+  owners change either (`PUT /api/spaces/:spaceId/assistant`, in
+  `src/assistant`, and `assistant` in the access route).
 - Who may create a group and who may invite someone who is not on the
   server yet is `groupRights` in `packages/server/src/groups/policy.ts`, read
   from `HEARTH_GROUP_POLICY` (`owner`, the default, or `everyone`; owner's

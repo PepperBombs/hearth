@@ -77,10 +77,7 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    // The server's own addresses: the API, and the assistant's endpoint, which the
-    // Assistant card names by this page's origin. A key that starts with "^" is a
-    // regular expression: that one address and no page whose path begins like it.
-    proxy: { "/api": "http://127.0.0.1:4310", "^/mcp$": "http://127.0.0.1:4310" },
+    proxy: { "/api": "http://127.0.0.1:4310" },
     // The dev server serves files of this repository only, unless told:
     // the mini-apps may be in a repository beside it.
     fs: { allow: [repositoryRoot, ...appsDirs] },

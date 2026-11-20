@@ -135,8 +135,12 @@ answer, such as a whole app's page, outlasts any proxy's timeout.
 - The model works in one space the person chooses, as an assistant for
   them (`by: "assistant"`): it may do no more than they may, and no more
   than the space's owners allow an assistant there (owner's decision 7).
-  Every space starts with the assistant off; an owner switches it on, from
-  the chat itself or in Settings.
+  For each space its owners choose Off, Read only or Read and change, and
+  may leave apps out, on the Assistant card in Settings. Every space starts
+  Off; an owner can also switch it to Read and change from the chat itself.
+  These are the switches of section F of `docs/mini-app-contract.md`, built
+  for a connector for Claude that the owner removed in November 2026: the
+  chat does what it did.
 - Its tools: `create_app` (a manifest and a page), `list_rows`, `add_row`
   and `update_row` on the made apps of the space. Every input is checked
   before anything runs; every outcome, refusals included, goes back to the
@@ -223,8 +227,7 @@ data.
   collection again every 15 seconds (Ideas up to 5000). A refresh of GitHub
   Trending runs in the page that started it: leaving that page stops it, and
   the next page to open waits until the refresh has not moved for a minute
-  before it starts its own. Claude over MCP does not see made apps yet (see
-  "Not built yet").
+  before it starts its own.
 - The build's own copies of these apps are still compiled in, hidden from
   the Add dialog, until their pipeline is deleted.
 
@@ -246,9 +249,6 @@ trying the web app without a real model.
   changing it to fit.
 - **Developers' path** (answer 3): uploading an app written by hand.
 - **Jobs for made apps** (a scheduled fetch the platform runs for an app).
-- **Made apps over MCP**: Claude through the connector does not see them yet,
-  so since the move it no longer sees the grocery list, Ideas or GitHub
-  Trending; the chat with each person's own model does.
 - **Sign-in for a public platform**: Cloudflare Access is fine while the
   platform is invitation-only.
 - **Deleting the old way of building apps in**: the three apps of

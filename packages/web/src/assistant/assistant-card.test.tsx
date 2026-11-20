@@ -1,8 +1,8 @@
 /**
- * The Assistant card in Settings (docs/mini-app-contract.md, section F,
- * build step F3): the address to give Claude and what Claude may do in
- * each space. The whole web app is drawn against a stand-in for the server
- * with one person, their own space and a family.
+ * The Assistant card in Settings: what the assistant, each person's own
+ * model in the chat (docs/platform.md, "The chat"), may do in each space.
+ * The whole web app is drawn against a stand-in for the server with one
+ * person, their own space and a family.
  */
 import type { MemberAccess, Session, Space, SpaceApps, SpaceRole } from "@hearth/shared";
 import { focusManager, QueryClient } from "@tanstack/react-query";
@@ -14,7 +14,6 @@ import feedManifest from "../../../fixture-apps/feed/manifest";
 import { App } from "../app";
 import { BundledAppsProvider, type BundledApp } from "../apps/bundled";
 import { SESSION_QUERY_KEY } from "../session/session";
-import { addToClaudeLink } from "./assistant-card";
 
 const PERSONAL = "space-personal";
 const FAMILY = "space-family";
@@ -185,47 +184,19 @@ afterEach(() => {
 });
 
 describe("the Assistant card", () => {
-  it("shows the address of this server's endpoint, and a link that opens Claude's dialog with it filled in", async () => {
+  it("says what the assistant is, and links to the chat, with nothing else to follow or copy", async () => {
     start(new FakeServer());
     const card = await assistantCard();
-    expect((within(card).getByRole("textbox", { name: "Address for Claude" }) as HTMLInputElement).value).toBe(`${window.location.origin}/mcp`);
-    const link = within(card).getByRole("link", { name: "Add to Claude" });
-    expect(link.getAttribute("href")).toBe(addToClaudeLink(`${window.location.origin}/mcp`));
-    expect(link.getAttribute("target")).toBe("_blank");
-    const url = new URL(link.getAttribute("href")!);
-    expect(url.origin + url.pathname).toBe("https://claude.ai/customize/connectors");
-    expect(Object.fromEntries(url.searchParams)).toEqual({
-      modal: "add-custom-connector",
-      connectorName: "Hearth",
-      connectorUrl: `${window.location.origin}/mcp`,
-    });
-  });
-
-  it("copies the address, and says so", async () => {
-    const writeText = vi.fn(() => Promise.resolve());
-    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    start(new FakeServer());
-    const card = await assistantCard();
-    fireEvent.click(within(card).getByRole("button", { name: "Copy" }));
-    await within(card).findByRole("button", { name: "Copied" });
-    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/mcp`);
-  });
-
-  it("says that the address was copied, and when it could not be, where a screen reader hears it", async () => {
-    const writeText = vi.fn(() => Promise.resolve());
-    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    start(new FakeServer());
-    const card = await assistantCard();
-    const address = within(card).getByRole("textbox", { name: "Address for Claude" }).closest("div")!.parentElement!;
-    // The region is there before anything is said in it.
-    const said = within(address).getByRole("status");
-    expect(said.textContent).toBe("");
-    fireEvent.click(within(card).getByRole("button", { name: "Copy" }));
-    await waitFor(() => expect(said.textContent).toBe("Copied"));
-    writeText.mockImplementation(() => Promise.reject(new Error("no clipboard")));
-    fireEvent.click(within(card).getByRole("button", { name: "Copied" }));
-    await waitFor(() => expect(said.textContent).toBe("It could not be copied. Select the address and copy it yourself."));
-    expect(said.className).not.toContain("sr-only");
+    const chat = within(card).getByRole("link", { name: "the chat" });
+    expect(chat.getAttribute("href")).toBe("/chat");
+    expect(chat.closest("p")!.textContent).toBe(
+      "The assistant is your own model, which you save under “Your model” and talk to in the chat. It acts as you, with your access, and only in the spaces below that allow it.",
+    );
+    // The assistant lives in Hearth: there is no address to copy, and no link out of it.
+    expect(within(card).getAllByRole("link")).toEqual([chat]);
+    expect(within(card).queryByRole("textbox")).toBeNull();
+    fireEvent.click(chat);
+    await screen.findByRole("heading", { level: 1, name: "Chat" });
   });
 
   it("lets an owner switch a space on, and leave one of its apps out", async () => {
@@ -233,7 +204,7 @@ describe("the Assistant card", () => {
     start(server);
     const card = await assistantCard();
     const personal = spaceRow(card, PERSONAL);
-    const levels = within(personal).getByRole("group", { name: "What Claude may do in your personal space" });
+    const levels = within(personal).getByRole("group", { name: "What the assistant may do in your personal space" });
     expect(within(levels).getByRole("button", { name: "Off" }).getAttribute("aria-pressed")).toBe("true");
     // Off, no apps to choose from.
     expect(within(personal).queryByRole("checkbox")).toBeNull();
@@ -242,7 +213,7 @@ describe("the Assistant card", () => {
     await waitFor(() => expect(server.levels[PERSONAL]).toBe("edit"));
     const checklist = await within(personal).findByRole("checkbox", { name: "Checklist" });
     expect((checklist as HTMLInputElement).checked).toBe(true);
-    expect(within(personal).getByRole("group", { name: "Apps Claude may use in your personal space" })).toBeTruthy();
+    expect(within(personal).getByRole("group", { name: "Apps the assistant may use in your personal space" })).toBeTruthy();
     expect(within(levels).getByRole("button", { name: "Read and change" }).getAttribute("aria-pressed")).toBe("true");
 
     fireEvent.click(checklist);
@@ -272,7 +243,7 @@ describe("the Assistant card", () => {
     expect(within(family).queryByText("Read only")).toBeNull();
     // The member's own space is still theirs to switch.
     expect(
-      within(spaceRow(await assistantCard(), PERSONAL)).getByRole("group", { name: "What Claude may do in your personal space" }),
+      within(spaceRow(await assistantCard(), PERSONAL)).getByRole("group", { name: "What the assistant may do in your personal space" }),
     ).toBeTruthy();
   });
 
@@ -299,7 +270,7 @@ describe("the Assistant card", () => {
     // Opened straight after loading, Settings reads the session once.
     expect(server.sessionReads).toBe(1);
 
-    // Lin, who owns the family too, lets Claude change things there. This page has been open for a while.
+    // Lin, who owns the family too, lets the assistant change things there. This page has been open for a while.
     server.levels[FAMILY] = "edit";
     ageSession(client);
     lookAgain();
@@ -379,22 +350,11 @@ describe("the Assistant card", () => {
     expect(((await within(family).findByRole("checkbox", { name: "Checklist" })) as HTMLInputElement).checked).toBe(true);
   });
 
-  it("shows the name Claude knows a space by wherever it is not the name shown here", async () => {
+  it("lets a long name without a space break anywhere, so that it fits a phone", async () => {
     const server = new FakeServer();
-    server.moreGroups = [
-      { id: "space-club", name: "Family" },
-      { id: "space-hikers", name: "TheExampleFamilyOfTheNorthernHillsAndValleysWhoWalkEveryWeekend" },
-    ];
+    server.moreGroups = [{ id: "space-hikers", name: "TheExampleFamilyOfTheNorthernHillsAndValleysWhoWalkEveryWeekend" }];
     start(server);
-    const card = await assistantCard();
-    // Two groups of one name: Claude's approval prompt shows these, so they can be found here.
-    expect(within(spaceRow(card, FAMILY)).getByText("Claude calls it “Family (id space-f)”.")).toBeTruthy();
-    expect(within(spaceRow(card, "space-club")).getByText("Claude calls it “Family (id space-c)”.")).toBeTruthy();
-    // A name of its own, and "Personal" in English, are what Claude says too.
-    expect(within(spaceRow(card, PERSONAL)).queryByText(/Claude calls it/)).toBeNull();
-    const hikers = spaceRow(card, "space-hikers");
-    expect(within(hikers).queryByText(/Claude calls it/)).toBeNull();
-    // A long name without a space may break anywhere, so that it fits a phone.
+    const hikers = spaceRow(await assistantCard(), "space-hikers");
     expect(within(hikers).getByText("TheExampleFamilyOfTheNorthernHillsAndValleysWhoWalkEveryWeekend").className).toContain("wrap-anywhere");
   });
 
@@ -405,15 +365,18 @@ describe("the Assistant card", () => {
     server.levels[PERSONAL] = "view";
     start(server);
     const card = await assistantCard("AI 助手");
-    // The person's own space is spoken of as theirs, not put into the sentence as a name.
     const personal = spaceRow(card, PERSONAL);
-    expect(within(personal).getByRole("group", { name: "Claude 在你的个人空间里可以做什么" })).toBeTruthy();
-    expect(await within(personal).findByRole("group", { name: "Claude 在你的个人空间里可以使用的应用" })).toBeTruthy();
-    // Claude's tools are in English: it calls this space "Personal".
-    expect(within(personal).getByText("Claude 称它为“Personal”。")).toBeTruthy();
-    expect(within(card).getByRole("link", { name: "添加到 Claude" })).toBeTruthy();
+    expect(within(personal).getByText("个人")).toBeTruthy();
+    // The person's own space is spoken of as theirs, not put into the sentence as a name.
+    expect(within(personal).getByRole("group", { name: "AI 助手在你的个人空间里可以做什么" })).toBeTruthy();
+    expect(await within(personal).findByRole("group", { name: "AI 助手在你的个人空间里可以使用的应用" })).toBeTruthy();
+    const chat = within(card).getByRole("link", { name: "对话" });
+    expect(chat.getAttribute("href")).toBe("/chat");
+    expect(chat.closest("p")!.textContent).toBe(
+      "AI 助手就是你自己的模型：你在“你的模型”里保存它，在对话里和它交谈。它以你的身份、按你的权限办事，而且只在下面允许它的空间里。",
+    );
     const family = spaceRow(card, FAMILY);
-    const levels = within(family).getByRole("group", { name: "Claude 在Family里可以做什么" });
+    const levels = within(family).getByRole("group", { name: "AI 助手在Family里可以做什么" });
     expect(within(levels).getAllByRole("button").map((button) => button.textContent)).toEqual(["关闭", "只读", "读写"]);
     expect(within(levels).getByRole("button", { name: "读写" }).getAttribute("aria-pressed")).toBe("true");
     expect(((await within(family).findByRole("checkbox", { name: "清单" })) as HTMLInputElement).checked).toBe(true);
