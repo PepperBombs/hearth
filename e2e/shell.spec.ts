@@ -80,23 +80,6 @@ test.describe("shell on a desktop", () => {
     await expect(sandbox(page, "grocery").locator("body")).toHaveAttribute("data-view", "page");
   });
 
-  test("says that a space's apps are widgets only when none of them has a page", async ({ page, api }) => {
-    // Every app a server lists has a page of its own; one listed without is drawn in its card alone.
-    // Here the feed in the personal space has no page, and the family's checklist has one.
-    const session = sessionWithBuiltInApps();
-    api.setSession({ ...session, apps: session.apps.map((app) => (app.id === "m-feed" ? { ...app, hasPage: false } : app)) });
-    await page.goto("/");
-    const sidebar = page.getByRole("navigation", { name: "Main" });
-    const personal = sidebar.getByRole("region", { name: "Personal" });
-    await expect(personal.getByText("Widgets only, on the dashboard")).toBeVisible();
-    await expect(personal.getByText("No apps yet")).toHaveCount(0);
-    await expect(sidebar.getByRole("region", { name: "Family" }).getByRole("link")).toHaveText(["Checklist"]);
-    await expect(page.getByTestId("widget-grid").getByRole("heading", { level: 2 })).toHaveText(["Checklist", "Feed"]);
-    // An app without a page has no link to one.
-    await expect(card(page, "Feed").getByRole("link")).toHaveCount(0);
-    await expect(sandbox(page, "m-feed").getByRole("heading", { name: "Feed" })).toBeVisible();
-  });
-
   test("draws each app's page small in its card, in its sandbox, inside the shell's frame", async ({ page, api }) => {
     api.setSession(sessionWithBuiltInApps());
     await page.goto("/");

@@ -195,10 +195,11 @@ which the releases before them built in from `hearth-stones` (see "The
 mini-apps framework, removed" below).
 
 - **Adding one.** `GET /api/catalog` lists them, and the Apps page's Add
-  dialog offers them first. `POST /api/spaces/:space/catalog/:id` adds one as
-  a made app of the space's own (`made_apps.template`, migration 7), which
-  can be changed in the chat like any other; a space has one of each, and
-  adding one the space removed brings that one back, with its data.
+  dialog offers those the space does not have; every other app is made in
+  the chat. `POST /api/spaces/:space/catalog/:id` adds one as a made app of
+  the space's own (`made_apps.template`, migration 7), which can be changed
+  in the chat like any other; a space has one of each, and adding one the
+  space removed brings that one back, with its data.
 - **The move of the old apps.** When the server starts, every install of
   one of those mini-apps (`grocery`, `ideas` or `trending`, the IDs of the
   built-in apps) becomes that built-in app, in place (`moveLegacyInstalls`

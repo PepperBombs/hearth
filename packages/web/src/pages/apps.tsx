@@ -115,19 +115,9 @@ function AppText({ app, children }: { app: AppSummary; children?: ReactNode }) {
   );
 }
 
-/** A pinned app: a link to its page, or a note that it has only a widget. */
+/** A pinned app: a link to its page. */
 function ShortcutRow({ app }: { app: AppSummary }) {
-  const { t } = useI18n();
   const fullName = useFullAppName(app);
-  if (!app.hasPage) {
-    return (
-      <Row>
-        <AppIcon icon={app.icon} color={app.color} />
-        <AppText app={app} />
-        <Tag>{t("apps.widgetOnly")}</Tag>
-      </Row>
-    );
-  }
   return (
     <Row>
       <Link to={appPath(app)} aria-label={fullName} className="flex min-w-0 flex-1 items-center gap-2.5 rounded-ctl">
@@ -392,7 +382,8 @@ function RemoveDialog({ app, open, onClose }: { app: AppSummary; open: boolean; 
     <Dialog open={open} onClose={close} label={title}>
       <DialogBody>
         <h2 className="text-md font-semibold">{title}</h2>
-        <p className="text-fg-2">{t("apps.removeBody")}</p>
+        {/* A built-in app can be added again from the Add dialog, data and all; one made in the chat cannot (yet). */}
+        <p className="text-fg-2">{t(app.template ? "apps.removeBody" : "apps.removeBodyMade")}</p>
         {problem ? (
           <p role="status" className="text-xs text-down">
             {t(problem)}

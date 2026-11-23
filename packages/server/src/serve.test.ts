@@ -16,7 +16,7 @@ import { createServer as createHttpServer } from "node:http";
 import { createServer, connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Session } from "@hearth/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FetchError } from "./apps/fetch";
@@ -291,9 +291,13 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-/** main.ts as a process of its own, with these settings and nothing else of this one's environment. */
-function serverProcess(env: Record<string, string>) {
-  const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
+/**
+ * main.ts as a process of its own, with these settings and nothing else of
+ * this one's environment, and these modules loaded before it (`--import`).
+ */
+function serverProcess(env: Record<string, string>, imports: readonly string[] = []) {
+  const preload = imports.flatMap((module) => ["--import", module]);
+  const child = spawn(process.execPath, ["--import", "tsx", ...preload, "src/main.ts"], {
     cwd: PACKAGE,
     env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...env },
     stdio: ["ignore", "pipe", "pipe"],
@@ -307,29 +311,43 @@ function serverProcess(env: Record<string, string>) {
 
 describe("a server process", () => {
   it(
-    "applies the migrations, serves, and ends with status 0 on SIGTERM, its database closed",
+    "applies the migrations, serves, logs a rejection nothing handled and goes on, and ends with status 0 on SIGTERM, its database closed",
     async () => {
       const port = await freePort();
       base = `http://127.0.0.1:${port}`;
       db.close();
       const fresh = path.join(folder, "fresh.db");
-      const { child, ended, output } = serverProcess({
-        HOST: "127.0.0.1",
-        PORT: String(port),
-        HEARTH_AUTH: "dev",
-        HEARTH_OWNER_EMAIL: OWNER_EMAIL,
-        HEARTH_DB: fresh,
-        HEARTH_WEB_DIST: path.join(folder, "web"),
-        HEARTH_FETCH_STANDINS: standIns,
-        // Read no more: the server goes on as if neither were set.
-        HEARTH_JOBS: "on",
-        HEARTH_APPS_DIR: path.join(folder, "apps"),
-      });
+      // Leaves a rejected promise that nothing handles whenever the process is sent SIGUSR2.
+      const leaver = path.join(folder, "leaver.mjs");
+      writeFileSync(leaver, 'process.on("SIGUSR2", () => void Promise.reject(new Error("Left behind.")));\n');
+      const { child, ended, output } = serverProcess(
+        {
+          HOST: "127.0.0.1",
+          PORT: String(port),
+          HEARTH_AUTH: "dev",
+          HEARTH_OWNER_EMAIL: OWNER_EMAIL,
+          HEARTH_DB: fresh,
+          HEARTH_WEB_DIST: path.join(folder, "web"),
+          HEARTH_FETCH_STANDINS: standIns,
+          // Read no more: the server goes on as if neither were set.
+          HEARTH_JOBS: "on",
+          HEARTH_APPS_DIR: path.join(folder, "apps"),
+        },
+        [pathToFileURL(leaver).href],
+      );
       try {
         await vi.waitFor(() => expect(output()).toContain(`is listening on ${base}`), { timeout: 30_000, interval: 50 });
         expect(output()).toMatch(/Applied database migration 1 /);
         expect((await call<{ ok: boolean }>("GET", "/api/health")).body).toMatchObject({ ok: true });
         expect((await personalSpace()).length).toBeGreaterThan(0);
+
+        // Node would end the process for it; the server logs it on one line and goes on serving.
+        child.kill("SIGUSR2");
+        await vi.waitFor(
+          () => expect(output()).toContain("A rejected promise was left that nothing handled; the server goes on: Error: Left behind."),
+          { timeout: 10_000, interval: 50 },
+        );
+        expect((await call<{ ok: boolean }>("GET", "/api/health")).body).toMatchObject({ ok: true });
         expect(child.exitCode).toBeNull();
       } finally {
         child.kill("SIGTERM");

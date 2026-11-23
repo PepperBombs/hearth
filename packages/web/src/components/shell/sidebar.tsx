@@ -22,14 +22,13 @@ function SectionLabel({ children }: { children: ReactNode }) {
 
 /**
  * The pages of a space's apps, those the person has switched on. A space
- * with none switched on has no apps as far as this person's lists go; one
- * whose apps have only a widget says that they are on the dashboard.
+ * with none switched on has no apps as far as this person's lists go.
  */
 function AppLinks({ apps }: { apps: AppSummary[] }) {
   const { locale, t } = usePreferences();
   const withPages = apps.filter((app) => app.hasPage);
   if (withPages.length === 0) {
-    return <p className="px-2 py-1 text-xs text-fg-3">{apps.length === 0 ? t("nav.noApps") : t("nav.widgetsOnly")}</p>;
+    return <p className="px-2 py-1 text-xs text-fg-3">{t("nav.noApps")}</p>;
   }
   return (
     <ul className="flex flex-col gap-1">

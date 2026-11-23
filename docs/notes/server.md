@@ -102,9 +102,12 @@ Notes for whoever changes this part, people and agents alike. They are read when
   seconds whatever holds things up (`STOP_LIMIT_MS`, on the clock it was
   given). `src/serve.test.ts` runs `startServer` with a clock that moves
   only when told (`fakeClock`, `src/apps/test-clock.ts`), and starts
-  `main.ts` as a whole process through `tsx`: it serves and ends with
-  status 0 on SIGTERM, and with status 1 before it opens the database when
-  its settings are not valid.
+  `main.ts` as a whole process through `tsx`: it serves, logs a rejection
+  that a preloaded module leaves on SIGUSR2 and goes on serving, and ends
+  with status 0 on SIGTERM, and with status 1 before it opens the database
+  when its settings are not valid. `hearth.fetch` leaves no rejection of its
+  own unhandled when nothing waits for its answer (`fetchFor`, tested in
+  `fetch.test.ts`).
 - Settings are stored as values only, one JSON object for the space and
   one per person, and read against today's manifest in one place, `fill` in
   `packages/server/src/apps/settings.ts`, which the two routes share. A

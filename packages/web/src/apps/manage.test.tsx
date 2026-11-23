@@ -700,6 +700,17 @@ describe("the Apps page", () => {
     expect(await within(await spaceCard("Family")).findByText("No apps in this space yet.")).toBeTruthy();
   });
 
+  it("does not promise that an app made in the chat can be added back: no screen can add it yet", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(CHECKLIST, FAMILY, { template: undefined })]);
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Remove Checklist in Family" }));
+    const remove = await dialog("Remove Checklist in Family?");
+    expect(within(remove).getByText(/an app made in the chat cannot be added back yet/)).toBeTruthy();
+    expect(within(remove).queryByText(/brings everything back/)).toBeNull();
+  });
+
   it("speaks Chinese", async () => {
     const server = new FakeServer();
     server.session = sessionWith([made(CHECKLIST, FAMILY)], { locale: "zh" });

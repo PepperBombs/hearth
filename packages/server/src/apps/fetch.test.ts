@@ -666,6 +666,24 @@ describe("hearth.fetch once its request is over", () => {
     expect(await failure(call.promise)).toMatchObject({ code: "stopped" });
     expect(stopped).toBe(true);
   });
+
+  it("leaves no rejection unhandled when nothing waits for its answer any more", async () => {
+    // Node would end the server for one; serve.ts only logs it, as a last resort.
+    const unhandled: unknown[] = [];
+    const collect = (reason: unknown) => void unhandled.push(reason);
+    process.on("unhandledRejection", collect);
+    try {
+      const { fetch, stop } = setUp({ transport: () => new Promise<Response>(() => {}) });
+      const left = fetch(SEARCH);
+      await settle();
+      stop.abort();
+      await settle();
+      expect(unhandled).toEqual([]);
+      expect(await failure(left)).toMatchObject({ code: "stopped" });
+    } finally {
+      process.off("unhandledRejection", collect);
+    }
+  });
 });
 
 /* -------------------------------------------------------------------------

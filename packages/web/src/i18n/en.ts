@@ -17,7 +17,6 @@ export const en = {
   "nav.settings": "Settings",
   "nav.personal": "Personal",
   "nav.noApps": "No apps yet",
-  "nav.widgetsOnly": "Widgets only, on the dashboard",
   "nav.darkMode": "Dark mode",
   "nav.lightMode": "Light mode",
   "nav.switchLanguage": "Switch language",
@@ -45,7 +44,6 @@ export const en = {
   "apps.shared": "Shared space",
   "apps.personalEmpty": "No personal apps yet.",
   "apps.groupEmpty": "No apps in this space yet.",
-  "apps.widgetOnly": "Widget only",
   "apps.emptyTitle": "No apps yet",
   "apps.emptyBody":
     "Apps are small tools that live in Hearth, such as a grocery list. When one is added to your personal space or to a shared space, it is listed here.",
@@ -82,6 +80,8 @@ export const en = {
   "apps.removeTitle": "Remove {app}?",
   "apps.removeBody":
     "It disappears for everyone in this space. Its data is kept: adding the app again brings everything back.",
+  "apps.removeBodyMade":
+    "It disappears for everyone in this space. Its data is kept, but an app made in the chat cannot be added back yet.",
   "apps.removeConfirm": "Remove",
   "apps.removeFailed": "The app could not be removed. Try again.",
   "apps.removeGone": "This app is no longer in this space.",
