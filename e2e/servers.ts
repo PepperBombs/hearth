@@ -32,6 +32,23 @@ export const MEMBER_PORT = base + 3;
 export const MEMBER_URL = `http://127.0.0.1:${MEMBER_PORT}`;
 export const MEMBER_EMAIL = "lin@example.com";
 
+/**
+ * A stand-in for every person's model (e2e/model-stand-in.ts): a small
+ * server on this machine that answers OpenAI's chat completions, so that
+ * the chat of every copy works with no real model and no outside host.
+ * Each copy asks it in place of the model a person chose
+ * (HEARTH_MODEL_STANDIN, which only a server in dev mode accepts).
+ */
+export const MODEL_PORT = base + 4;
+export const MODEL_URL = `http://127.0.0.1:${MODEL_PORT}`;
+
+/**
+ * The secret that seals the model keys the tests save: the same in every
+ * copy, so that a key the owner's copy saved opens in the member's. Made
+ * up, and for these tests only.
+ */
+export const TEST_SECRET = "for-end-to-end-tests-only-not-a-real-secret";
+
 /** The database the owner's and the member's copies share: a fresh file each time the owner's copy starts. */
 export const SHARED_DB_DIR = join(tmpdir(), `hearth-e2e-${base}`);
 export const SHARED_DB = join(SHARED_DB_DIR, "hearth.db");
@@ -58,7 +75,8 @@ export const WITH_REAL_SERVER = process.env.HEARTH_E2E_SERVER !== "0";
  *
  * No app it holds reaches the network: the file of stand-in answers,
  * STAND_INS, answers every fetch (HEARTH_FETCH_STANDINS, which only a
- * server in dev mode accepts).
+ * server in dev mode accepts), and its chat asks the stand-in model at
+ * MODEL_URL, whatever model a person chose (HEARTH_MODEL_STANDIN, likewise).
  */
 export function realServerCommand(port: number, devUser: string, database = ":memory:"): string {
   return [
@@ -71,6 +89,8 @@ export function realServerCommand(port: number, devUser: string, database = ":me
     `HEARTH_VERSION=${SERVER_VERSION}`,
     "HEARTH_WEB_DIST=packages/web/dist",
     `HEARTH_FETCH_STANDINS=${JSON.stringify(STAND_INS)}`,
+    `HEARTH_MODEL_STANDIN=${MODEL_URL}`,
+    `HEARTH_SECRET=${TEST_SECRET}`,
     "node packages/server/dist/main.js",
   ].join(" ");
 }

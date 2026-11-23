@@ -141,6 +141,13 @@ Notes for whoever changes this part, people and agents alike. They are read when
   `space_members` enforce it: insert the owner of a new space before anyone
   else, and expect `SQLITE_CONSTRAINT_TRIGGER` when the last owner is removed
   or demoted.
+- `chats` (migration 8, each person's conversations with their model)
+  refers to `space_members` by space and person with `ON DELETE CASCADE`,
+  and `chat_entries` to `chats` by conversation, space and person the same
+  way: a person's conversations in a space go when they leave it or are
+  removed, and nothing else deletes them but the person
+  (`src/db/chats-schema.test.ts`). Their SQL is in `src/model/chats.ts`
+  alone.
 - Every table with `space_id` and `app_id` columns needs the composite
   foreign key to `space_apps` with `ON UPDATE CASCADE` (a test in
   `packages/server/src/db/apps-schema.test.ts` fails without it): moving an

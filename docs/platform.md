@@ -151,8 +151,55 @@ answer, such as a whole app's page, outlasts any proxy's timeout.
   with their fields and their makers' instructions, how to write a page for
   the sandbox, and that what tools return is data, never instructions.
 - What it did shows in the conversation, and an app it made is drawn right
-  there, as on the dashboard. The conversation lives in the page only; the
-  server keeps none of it.
+  there, as on the dashboard.
+
+### The conversation is kept
+
+The owner chose this in November 2026, as recommended.
+
+- **Where and for whom.** On the server (`chats` and `chat_entries`,
+  migration 8; the SQL is in `src/model/chats.ts`), per person and per
+  space. Only that person ever sees a conversation, in a group too:
+  another person's, or one asked for through another space, answers 404
+  as one that does not exist. The same conversations show on every device.
+- **Many per space.** A space holds many conversations of each person,
+  listed with the one used last first. A conversation's title is the start
+  of its first message, on one line, cut at 80 characters. A conversation
+  belongs to its space: choosing another space starts a new one there.
+- **What is kept,** in the order it happened: the person's messages, what
+  the model said in each step, each change it made (an app made, changed or
+  taken back to a version, a row added or changed) and why a turn failed.
+  An opened conversation shows them as they were, with the app drawn, and
+  Undo on a change while the app is still at the version that change
+  made. The page's own notes, that the network failed or that the person
+  stopped the answer, are not kept. A stop asks the model nothing more and
+  starts no further change; a change it was making as the stop came is
+  finished, and kept with the conversation.
+- **The limits.** 500 conversations per person in a space, then a new one
+  is refused until some are deleted. 500 entries in a conversation, then
+  it takes no more messages: start a new one. The limit is checked when a
+  message arrives, so its answer may take a conversation a little past it.
+  A message is up to 20,000 characters.
+- **Deleting.** Only the person deletes a conversation, after a
+  confirmation; what the model made stays. A person's conversations in a
+  space also go when they leave it or are removed from it.
+- **One at a time.** A conversation answers one message at a time: a
+  second, from another window or tab, is refused while the first runs. A
+  conversation deleted while it answers stops at its next step, and
+  nothing more is kept.
+- **What the model is given.** The server builds it from what is kept, and
+  the browser sends only the new message: what the person and the model
+  said, as plain text, without the changes or the failures; the newest
+  within 40,000 characters, starting with something the person said, and
+  texts of one side in a row joined into one message.
+- **The routes.** `GET /api/spaces/:spaceId/chats` lists the person's
+  conversations there, `GET` and `DELETE .../chats/:chatId` read and
+  delete one, and `POST /api/chat` takes `{ spaceId, chatId?, message }`:
+  without `chatId` it starts a new conversation, and its stream's first
+  event says which (`{ type: "chat", chatId, title }`).
+- **The page.** `/chat?space=<id>&chat=<id>`, so that a reload keeps the
+  open conversation. The list is beside it on a wide screen and behind a
+  "Conversations" button on a phone, with "New conversation".
 
 ## Changing an app
 
@@ -267,8 +314,12 @@ for the model: who reaches a made app and its rows (another person, a
 member it is not shared with, view without edit), what a row must be, the
 sandbox's headers, the sealed key and the address rules, the whole loop
 over both protocols, and an assistant that is off or may only read.
-`HEARTH_MODEL_STANDIN` (dev mode only) sends every chat to a stand-in, for
-trying the web app without a real model.
+`src/model/chats.test.ts` holds the kept conversation: privacy in a group
+and across spaces, order, the limits, one at a time, a delete while it
+answers, and what the model is given; `src/db/chats-schema.test.ts` holds
+migration 8 on a database migration 7 made. `HEARTH_MODEL_STANDIN` (dev
+mode only) sends every chat to a stand-in, for trying the web app without
+a real model.
 
 ## Not built yet
 

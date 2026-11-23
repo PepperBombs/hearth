@@ -1,18 +1,22 @@
 /**
  * What the web app asks the server about apps made in Hearth and each
- * person's own model (docs/platform.md): the model's settings, the chat's
- * stream of events, and the rows a made app's page reads and writes through
+ * person's own model (docs/platform.md): the model's settings, the
+ * person's conversations and the chat's stream of events, and the rows a made app's page reads and writes through
  * the page around it (frame.tsx).
  */
 import {
   catalogAppSchema,
   chatEventSchema,
+  chatListSchema,
+  chatSchema,
   madeRestoreSchema,
   modelSettingsSchema,
   type CatalogApp,
+  type Chat,
   type ChatEvent,
   type MemberAccess,
   type ChatRequest,
+  type ChatSummary,
   type MadeRestore,
   type MadeRow,
   type ModelSettings,
@@ -45,10 +49,36 @@ export async function forgetModelSettings(): Promise<void> {
   await request("/api/me/model", { method: "DELETE" });
 }
 
+/** Where the person's own conversations in a space are. */
+const chatsPath = (spaceId: string) => `/api/spaces/${encodeURIComponent(spaceId)}/chats`;
+
+/** GET /api/spaces/:spaceId/chats: the person's own conversations there, the one used last first. */
+export async function listChats(spaceId: string, signal?: AbortSignal): Promise<ChatSummary[]> {
+  const response = await request(chatsPath(spaceId), { signal });
+  const parsed = chatListSchema.safeParse(await response.json().catch(() => undefined));
+  if (!parsed.success) throw new ApiRequestError("invalid_response", response.status, "The conversations did not match the expected shape.");
+  return parsed.data.chats;
+}
+
+/** GET /api/spaces/:spaceId/chats/:chatId: one conversation, whole; 404 when it is gone or not the person's. */
+export async function readChat(spaceId: string, chatId: string, signal?: AbortSignal): Promise<Chat> {
+  const response = await request(`${chatsPath(spaceId)}/${encodeURIComponent(chatId)}`, { signal });
+  const parsed = chatSchema.safeParse(await response.json().catch(() => undefined));
+  if (!parsed.success) throw new ApiRequestError("invalid_response", response.status, "The conversation did not match the expected shape.");
+  return parsed.data;
+}
+
+/** DELETE /api/spaces/:spaceId/chats/:chatId. What the model made in apps stays. */
+export async function deleteChat(spaceId: string, chatId: string): Promise<void> {
+  await request(`${chatsPath(spaceId)}/${encodeURIComponent(chatId)}`, { method: "DELETE" });
+}
+
 /**
  * POST /api/chat, read as it comes: `onEvent` gets each event but the
- * pings. Ends when the server ends the stream; throws when it cannot be
- * reached, or with an AbortError when stopped.
+ * pings, the first being "chat" when the message started a new
+ * conversation. Ends when the server ends the stream; throws an
+ * `ApiRequestError` when the server refused before the stream began (404,
+ * 409) or could not be reached, or an AbortError when stopped.
  */
 export async function streamChat(body: ChatRequest, onEvent: (event: ChatEvent) => void, signal: AbortSignal): Promise<void> {
   const response = await request("/api/chat", {

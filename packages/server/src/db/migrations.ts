@@ -321,4 +321,40 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE made_apps ADD COLUMN template_hash TEXT;
     `,
   },
+  {
+    // The chat's history (docs/platform.md, "The chat"): each person's own
+    // conversations with their model, per space. Its SQL is in src/model/chats.ts.
+    id: 8,
+    name: "chats",
+    sql: `
+      -- One conversation of a person's in a space. Only they ever read it, in a group too. It
+      -- goes when they leave the space or are removed from it, as their other rows about it do.
+      CREATE TABLE chats (
+        id         TEXT PRIMARY KEY,
+        space_id   TEXT NOT NULL,
+        user_id    TEXT NOT NULL,
+        title      TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,     -- when something was last said in it
+        UNIQUE (id, space_id, user_id),
+        FOREIGN KEY (space_id, user_id) REFERENCES space_members (space_id, user_id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE INDEX chats_of_person ON chats (space_id, user_id, updated_at);
+
+      -- What was said and done in a conversation, in order: the person's message, the model's
+      -- text of one step, a change it made, or why a turn ended. data is the entry without its kind.
+      CREATE TABLE chat_entries (
+        chat_id    TEXT NOT NULL,
+        seq        INTEGER NOT NULL CHECK (seq >= 1),
+        space_id   TEXT NOT NULL,
+        user_id    TEXT NOT NULL,
+        kind       TEXT NOT NULL CHECK (kind IN ('user', 'model', 'action', 'failure')),
+        data       TEXT NOT NULL CHECK (json_valid(data)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (chat_id, seq),
+        FOREIGN KEY (chat_id, space_id, user_id) REFERENCES chats (id, space_id, user_id) ON DELETE CASCADE
+      ) STRICT;
+    `,
+  },
 ];

@@ -14,7 +14,10 @@
  * changing and removing people, invitations, the owners' list of a group
  * and who can use each app (`groups`, `people`). The owners' list of a
  * space no test set up, a personal one included, is drawn from the
- * session. All names and addresses are made up.
+ * session. It answers for the chat too: the person's model (`model`),
+ * their conversations in each space (`chats`), read, listed and deleted,
+ * and a message, which its own made-up model answers with "Noted: " and
+ * the message. All names and addresses are made up.
  */
 import { expect, test as base, type FrameLocator, type Page, type Route } from "@playwright/test";
 import type { Setting } from "../packages/sdk/src/index.ts";
@@ -26,8 +29,12 @@ import {
   appSettingsPatchSchema,
   appSettingsSchema,
   catalogAppSchema,
+  chatListSchema,
+  chatRequestSchema,
+  chatSchema,
   createSpaceRequestSchema,
   memberPatchSchema,
+  modelSettingsSchema,
   moveAppRequestSchema,
   preferencesPatchSchema,
   sessionSchema,
@@ -38,6 +45,10 @@ import {
   type AppSettings,
   type AppSummary,
   type CatalogApp,
+  type Chat,
+  type ChatEvent,
+  type ChatRequest,
+  type ModelSettings,
   type PreferencesPatch,
   type Session,
   type SettingValue,
@@ -338,6 +349,17 @@ export class FakeApi {
   /** Every change asked of the routes for groups and access, as "METHOD path body". */
   readonly groupChanges: string[] = [];
 
+  /** What GET /api/me/model answers: the person's own model, or null when they chose none. Checked against the contract. */
+  model: ModelSettings | null = null;
+  /**
+   * The person's own conversations, by space ID, each whole: what
+   * GET /api/spaces/:spaceId/chats lists (the one used last first) and
+   * GET .../chats/:chatId reads, and what POST /api/chat adds to.
+   */
+  chats: Record<string, Chat[]> = {};
+  /** Every message POST /api/chat accepted, in order. */
+  readonly chatRequests: ChatRequest[] = [];
+
   get session(): Session {
     return this.current;
   }
@@ -397,6 +419,23 @@ export class FakeApi {
       return answer(this.addFromCatalog(spaceId, templateId, body));
     }
 
+    if (path === "/api/me/model" && method === "GET") {
+      return route.fulfill({ json: this.model === null ? null : modelSettingsSchema.parse(this.model) });
+    }
+
+    const forChats = /^\/api\/spaces\/([^/]+)\/chats(?:\/([^/]+))?$/.exec(path);
+    if (forChats) {
+      const [, spaceId = "", chatId] = forChats;
+      return answer(this.answerForChats(spaceId, chatId, method));
+    }
+
+    if (path === "/api/chat" && method === "POST") {
+      const result = this.answerChat(body);
+      if ("code" in result) return fail(result);
+      const stream = result.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+      return route.fulfill({ status: 200, contentType: "text/event-stream", body: stream });
+    }
+
     const forGroups = this.answerForGroups(path, method, body);
     if (forGroups) {
       if ("status" in forGroups) return fail(forGroups);
@@ -419,6 +458,63 @@ export class FakeApi {
     }
 
     return fail({ status: 404, code: "not_found", message: "No such route" });
+  }
+
+  /** The person's conversations in a space of theirs, or undefined when they are not in it. */
+  private chatsIn(spaceId: string): Chat[] | undefined {
+    if (!this.current.spaces.some((space) => space.id === spaceId)) return undefined;
+    return (this.chats[spaceId] ??= []);
+  }
+
+  /** The routes of the person's conversations in a space, as the server answers them: 404 for a space or conversation not theirs. */
+  private answerForChats(spaceId: string, chatId: string | undefined, method: string): { json?: unknown; status?: number } | Failure {
+    const missing: Failure = { status: 404, code: "not_found", message: "Sample failure" };
+    const chats = this.chatsIn(spaceId);
+    if (!chats) return missing;
+    if (chatId === undefined) {
+      if (method !== "GET") return missing;
+      const listed = [...chats].sort((a, b) => b.chat.updatedAt.localeCompare(a.chat.updatedAt) || a.chat.id.localeCompare(b.chat.id));
+      return { json: chatListSchema.parse({ chats: listed.map((entry) => entry.chat) }) };
+    }
+    const index = chats.findIndex((entry) => entry.chat.id === chatId);
+    if (index < 0) return missing;
+    if (method === "GET") return { json: chatSchema.parse(chats[index]) };
+    if (method === "DELETE") {
+      chats.splice(index, 1);
+      return { status: 204 };
+    }
+    return missing;
+  }
+
+  /**
+   * POST /api/chat, as the server answers it with a model that only takes
+   * note: the events of its stream, the first being "chat" when the message
+   * started a new conversation, titled after it. What is said is kept.
+   */
+  private answerChat(body: unknown): ChatEvent[] | Failure {
+    const parsed = chatRequestSchema.safeParse(body);
+    if (!parsed.success) return { status: 400, code: "invalid_request", message: "Sample failure" };
+    const { spaceId, chatId, message } = parsed.data;
+    const chats = this.chatsIn(spaceId);
+    const known = chatId === undefined ? undefined : chats?.find((entry) => entry.chat.id === chatId);
+    if (!chats || (chatId !== undefined && !known)) return { status: 404, code: "not_found", message: "Sample failure" };
+    this.chatRequests.push(parsed.data);
+    const now = new Date().toISOString();
+    const events: ChatEvent[] = [];
+    let chat = known;
+    if (!chat) {
+      // As the server titles it: the message on one line, cut at 80 characters.
+      const line = message.replace(/\s+/g, " ").trim();
+      const title = line.length > 80 ? `${line.slice(0, 80).trimEnd()}…` : line;
+      chat = { chat: { id: `chat-${this.chatRequests.length}`, title, createdAt: now, updatedAt: now }, entries: [] };
+      chats.push(chat);
+      events.push({ type: "chat", chatId: chat.chat.id, title });
+    }
+    const answer = `Noted: ${message}`;
+    chat.entries.push({ kind: "user", text: message }, { kind: "model", text: answer });
+    chat.chat = { ...chat.chat, updatedAt: now };
+    events.push({ type: "text", text: answer }, { type: "done" });
+    return events;
   }
 
   /**

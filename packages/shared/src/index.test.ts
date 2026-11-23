@@ -7,6 +7,10 @@ import {
   apiErrorSchema,
   appAccessRequestSchema,
   assistantLevelRequestSchema,
+  chatEntrySchema,
+  chatEventSchema,
+  chatRequestSchema,
+  chatSchema,
   appPrefsPatchSchema,
   appSettingsPatchSchema,
   appSettingsSchema,
@@ -238,6 +242,36 @@ describe("request bodies", () => {
     expect(accepts(appSettingsPatchSchema, { user: { filter: null } })).toBe(false);
     expect(accepts(appSettingsPatchSchema, { user: { filter: { nested: true } } })).toBe(false);
     expect(accepts(appSettingsPatchSchema, { user: { filter: [1, 2] } })).toBe(false);
+  });
+});
+
+describe("the chat", () => {
+  it("takes one new message, trimmed, in a conversation or a new one, and no history", () => {
+    expect(chatRequestSchema.parse({ spaceId: "space-1", message: "  Hello  " })).toEqual({ spaceId: "space-1", message: "Hello" });
+    expect(accepts(chatRequestSchema, { spaceId: "space-1", chatId: "chat-1", message: "Hello" })).toBe(true);
+    expect(accepts(chatRequestSchema, { spaceId: "space-1", message: "   " })).toBe(false);
+    expect(accepts(chatRequestSchema, { spaceId: "space-1", message: "x".repeat(20_001) })).toBe(false);
+    expect(accepts(chatRequestSchema, { spaceId: "space-1", chatId: "", message: "Hello" })).toBe(false);
+    expect(accepts(chatRequestSchema, { spaceId: "space-1", message: "Hello", messages: [{ role: "user", content: "Hello" }] })).toBe(false);
+  });
+
+  it("keeps each kind of entry, and only what that kind holds", () => {
+    const entries = [
+      { kind: "user", text: "Make a list" },
+      { kind: "action", action: "app_updated", appId: "app-1", appName: "List", version: 2, previous: 1 },
+      { kind: "model", text: "Done." },
+      { kind: "failure", failure: "model_failed", detail: "Cut off." },
+    ];
+    const chat = { chat: { id: "chat-1", title: "Make a list", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }, entries };
+    expect(chatSchema.parse(chat)).toEqual(chat);
+    expect(accepts(chatEntrySchema, { kind: "assistant", text: "Hi" })).toBe(false);
+    expect(accepts(chatEntrySchema, { kind: "action", action: "app_deleted", appId: "app-1", appName: "List" })).toBe(false);
+    expect(accepts(chatEntrySchema, { kind: "failure", failure: "network", detail: "" })).toBe(false);
+  });
+
+  it("names a new conversation in the first event", () => {
+    expect(chatEventSchema.parse({ type: "chat", chatId: "chat-1", title: "Make a list" })).toEqual({ type: "chat", chatId: "chat-1", title: "Make a list" });
+    expect(accepts(chatEventSchema, { type: "chat", title: "Make a list" })).toBe(false);
   });
 });
 

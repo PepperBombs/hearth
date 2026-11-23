@@ -9,7 +9,7 @@
  * before anything runs, and every outcome is handed back to the model,
  * refusals included, so that it can tell the person or try again.
  */
-import { CHAT_FAILURES, type ChatEvent, type ChatRequest, type Space, type User } from "@hearth/shared";
+import { CHAT_FAILURES, type ChatEvent, type ChatMessage, type Space, type User } from "@hearth/shared";
 import { z } from "zod";
 import type { Registry } from "../apps/registry";
 import type { Config } from "../config";
@@ -318,9 +318,17 @@ function today(): string {
 /**
  * Answers one message of the person's: asks their model, runs the tools it
  * calls, and sends what happened as events, ending with "done" or "error".
- * The person must be in the space; the route checks that first.
+ * `history` is what the model is given of the conversation, the new message
+ * last (`historyFor` in chats.ts). The person must be in the space; the
+ * route checks that first, and keeps what is sent.
  */
-export async function runChat(deps: ChatDeps, user: User, request: ChatRequest, emit: Emit, signal: AbortSignal): Promise<void> {
+export async function runChat(
+  deps: ChatDeps,
+  user: User,
+  request: { spaceId: string; history: readonly ChatMessage[] },
+  emit: Emit,
+  signal: AbortSignal,
+): Promise<void> {
   const failed = (failure: (typeof CHAT_FAILURES)[number], detail: string) => emit({ type: "error", failure, detail });
   const space = listSpacesForUser(deps.db, user.id).find((candidate) => candidate.id === request.spaceId);
   if (!space) return failed("assistant_off", "This space is not yours.");
@@ -338,7 +346,7 @@ export async function runChat(deps: ChatDeps, user: User, request: ChatRequest, 
     model: access.model,
     apiKey: access.apiKey,
     system: systemPrompt(user, space, apps, today(), assistantMayChange(deps.db, space.id)),
-    history: request.messages,
+    history: request.history,
     tools: TOOLS,
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
   });
@@ -353,7 +361,11 @@ export async function runChat(deps: ChatDeps, user: User, request: ChatRequest, 
         return failed("model_failed", "The model's answer was cut off at its length limit before it was complete.");
       }
       const outcomes: ToolOutcome[] = [];
-      for (const call of result.calls) outcomes.push(await runTool(deps, { user, space }, call, emit));
+      for (const call of result.calls) {
+        // A stop starts no further change; one already made is kept (the route stores its action).
+        signal.throwIfAborted();
+        outcomes.push(await runTool(deps, { user, space }, call, emit));
+      }
       conversation.answer(outcomes);
     }
     return failed("too_many_steps", `The model took more than ${MAX_STEPS} steps; it was stopped.`);
