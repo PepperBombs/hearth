@@ -51,10 +51,10 @@ It is three things, kept in the database (`made_apps`, migration 5):
   `app_rows` through `store.ts`, and it moves, is removed and is deleted
   like any other app. Deleting its install deletes the app itself.
 
-Made apps have IDs like `m-k3x9p2q7ab`; `withMadeApps`
-(`src/made/apps.ts`) adds them to the registry, so that every part of the
-server asking whether an app exists finds them. The build's own apps keep
-working as before, side by side.
+Made apps have IDs like `m-k3x9p2q7ab`, and they are every app the server
+holds: the registry, which every part of the server asks whether an app
+exists, is `madeAppsRegistry` (`src/made/apps.ts`), read from `made_apps`
+each time.
 
 ## The sandbox
 
@@ -81,13 +81,14 @@ puts in front of the page's own scripts:
   undefined, is refused rather than taken for every row;
 - `settings()` and `saveSettings({ space?, user? })`, through the same
   routes and rules as every app's settings;
-- `fetch(url, { headers })`: a GET made by the server under the rules of a
-  job's `ctx.fetch` (`src/apps/fetch.ts`), to the hosts the manifest names
-  alone, paced with every job's requests, and without the person's cookies;
+- `fetch(url, { headers })`: a GET made by the server under the rules of
+  `src/apps/fetch.ts`, to the hosts the manifest names alone, paced with
+  every other app's requests to the same host, and without the person's
+  cookies;
 - `onChange` to hear that the data or settings changed elsewhere;
 - `locale`, `theme`, `access` (`"view"` or `"edit"`), `view`, and `user`
   and `space` (its kind, name and members, each an ID and a name), so that a
-  page can say who wrote a row, as the build's apps could.
+  page can say who wrote a row.
 
 Each call is a message to the page around it
 (`packages/web/src/made/frame.tsx`), which answers only messages from that
@@ -189,24 +190,27 @@ The apps Hearth ships are made apps too: each is a folder of
 languages) and `page.html`, written by hand and checked at start-up like any
 made app (`src/made/catalog.ts`), so that a broken one stops the server
 before it serves anything. They are the grocery list, Ideas and GitHub
-Trending, rewritten from the build's apps of `hearth-stones` to the same
-data.
+Trending, rewritten to the same data from the mini-apps of those names,
+which the releases before them built in from `hearth-stones` (see "The
+mini-apps framework, removed" below).
 
 - **Adding one.** `GET /api/catalog` lists them, and the Apps page's Add
   dialog offers them first. `POST /api/spaces/:space/catalog/:id` adds one as
   a made app of the space's own (`made_apps.template`, migration 7), which
   can be changed in the chat like any other; a space has one of each, and
   adding one the space removed brings that one back, with its data.
-- **The move of the build's apps.** When the server starts, every install
-  of a build's app whose ID is a built-in app's becomes that built-in app,
-  in place (`moveLegacyInstalls` in `src/made/builtin.ts`): the install gets
-  a made app's ID, which every table about it follows (`ON UPDATE CASCADE`),
-  so its rows, settings, who may use it, pins and switches stay as they
-  were, and removed installs move too. Each install moves alone, in one
-  transaction, and only if every row it holds fits the built-in app; one
-  that does not stays as it was, keeps working with the build's code, and is
-  named in the server's log. The deploy's trial start tries the move on a
-  copy of the real database first.
+- **The move of the old apps.** When the server starts, every install of
+  one of those mini-apps (`grocery`, `ideas` or `trending`, the IDs of the
+  built-in apps) becomes that built-in app, in place (`moveLegacyInstalls`
+  in `src/made/builtin.ts`): the install gets a made app's ID, which every
+  table about it follows (`ON UPDATE CASCADE`), so its rows, settings, who
+  may use it, pins and switches stay as they were, and removed installs
+  move too; the status of its jobs is deleted. Each install moves alone, in
+  one transaction, and only if every row it holds fits the built-in app;
+  one that does not stays as it was, hidden with its data, since the server
+  holds no app of that ID, and is named in the server's log, at every start
+  until it moves. The deploy's trial start tries the move on a copy of the
+  real database first.
 - **Updates.** A built-in app's copies follow what Hearth ships: when the
   server starts, every copy nobody changed is brought up to the built-in app
   of this release, as a new version ("Updated with Hearth"), which can be
@@ -219,7 +223,7 @@ data.
   refresh is more than an hour old, or on "Refresh now". A row in
   `refreshes` marks a refresh in progress, so that two pages do not run one
   at the same time.
-- **What changed with the move.** The rules the build's apps kept on the
+- **What changed with the move.** The rules the old apps kept on the
   server now live in their pages: the grocery list's one row per name, Ideas'
   #tags and its 5000 ideas, GitHub Trending's searches and deny-list. A page
   checks them against what it last read, so two people acting in the same
@@ -228,8 +232,32 @@ data.
   Trending runs in the page that started it: leaving that page stops it, and
   the next page to open waits until the refresh has not moved for a minute
   before it starts its own.
-- The build's own copies of these apps are still compiled in, hidden from
-  the Add dialog, until their pipeline is deleted.
+
+## The mini-apps framework, removed
+
+Before the platform, apps were written by hand against `@hearth/sdk`: a
+manifest, a server file of queries, mutations and scheduled jobs, and a
+widget and a page in React. The `hearth-apps` command checked them and
+built them into each release, from `hearth-stones` and any other
+repository of mini-apps the deploy named, and their code ran inside the
+server and the web app. `docs/mini-app-contract.md` is the record of how it
+was designed and built. It did what answers 3 and 4 above rule out for
+the platform, building apps into the server and running their code there,
+and once its three apps had moved to built-in apps the owner removed it in
+November 2026: the SDK's server side, its hooks and its tests of an app,
+`hearth-apps`, the sample apps, the lists of apps written at build time,
+the server's code for running a bundled app's routes and jobs (with the
+scheduler and `HEARTH_JOBS`), the web app's for drawing its widget and
+page, and the deploy's repositories of mini-apps (`APPS_REPO`, still
+accepted and ignored).
+
+What apps made in Hearth use stays: installs and `VISIBLE`, access,
+switches and pins, moving an app, removing and bringing it back, deleting
+its data, the store, settings, the rules and pace of an outbound fetch and
+its stand-in file, the manifest rules of `@hearth/sdk` and its UI kit, and
+the assistant's switches. So does every table of the database, `app_jobs`
+among them, which nothing writes any more, and so does the move of the old
+apps' installs, for a server that still holds some.
 
 ## Testing
 
@@ -251,7 +279,3 @@ trying the web app without a real model.
 - **Jobs for made apps** (a scheduled fetch the platform runs for an app).
 - **Sign-in for a public platform**: Cloudflare Access is fine while the
   platform is invitation-only.
-- **Deleting the old way of building apps in**: the three apps of
-  `hearth-stones` moved over (see "Built-in apps"); once that is checked on a
-  real server, the SDK's server side, `hearth-apps`, the build-time registry
-  and the deploy's second repository go.

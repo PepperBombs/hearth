@@ -1,6 +1,8 @@
 /**
- * `ctx.fetch`: the one way out to the network a mini-app is written to use,
- * from a job.
+ * `hearth.fetch`: the one way out to the network an app made in Hearth
+ * has. Its page asks the page around it, which asks the server
+ * (`POST .../fetch`, src/made/routes.ts), and the server fetches under the
+ * rules below, from its own address, with nothing of the person's.
  *
  * A request goes through three parts, each given to the next, so that the
  * rules are tested without a network:
@@ -8,38 +10,81 @@
  * 1. The rules (`fetchFor`), at every request. GET only, to https on the
  *    default port, without a user name or password, to a host the app's
  *    manifest lists in `network`, exactly. `User-Agent: Hearth` and the few
- *    headers a job may add, nothing else: a job has no person's request
- *    behind it, so nothing of a person's goes out, and no cookie is kept.
- *    Redirects are followed up to 3 times while they stay on https and the
- *    same host. An answer takes at most 20 seconds and 2 MiB of body,
- *    counted after decompression. Anything else rejects with a FetchError
- *    whose code says why.
+ *    headers an app may add, nothing else: nothing of a person's goes out,
+ *    and no cookie is kept. Redirects are followed up to 3 times while they
+ *    stay on https and the same host. An answer takes at most 20 seconds
+ *    and 2 MiB of body, counted after decompression. Anything else rejects
+ *    with a FetchError whose code says why.
  * 2. The pace (`createPace`): requests to one host start at least 6.5
- *    seconds apart, across every app, install and job of the server, so at
- *    most 10 a minute, GitHub's unauthenticated search limit (owner's
- *    decision 12). Stand-ins answer at once and are not paced.
+ *    seconds apart, across every app and space of the server, so at most
+ *    10 a minute, GitHub's unauthenticated search limit (owner's decision
+ *    12). Stand-ins answer at once and are not paced.
  * 3. The transport: one request, one answer, no redirect followed. Node's
  *    own fetch on a server (`nodeTransport`), the stand-in file named by
  *    HEARTH_FETCH_STANDINS in end-to-end tests (`standInFile`), a test's own
- *    function in an app's tests.
+ *    function in the server's tests.
  *
- * `outboundFor` picks the transport and the pace from the server's settings;
- * one of them serves the whole server. A run of a job gets its `ctx.fetch`
- * from `fetchFor`, with the hosts of its app and a signal that ends with the
- * run.
+ * `outboundFor` picks the transport and the pace from the server's
+ * settings; one of them serves the whole server. Each request of an app
+ * gets its fetch from `fetchFor`, with the hosts of its app and a signal
+ * that ends with the request.
  *
- * It is not a sandbox. A mini-app is trusted code that could find another
- * way out at run time; ESLint and the import scan refuse the global `fetch`
- * and every package in a mini-app, so that this is the way apps are
- * written to use.
- *
- * Design: docs/mini-app-contract.md, section C ("ctx.fetch" and
- * "Switches"), and the owner's decisions 12 and 14.
+ * Design: docs/platform.md, and the owner's decisions 12 and 14.
  */
 import { readFile } from "node:fs/promises";
-import { FetchError, type FetchInit, type FetchResponse } from "@hearth/sdk/server";
 import { z } from "zod";
 import type { Config } from "../config";
+
+/** What an app may send with a request besides the address. */
+export type FetchInit = {
+  /**
+   * Extra headers: accept, accept-language, if-modified-since, if-none-match,
+   * and names starting with "x-" but for x-forwarded-* and x-real-ip, each
+   * once, with values of visible ASCII, spaces and tabs. Every request also
+   * says `User-Agent: Hearth`. Any other header is refused.
+   */
+  readonly headers?: Readonly<Record<string, string>>;
+};
+
+/** An answer, read whole. A status that is not 2xx is an answer like any other, not an error. */
+export type FetchResponse = {
+  /** Where the answer came from, after redirects on the same host. */
+  readonly url: string;
+  readonly status: number;
+  /** The status is 200 to 299. */
+  readonly ok: boolean;
+  /** Header names in lower case; set-cookie is left out. */
+  readonly headers: Readonly<Record<string, string>>;
+  /** The body, as UTF-8 text. */
+  readonly text: string;
+  /** The body parsed as JSON; throws when it is not JSON. */
+  json(): unknown;
+};
+
+/** Why a fetch gave no answer. */
+export const FETCH_ERROR_CODES = ["refused", "timeout", "too_large", "network", "stopped"] as const;
+export type FetchErrorCode = (typeof FETCH_ERROR_CODES)[number];
+
+/**
+ * What a fetch rejects with when it has no answer to give, and what the
+ * route answers an app's page with (src/made/routes.ts):
+ * - `refused`: the request breaks a rule and was not sent (not https, not a
+ *   host the manifest lists, a header an app may not send), or a redirect
+ *   leads off https or to another host;
+ * - `timeout`: the whole answer did not arrive in time;
+ * - `too_large`: the body grew past the limit, and the download stopped;
+ * - `network`: no connection could be made;
+ * - `stopped`: the request is over, because the page went away or the
+ *   server's time for it ran out.
+ */
+export class FetchError extends Error {
+  readonly code: FetchErrorCode;
+  constructor(code: FetchErrorCode, message: string) {
+    super(message);
+    this.name = "FetchError";
+    this.code = code;
+  }
+}
 
 /**
  * The platform's own Response, kept when this module loads: the class of
@@ -56,7 +101,7 @@ export const USER_AGENT = "Hearth";
 export const ANSWER_TIME_LIMIT_MS = 20_000;
 /** The most body an answer may have, counted after decompression. */
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
-/** How many redirects one `ctx.fetch` follows. */
+/** How many redirects one fetch follows. */
 export const MAX_REDIRECTS = 3;
 /**
  * The least time between the starts of two requests to one host, across the
@@ -65,7 +110,7 @@ export const MAX_REDIRECTS = 3;
  */
 export const PACE_MS = 6_500;
 
-/** The headers a job may send, besides names starting with "x-" (see mayBeSent). */
+/** The headers an app may send, besides names starting with "x-" (see mayBeSent). */
 const ALLOWED_HEADERS: ReadonlySet<string> = new Set([
   "accept",
   "accept-language",
@@ -76,20 +121,20 @@ const ALLOWED_HEADERS: ReadonlySet<string> = new Set([
 const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 /** Statuses whose answer has no body. */
 const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([204, 205, 304]);
-/** Headers of an answer that a job never sees: no cookie is kept, nor handed over to be sent back. */
+/** Headers of an answer that an app never sees: no cookie is kept, nor handed over to be sent back. */
 const HIDDEN_ANSWER_HEADERS: ReadonlySet<string> = new Set(["set-cookie", "set-cookie2"]);
 /** An HTTP header name: a "token". */
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-/** A header value a job may send: visible ASCII, spaces and tabs, so no line break and nothing read two ways. */
+/** A header value an app may send: visible ASCII, spaces and tabs, so no line break and nothing read two ways. */
 const HEADER_VALUE = /^[\t\x20-\x7e]*$/;
 
 /** A request that passed the rules, as a transport gets it. */
 export type TransportRequest = {
   /** An https address on a host the app's manifest lists, with no user name, password, port or fragment. */
   readonly url: string;
-  /** Every header to send, names in lower case: `user-agent`, and those the job added. */
+  /** Every header to send, names in lower case: `user-agent`, and those the app added. */
   readonly headers: Readonly<Record<string, string>>;
-  /** Aborted when the answer has taken too long, the run is over or the body grew too large: give up then. */
+  /** Aborted when the answer has taken too long, the request is over or the body grew too large: give up then. */
   readonly signal: AbortSignal;
 };
 
@@ -135,11 +180,11 @@ export type Outbound = {
   readonly clock: Clock;
 };
 
-/** What `ctx.fetch` needs from the run it serves. */
+/** What `fetchFor` needs from the request it serves. */
 export type FetchScope = {
   /** The hosts the app's manifest lists in `network`: the only ones it may reach. */
   readonly hosts: readonly string[];
-  /** Aborts when the run is over. From then on, and for a request still on its way, ctx.fetch rejects with "stopped". */
+  /** Aborts when the request is over. From then on, and for a request still on its way, the fetch rejects with "stopped". */
   readonly signal: AbortSignal;
 };
 
@@ -158,16 +203,16 @@ export type StandInAnswer = {
  * ---------------------------------------------------------------------- */
 
 /**
- * `ctx.fetch` for one run of a job: the rules, then the pace, then the
- * transport. Every argument is checked as it comes, since JavaScript that
- * ignores the SDK's types may pass anything.
+ * The fetch of one request of an app: the rules, then the pace, then the
+ * transport. Every argument is checked as it comes, since it may come from
+ * anywhere.
  *
- * The promise it gives counts as handled from the start. When a run ends,
- * every request of it still waiting for its turn or its answer rejects with
- * "stopped", and the job may no longer be waiting for it: one that started
- * two requests and failed on the first, or ran out of time. A rejection
- * nobody handles would end the server's process, so this one is heard
- * here, and a job that still awaits the request is told all the same.
+ * The promise it gives counts as handled from the start. When the request
+ * is over, every fetch of it still waiting for its turn or its answer
+ * rejects with "stopped", and nothing may be waiting for it any more. A
+ * rejection nobody handles would be logged by the server's process, so
+ * this one is heard here, and whoever still awaits the fetch is told all
+ * the same.
  */
 export function fetchFor(
   outbound: Outbound,
@@ -175,7 +220,7 @@ export function fetchFor(
 ): (url: string, init?: FetchInit) => Promise<FetchResponse> {
   const request = async (url: unknown, init?: unknown): Promise<FetchResponse> => {
     if (scope.signal.aborted) {
-      throw new FetchError("stopped", "The run is over: ctx.fetch works only while its job runs.");
+      throw new FetchError("stopped", "The request is over, so nothing was fetched.");
     }
     const first = checkAddress(url, scope.hosts);
     const headers = checkHeaders(init);
@@ -196,7 +241,7 @@ export function fetchFor(
   };
 }
 
-/** Whether a job may send this header, named in lower case. */
+/** Whether an app may send this header, named in lower case. */
 function mayBeSent(name: string): boolean {
   if (ALLOWED_HEADERS.has(name)) return true;
   return name.startsWith("x-") && !name.startsWith("x-forwarded") && name !== "x-real-ip";
@@ -204,17 +249,17 @@ function mayBeSent(name: string): boolean {
 
 const refused = (message: string) => new FetchError("refused", message);
 const stopped = (address: URL) =>
-  new FetchError("stopped", `The run is over, so ctx.fetch gave up on ${shown(address)}.`);
+  new FetchError("stopped", `The request is over, so hearth.fetch gave up on ${shown(address)}.`);
 
 function checkAddress(url: unknown, hosts: readonly string[]): URL {
   if (typeof url !== "string") {
-    throw refused(`ctx.fetch takes its address as text, not ${kindOf(url)}.`);
+    throw refused(`hearth.fetch takes its address as text, not ${kindOf(url)}.`);
   }
   let address: URL;
   try {
     address = new URL(url);
   } catch {
-    throw refused(`ctx.fetch takes a whole address, such as https://${hosts[0] ?? "api.example.com"}/, and ${JSON.stringify(cut(url, 80))} is not one.`);
+    throw refused(`hearth.fetch takes a whole address, such as https://${hosts[0] ?? "api.example.com"}/, and ${JSON.stringify(cut(url, 80))} is not one.`);
   }
   if (address.protocol !== "https:") {
     const scheme = address.protocol.slice(0, -1);
@@ -229,7 +274,7 @@ function checkAddress(url: unknown, hosts: readonly string[]): URL {
   if (!hosts.includes(address.hostname)) {
     throw refused(
       hosts.length === 0
-        ? `This app's manifest lists no hosts in network, so its jobs fetch from none: ${shown(address)}`
+        ? `This app's manifest lists no hosts in network, so it fetches from none: ${shown(address)}`
         : `${address.hostname} is not a host this app's manifest lists in network (${hosts.join(", ")}): ${shown(address)}`,
     );
   }
@@ -240,10 +285,10 @@ function checkAddress(url: unknown, hosts: readonly string[]): URL {
 function checkHeaders(init: unknown): Readonly<Record<string, string>> {
   const headers = new Map<string, string>([["user-agent", USER_AGENT]]);
   if (init !== undefined) {
-    if (!isPlainObject(init)) throw refused("ctx.fetch takes { headers } as its second argument, or nothing.");
+    if (!isPlainObject(init)) throw refused("hearth.fetch takes { headers } as its second argument, or nothing.");
     for (const key of Object.keys(init)) {
       if (key !== "headers") {
-        throw refused(`ctx.fetch takes headers alone, not ${JSON.stringify(cut(key, 40))}: a job only sends GET requests.`);
+        throw refused(`hearth.fetch takes headers alone, not ${JSON.stringify(cut(key, 40))}: an app only sends GET requests.`);
       }
     }
     const given = init.headers;
@@ -256,7 +301,7 @@ function checkHeaders(init: unknown): Readonly<Record<string, string>> {
         const lower = name.toLowerCase();
         if (!mayBeSent(lower)) {
           throw refused(
-            `A job may not send the header ${lower}. It may send accept, accept-language, if-modified-since, if-none-match, and names starting with x- other than x-forwarded-* and x-real-ip.`,
+            `An app may not send the header ${lower}. It may send accept, accept-language, if-modified-since, if-none-match, and names starting with x- other than x-forwarded-* and x-real-ip.`,
           );
         }
         if (headers.has(lower)) throw refused(`The header ${lower} is given twice.`);
@@ -300,8 +345,8 @@ type Exchanged =
 /**
  * Waits for the host's turn, sends one request and reads its answer whole,
  * within the time limit. A transport, or a body, that does not listen to its
- * signal is not waited for: the time limit and the end of the run reject
- * all the same.
+ * signal is not waited for: the time limit and the end of the request
+ * reject all the same.
  */
 async function exchange(
   outbound: Outbound,
@@ -318,7 +363,7 @@ async function exchange(
   }
   if (stop.aborted) throw stopped(address);
 
-  // Aborted when the time is up, the run is over or the body grew too large.
+  // Aborted when the time is up, the request is over or the body grew too large.
   const controller = new AbortController();
   const giveUp = (reason: FetchError) => {
     if (!controller.signal.aborted) controller.abort(reason);
@@ -450,9 +495,9 @@ function discard(response: Response): void {
 
 /**
  * Lets requests to one host start at least `gapMs` apart, in the order they
- * asked, whichever app, install or job asks. One serves the whole server.
- * A request whose run is over leaves the line and holds up no one behind
- * it, so a run that ends with requests still waiting leaves nothing owed.
+ * asked, whichever app in whichever space asks. One serves the whole
+ * server. A request that is over leaves the line and holds up no one
+ * behind it, so one that ends while it waits leaves nothing owed.
  */
 export function createPace(clock: Clock, gapMs: number = PACE_MS): Pace {
   type Waiter = { readonly go: () => void };
@@ -549,7 +594,7 @@ function isStandInAddress(value: string): boolean {
   }
 }
 
-/** The fields of a stand-in's answer, in the stand-in file and from a test's own function. */
+/** The fields of a stand-in's answer in the stand-in file. */
 const answerFields = {
   status: z.number().int().min(200).max(599).optional(),
   headers: z.record(z.string(), z.string()).optional(),
@@ -568,10 +613,6 @@ function answerProblems(answer: StandInAnswer): { field: string; message: string
     } catch {
       problems.push({ field: "headers", message: "Holds a name or a value that HTTP does not allow." });
     }
-  }
-  // A body read from the file always is; one a test's function gives may not be.
-  if (answer.body !== undefined && typeof answer.body !== "string" && jsonText(answer.body) === undefined) {
-    problems.push({ field: "body", message: "Is neither text nor a value JSON can hold." });
   }
   return problems;
 }
@@ -601,29 +642,6 @@ const standInSchema = z
   });
 const standInsSchema = z.array(standInSchema);
 type StandIn = z.output<typeof standInSchema>;
-
-/** A stand-in's answer from a test's own function: the answer of an entry of the file, and nothing else. */
-const standInAnswerSchema = z.strictObject(answerFields).superRefine((answer, ctx) => {
-  for (const { field, message } of answerProblems(answer)) ctx.addIssue({ code: "custom", path: [field], message });
-});
-
-/**
- * Why what a test's own stand-in answered (`runJob` of `testApp`) cannot
- * be an HTTP answer, or null when it can: an object of `status`, `headers`
- * and `body` alone, held to the rules of an entry of the stand-in file. What
- * passes, `standInResponse` makes into a Response.
- */
-export function standInAnswerProblem(answer: unknown): string | null {
-  if (!isPlainObject(answer)) return `An answer is an object of status, headers and body, not ${kindOf(answer)}.`;
-  const parsed = standInAnswerSchema.safeParse(answer);
-  if (parsed.success) return null;
-  const issue = parsed.error.issues[0];
-  if (issue?.code === "unrecognized_keys") {
-    return `An answer has status, headers and body alone, not ${issue.keys.map((key) => JSON.stringify(key)).join(", ")}.`;
-  }
-  const where = issue !== undefined && issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
-  return `${where}${issue?.message ?? "It is not an answer."}`;
-}
 
 /**
  * The stand-ins named by HEARTH_FETCH_STANDINS: a JSON list, read again at
@@ -690,7 +708,7 @@ function answers(entry: StandIn, address: URL): boolean {
 /**
  * The way out of this server, from its settings: Node's fetch, paced, or
  * the stand-in file that HEARTH_FETCH_STANDINS names, unpaced. A server
- * makes one, so that its pace holds every job of every app to it.
+ * makes one, so that its pace holds every app's requests to it.
  */
 export function outboundFor(config: Pick<Config, "fetchStandIns">, clock: Clock = processClock): Outbound {
   if (config.fetchStandIns !== null) {
@@ -718,15 +736,6 @@ function because(error: unknown): string {
 
 function cut(text: string, length: number): string {
   return text.length <= length ? text : `${text.slice(0, length - 1)}…`;
-}
-
-/** A value as JSON text, or undefined when JSON cannot hold it (a function, a BigInt, a cycle). */
-function jsonText(value: unknown): string | undefined {
-  try {
-    return JSON.stringify(value) as string | undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function kindOf(value: unknown): string {

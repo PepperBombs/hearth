@@ -1,19 +1,18 @@
 /**
  * Apps made in Hearth (docs/platform.md): the table `made_apps`, and
- * everything that reads or writes one of them.
+ * everything that reads or writes one of them. Every app the server holds
+ * is one.
  *
- * An app made in Hearth is an install like any other: a `space_apps` row
- * with the same ID, added through `addApp`, so that VISIBLE decides who may
- * use it, and its rows are in the store. What it adds is its manifest and
- * its page, which live here instead of in the build. `withMadeApps` lets
- * every part of the server that asks the registry whether an app exists
- * find these too.
+ * An app made in Hearth is an install: a `space_apps` row with the same ID,
+ * added through `addApp`, so that VISIBLE decides who may use it, and its
+ * rows are in the store. What it adds is its manifest and its page, which
+ * live here. `madeAppsRegistry` is what every part of the server asks
+ * whether an app exists.
  *
  * Its page never runs on the server: the server keeps it and serves it to
  * the sandbox (frame.ts).
  */
 import { randomBytes } from "node:crypto";
-import { AppError } from "@hearth/sdk/server";
 import type { MadeRow } from "@hearth/shared";
 import type { Db } from "../db/database";
 import { membershipOf } from "../db/people";
@@ -21,10 +20,10 @@ import { notFound, Refusal } from "../http/errors";
 import type { MemberAccess } from "@hearth/shared";
 import { addApp, resolveInstall, type Caller } from "../apps/installs";
 import type { RegisteredApp, Registry } from "../apps/registry";
-import { MAX_LIST_LIMIT, readOnlyStore, rowsNotFitting, writableStore, type StoreScope } from "../apps/store";
+import { AppError, MAX_LIST_LIMIT, readOnlyStore, rowsNotFitting, writableStore, type StoreScope } from "../apps/store";
 import { asSdkManifest, checkMadeManifest, collectionSchemas, madeManifestSchema, type MadeManifest } from "./manifest";
 
-/** Every made app's ID starts so. No app of a build is named like it. */
+/** Every made app's ID starts so. No app of the releases before them was named like it. */
 export const MADE_ID_PREFIX = "m-";
 const MADE_ID = /^m-[a-z0-9]{10}$/;
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -71,9 +70,9 @@ function loadMadeApp(db: Db, appId: string): MadeApp | null {
 }
 
 /**
- * What the rest of the server sees of a made app: an app with a manifest
- * and no server file. Its page is its own HTML, drawn small in its card and
- * whole on a page of its own (`hearth.view`), so every made app has a page.
+ * What the rest of the server sees of a made app: an app with a manifest.
+ * Its page is its own HTML, drawn small in its card and whole on a page of
+ * its own (`hearth.view`), so every made app has a page.
  */
 function registered(app: MadeApp): RegisteredApp {
   return {
@@ -89,20 +88,18 @@ function registered(app: MadeApp): RegisteredApp {
 }
 
 /**
- * The build's registry, with the apps made in Hearth added: what `get` and
- * `has` answer about any app. `list` stays the build's own apps, the ones
- * any space can add; a made app is in one space only.
+ * The apps the server holds: those made in Hearth, read from the database
+ * whenever they are asked after, so that a change to one counts at once.
+ * An ID that is no made app's, or one whose manifest no longer reads, is
+ * no app at all.
  */
-export function withMadeApps(db: Db, registry: Registry): Registry {
+export function madeAppsRegistry(db: Db): Registry {
   return {
     get(appId) {
-      const bundled = registry.get(appId);
-      if (bundled) return bundled;
       const made = loadMadeApp(db, appId);
       return made ? registered(made) : undefined;
     },
-    has: (appId) => registry.has(appId) || loadMadeApp(db, appId) !== null,
-    list: () => registry.list(),
+    has: (appId) => loadMadeApp(db, appId) !== null,
   };
 }
 
@@ -206,9 +203,8 @@ const STATUS = { invalid_request: 400, not_found: 404, conflict: 409 } as const;
 
 /**
  * Runs `work` on the app's collections, inside one transaction with the
- * access check, as a mutation's handler runs: the store is closed when it
- * returns. A store's refusal (a row that does not fit, a row not found)
- * becomes the answer's.
+ * access check: the store is closed when it returns. A store's refusal (a
+ * row that does not fit, a row not found) becomes the answer's.
  */
 function withCollection<T>(
   db: Db,
@@ -231,7 +227,6 @@ function withCollection<T>(
       spaceId: request.spaceId,
       appId: request.appId,
       userId: request.userId,
-      job: null,
       now: new Date(),
     };
     const store = need === "edit" ? writableStore(db, scope, schemas) : readOnlyStore(db, scope, schemas);
@@ -501,8 +496,9 @@ export function replaceMadeRows(
 // ---------------------------------------------------------------------------
 
 /**
- * Turns an install of one of the build's apps into an app made in Hearth
- * from a built-in template, in place: the install gets a made app's ID,
+ * Turns an install of one of the apps of releases before the built-in apps
+ * (`grocery`, `ideas`, `trending`) into an app made in Hearth from a
+ * built-in template, in place: the install gets a made app's ID,
  * which every table about it follows (ON UPDATE CASCADE), so its rows,
  * settings, people's access and switches stay exactly as they were. The
  * template must take every row the install holds; when one does not fit,

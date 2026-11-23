@@ -1,60 +1,35 @@
 /**
- * The server as a process runs it (src/serve.ts): what HEARTH_JOBS and
- * HEARTH_FETCH_STANDINS decide, a scheduler that starts only once the
- * server listens, the routes that wake it, a stop that ends the run going
- * on before the database is closed, and a whole process, as main.ts starts
- * one.
+ * The server as a process runs it (src/serve.ts): the built-in apps brought
+ * up to date and the installs of the apps of releases before them moved at
+ * start-up, what HEARTH_FETCH_STANDINS decides for the apps' fetches, a
+ * server that cannot listen, a stop that closes the database, and a whole
+ * process, as main.ts starts one.
  *
- * The scheduler's clock moves only when told, so a job runs only when it
- * is due at the scheduler's first look or something wakes the scheduler
- * after that. The jobs' requests are answered by a file of stand-ins, and
- * the global fetch answers this machine alone: a request that would leave
- * it is refused and counted, so nothing reaches a network whatever the
- * wiring does.
+ * The apps' requests are answered by a file of stand-ins, and the global
+ * fetch answers this machine alone: a request that would leave it is
+ * refused and counted, so nothing reaches a network whatever the wiring
+ * does.
  */
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createServer, connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineApp } from "@hearth/sdk";
-import { defineServer, FetchError, z } from "@hearth/sdk/server";
-import type { JobStatus, Session } from "@hearth/shared";
+import type { Session } from "@hearth/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BundledApp } from "./apps/registry";
-import { LONGEST_WAIT_MS } from "./apps/scheduler";
+import { FetchError } from "./apps/fetch";
 import { fakeClock } from "./apps/test-clock";
-import { install } from "./apps/test-world";
+import { install, NOW } from "./apps/test-world";
 import type { Config } from "./config";
 import { migrate, openDatabase, type Db } from "./db/database";
 import { createUserWithPersonalSpace } from "./db/people";
 import { startServer, STOP_LIMIT_MS, unhandledRejectionLine, type RunningServer } from "./serve";
-import { FIXTURE_APPS, OWNER_EMAIL, testConfig } from "./testing";
+import { OWNER_EMAIL, testConfig } from "./testing";
 
 const PACKAGE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const FEED = "https://feeds.example.com/headlines.json";
-
-/** A made-up app whose job never ends, so that a stop finds a run going on. */
-const sleeperManifest = defineApp({
-  id: "sleeper",
-  name: { en: "Sleeper", zh: "沉睡" },
-  description: { en: "Runs a job that never ends.", zh: "运行一个永不结束的任务。" },
-  icon: "file-text",
-  color: "teal",
-  widget: { size: "small" },
-});
-const sleeper = defineServer(sleeperManifest, { items: z.object({ text: z.string() }) });
-const SLEEPER: BundledApp = {
-  id: "sleeper",
-  manifest: sleeperManifest,
-  hasPage: false,
-  server: sleeper.routes({
-    nap: sleeper.job({ description: "Waits for ever, every hour.", everyMinutes: 60 }, () => new Promise<void>(() => {})),
-  }),
-};
-const APPS = [...FIXTURE_APPS, SLEEPER];
+const SEARCH = "https://api.github.com/search/repositories";
 
 let folder: string;
 let file: string;
@@ -73,7 +48,7 @@ beforeEach(() => {
   writeFileSync(path.join(folder, "web", "index.html"), "<!doctype html><title>Hearth</title>");
   file = path.join(folder, "hearth.db");
   standIns = path.join(folder, "stand-ins.json");
-  writeFileSync(standIns, JSON.stringify([{ url: FEED, body: { items: [{ title: "Rain expected" }, { title: "Market opens" }] } }]));
+  writeFileSync(standIns, JSON.stringify([{ url: SEARCH, body: { items: [{ full_name: "sample/one" }, { full_name: "sample/two" }] } }]));
   db = openDatabase(file);
   migrate(db);
   lines = [];
@@ -98,7 +73,8 @@ afterEach(async () => {
 
 /**
  * A server on this machine, at a port of its own unless one is given,
- * signed in as the owner: started, and not listening yet.
+ * signed in as the owner, its apps answered from the stand-in file unless
+ * the overrides say otherwise: started, and not listening yet.
  */
 function launch(overrides: Partial<Config> = {}): RunningServer {
   const config = testConfig({
@@ -106,12 +82,11 @@ function launch(overrides: Partial<Config> = {}): RunningServer {
     dbPath: file,
     webDist: path.join(folder, "web"),
     auth: { mode: "dev", devUser: OWNER_EMAIL },
-    jobs: "on",
     fetchStandIns: standIns,
     ...overrides,
   });
   const log = (kind: string) => (line: string) => void lines.push(`${kind}: ${line}`);
-  running = startServer({ config, db, apps: APPS, clock: fake.clock, log: { info: log("info"), warn: log("warn"), error: log("error") } });
+  running = startServer({ config, db, clock: fake.clock, log: { info: log("info"), warn: log("warn"), error: log("error") } });
   return running;
 }
 
@@ -125,21 +100,6 @@ async function listened(server: RunningServer): Promise<RunningServer> {
 /** A server on this machine, as `launch` makes it, once it listens. */
 const start = (overrides: Partial<Config> = {}): Promise<RunningServer> => listened(launch(overrides));
 
-/**
- * The owner, with the sample headlines put in their personal space before
- * any server starts: the job has never run there, so it is due as soon as
- * a scheduler looks. Returns that space's ID.
- */
-function headlinesDue(): string {
-  const owner = createUserWithPersonalSpace(db, { email: OWNER_EMAIL, locale: "en" });
-  const { id } = db.prepare("SELECT id FROM spaces WHERE created_by = ? AND kind = 'personal'").get(owner.id) as { id: string };
-  install(db, id, "headlines", owner.id);
-  return id;
-}
-
-/** Every run claimed so far, whatever became of it: a claim makes the job's row. */
-const claimed = () => db.prepare("SELECT app_id AS appId, job, last_started_at AS lastStartedAt FROM app_jobs").all();
-
 async function call<T>(method: string, address: string, body?: unknown): Promise<{ status: number; body: T }> {
   const response = await realFetch(`${base}${address}`, {
     method,
@@ -150,7 +110,7 @@ async function call<T>(method: string, address: string, body?: unknown): Promise
   return { status: response.status, body: (text === "" ? null : JSON.parse(text)) as T };
 }
 
-/** The owner's personal space, where the tests add apps. */
+/** The owner's personal space. */
 async function personalSpace(): Promise<string> {
   const session = (await call<Session>("GET", "/api/session")).body;
   const own = session.spaces.find((space) => space.kind === "personal");
@@ -158,59 +118,63 @@ async function personalSpace(): Promise<string> {
   return own.id;
 }
 
-const statusOf = async (spaceId: string, appId: string, job: string) =>
-  (await call<JobStatus>("GET", `/api/spaces/${spaceId}/apps/${appId}/jobs/${job}`)).body;
+/** GitHub Trending, a built-in app that names a host, added to the owner's own space; its address. */
+async function trending(): Promise<string> {
+  const spaceId = await personalSpace();
+  const added = await call<{ appId: string }>("POST", `/api/spaces/${spaceId}/catalog/trending`, {});
+  expect(added.status).toBe(201);
+  return `/api/spaces/${spaceId}/apps/${added.body.appId}`;
+}
 
-/** Waits, in real time, for what a run leaves; the scheduler's own clock does not move meanwhile. */
-const soon = { timeout: 5_000, interval: 20 };
+type Fetched = { ok: boolean; status: number; text: string } | { error: { code: string; message: string } };
 
-describe("HEARTH_JOBS", () => {
-  it("off: no scheduler, and adding an app with a job runs nothing, as in the deploy's trial start", async () => {
-    const server = await start({ jobs: "off", fetchStandIns: null });
-    expect(server.scheduler).toBeNull();
-    expect(lines).toContain("info: Jobs are switched off (HEARTH_JOBS=off): no mini-app's job runs, and none fetches anything.");
-
-    const spaceId = await personalSpace();
-    expect((await call("PUT", `/api/spaces/${spaceId}/apps/headlines`, {})).status).toBe(204);
-    // Time enough for a woken scheduler to have run it, had there been one.
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    await fake.advance(60 * 60_000);
-    expect(await statusOf(spaceId, "headlines", "refresh")).toMatchObject({ lastStartedAt: null, state: "idle" });
-    expect(db.prepare("SELECT count(*) AS n FROM app_jobs").get()).toEqual({ n: 0 });
-  });
-
-  it("on: a scheduler, which starts once the server listens and then runs what was due before it started", async () => {
-    const spaceId = headlinesDue();
+describe("starting", () => {
+  it("listens on this machine, and says that sign-in is off and that apps reach no network", async () => {
     const server = launch();
-    expect(server.scheduler).not.toBeNull();
-    // Started, not listening yet: nothing is claimed.
-    expect(claimed()).toEqual([]);
-
     await listened(server);
-    // Nothing woke the scheduler: it found the job due when it started.
-    await vi.waitFor(async () => expect((await statusOf(spaceId, "headlines", "refresh")).lastSucceededAt).not.toBeNull(), soon);
-    expect(lines.filter((line) => line.includes("Jobs are switched off"))).toEqual([]);
+    expect(lines).toContain(`info: Hearth test is listening on ${base}`);
     expect(lines).toContain(
-      `warn: Jobs reach no network (HEARTH_FETCH_STANDINS): every ctx.fetch is answered from the stand-ins in ${standIns}. This is for end-to-end tests only.`,
+      `warn: Sign-in is switched off (HEARTH_AUTH=dev): every request is treated as ${OWNER_EMAIL}. Never use this on a server.`,
     );
+    expect(lines).toContain(
+      `warn: Apps reach no network (HEARTH_FETCH_STANDINS): every fetch of an app is answered from the stand-ins in ${standIns}. This is for end-to-end tests only.`,
+    );
+    expect((await call<{ ok: boolean }>("GET", "/api/health")).body).toEqual({ ok: true, version: "test" });
   });
 
-  it("on, but the server cannot listen: the scheduler never starts, and a job that is due is never claimed", async () => {
-    headlinesDue();
+  it("moves the installs a release before the built-in apps left to them, once, and says so", async () => {
+    const owner = createUserWithPersonalSpace(db, { email: OWNER_EMAIL, locale: "en" });
+    const { id: spaceId } = db.prepare("SELECT id FROM spaces WHERE created_by = ?").get(owner.id) as { id: string };
+    install(db, spaceId, "grocery", owner.id);
+    db.prepare(
+      `INSERT INTO app_rows (id, space_id, app_id, collection, data, created_by, updated_by, created_at, updated_at)
+       VALUES ('r-milk', ?, 'grocery', 'items', '{"name":"Milk","aisle":"","done":false}', ?, ?, ?, ?)`,
+    ).run(spaceId, owner.id, owner.id, NOW, NOW);
+    // An install whose row the built-in app would not take stays as it was, and that is said too.
+    install(db, spaceId, "ideas", owner.id);
+    db.prepare(
+      `INSERT INTO app_rows (id, space_id, app_id, collection, data, created_by, updated_by, created_at, updated_at)
+       VALUES ('r-odd', ?, 'ideas', 'ideas', '{"words":"not an idea"}', ?, ?, ?, ?)`,
+    ).run(spaceId, owner.id, owner.id, NOW, NOW);
+
+    await start();
+    const moved = lines.filter((line) => line.startsWith("info: Moved the app"));
+    expect(moved).toEqual([expect.stringMatching(new RegExp(`^info: Moved the app "grocery" of space ${spaceId} to the built-in app \\(m-[a-z0-9]{10}\\)\\.$`))]);
+    expect(lines).toContainEqual(expect.stringMatching(new RegExp(`^error: Could not move the app "ideas" of space ${spaceId}: `)));
+    const session = (await call<Session>("GET", "/api/session")).body;
+    expect(session.apps).toEqual([expect.objectContaining({ spaceId, made: true, template: "grocery" })]);
+    const rows = await call<{ rows: { name: string }[] }>("GET", `/api/spaces/${spaceId}/apps/${session.apps[0]!.id}/rows/items`);
+    expect(rows.body.rows.map((row) => row.name)).toEqual(["Milk"]);
+  });
+
+  it("cannot listen where something else does: the start fails, and a stop closes the database all the same", async () => {
     // Something else listens on the port already.
     const taken = createServer();
     await new Promise<void>((resolve) => taken.listen(0, "127.0.0.1", () => resolve()));
     try {
       const server = launch({ port: (taken.address() as AddressInfo).port });
-      expect(server.scheduler).not.toBeNull();
       await expect(server.listening).rejects.toMatchObject({ code: "EADDRINUSE" });
-      // However long it waits: real time for whatever the process would start by itself, and the
-      // scheduler's own clock moved on past the longest it sleeps between two looks, ten times over.
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      await fake.advance(10 * LONGEST_WAIT_MS);
-      expect(claimed()).toEqual([]);
       expect(lines.filter((line) => line.includes("is listening"))).toEqual([]);
-      // A server that never listened stops all the same, its database closed.
       await server.stop();
       expect(db.open).toBe(false);
     } finally {
@@ -219,106 +183,67 @@ describe("HEARTH_JOBS", () => {
   });
 });
 
-describe("the way out and the wake", () => {
-  it("answers a job's requests from the stand-in file, and the route that adds an app wakes the scheduler", async () => {
+describe("the apps' way out", () => {
+  it("answers an app's fetch from the stand-in file", async () => {
     await start();
-    const spaceId = await personalSpace();
-    // The scheduler has found nothing to run and sleeps on a clock that does not move: only a wake runs the job now.
-    expect((await call("PUT", `/api/spaces/${spaceId}/apps/headlines`, {})).status).toBe(204);
-    await vi.waitFor(async () => expect((await statusOf(spaceId, "headlines", "refresh")).lastSucceededAt).not.toBeNull(), soon);
-    const latest = await call<{ output: { title: string }[] }>("POST", `/api/spaces/${spaceId}/apps/headlines/q/latest`, {});
-    expect(latest.body.output.map((row) => row.title)).toEqual(["Rain expected", "Market opens"]);
+    const app = await trending();
+    const fetched = await call<Fetched>("POST", `${app}/fetch`, { url: `${SEARCH}?q=stars`, headers: { accept: "application/json" } });
+    expect(fetched).toMatchObject({ status: 200, body: { ok: true, status: 200 } });
+    expect(JSON.parse((fetched.body as { text: string }).text)).toEqual({ items: [{ full_name: "sample/one" }, { full_name: "sample/two" }] });
     expect(lines.filter((line) => line.startsWith("error:"))).toEqual([]);
-  });
-
-  it("wakes the scheduler for a run someone asks for", async () => {
-    await start();
-    const spaceId = await personalSpace();
-    await call("PUT", `/api/spaces/${spaceId}/apps/headlines`, {});
-    await vi.waitFor(async () => expect((await statusOf(spaceId, "headlines", "refresh")).lastSucceededAt).not.toBeNull(), soon);
-    // As if that run had been an hour ago: the next is due in an hour, and one asked for may start at once.
-    const hourAgo = new Date(Date.now() - 60 * 60_000).toISOString();
-    db.prepare("UPDATE app_jobs SET last_started_at = ?, next_run_at = ? WHERE app_id = 'headlines'").run(
-      hourAgo,
-      new Date(Date.now() + 60 * 60_000).toISOString(),
-    );
-    const asked = await call<JobStatus>("POST", `/api/spaces/${spaceId}/apps/headlines/jobs/refresh/run`);
-    expect(asked).toMatchObject({ status: 202, body: { state: "requested" } });
-    await vi.waitFor(async () => expect((await statusOf(spaceId, "headlines", "refresh")).lastStartedAt).not.toBe(hourAgo), soon);
-    await vi.waitFor(async () => expect((await statusOf(spaceId, "headlines", "refresh")).state).toBe("idle"), soon);
   });
 
   it("without stand-ins, goes to the network, which here refuses: nothing is answered from a file", async () => {
     await start({ fetchStandIns: null });
-    const spaceId = await personalSpace();
-    await call("PUT", `/api/spaces/${spaceId}/apps/headlines`, {});
-    await vi.waitFor(async () => expect((await statusOf(spaceId, "headlines", "refresh")).lastFailedAt).not.toBeNull(), soon);
+    expect(lines.filter((line) => line.includes("reach no network"))).toEqual([]);
+    const app = await trending();
+    const fetched = await call<Fetched>("POST", `${app}/fetch`, { url: `${SEARCH}?q=stars` });
+    expect(fetched).toMatchObject({ status: 502, body: { error: { code: "network" } } });
     // The one request went to the global fetch, which these tests refuse for every host but this machine.
-    expect(outside).toEqual([FEED]);
+    expect(outside).toEqual([`${SEARCH}?q=stars`]);
     outside = [];
-    expect(lines).toEqual(expect.arrayContaining([expect.stringMatching(/^error: App "headlines", job "refresh", space .*: the run failed: Could not reach feeds\.example\.com/)]));
   });
 
   it("without stand-ins, reads a real answer of Node's fetch while the server listens", async () => {
-    // The feed, on this machine. Its answer comes from Node's own fetch: no test's "new Response" stands for it.
-    const feed = createHttpServer((_request, response) => {
+    // The host, on this machine. Its answer comes from Node's own fetch: no test's "new Response" stands for it.
+    const host = createHttpServer((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ items: [{ title: "Rain expected" }, { title: "Market opens" }] }));
+      response.end(JSON.stringify({ items: [{ full_name: "sample/real" }] }));
     });
-    await new Promise<void>((resolve) => feed.listen(0, "127.0.0.1", () => resolve()));
-    const feedAt = `http://127.0.0.1:${(feed.address() as AddressInfo).port}/headlines.json`;
-    // The feed's address leads there, with everything else Node's transport asked for; any other request stays refused.
+    await new Promise<void>((resolve) => host.listen(0, "127.0.0.1", () => resolve()));
+    const hostAt = `http://127.0.0.1:${(host.address() as AddressInfo).port}/search/repositories`;
+    // The search's address leads there, with everything else Node's transport asked for; any other request stays refused.
     const refusing = globalThis.fetch;
     vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) =>
-      input === FEED ? realFetch(feedAt, init) : refusing(input, init),
+      String(input).startsWith(SEARCH) ? realFetch(hostAt, init) : refusing(input, init),
     );
     try {
       await start({ fetchStandIns: null });
-      const spaceId = await personalSpace();
-      await call("PUT", `/api/spaces/${spaceId}/apps/headlines`, {});
-      await vi.waitFor(async () => {
-        const status = await statusOf(spaceId, "headlines", "refresh");
-        expect(status.lastSucceededAt ?? status.lastFailedAt).not.toBeNull();
-      }, soon);
-      // The run read the answer's status and its body.
+      const app = await trending();
+      const fetched = await call<Fetched>("POST", `${app}/fetch`, { url: `${SEARCH}?q=stars` });
+      // The route read the answer's status and its body.
+      expect(fetched).toMatchObject({ status: 200, body: { ok: true, status: 200 } });
+      expect(JSON.parse((fetched.body as { text: string }).text)).toEqual({ items: [{ full_name: "sample/real" }] });
       expect(lines.filter((line) => line.startsWith("error:"))).toEqual([]);
-      const latest = await call<{ output: { title: string }[] }>("POST", `/api/spaces/${spaceId}/apps/headlines/q/latest`, {});
-      expect(latest.body.output.map((row) => row.title)).toEqual(["Rain expected", "Market opens"]);
     } finally {
-      await new Promise<void>((resolve) => feed.close(() => resolve()));
+      await new Promise<void>((resolve) => host.close(() => resolve()));
     }
   });
 });
 
 describe("stopping", () => {
-  it("ends the run going on as stopped, stops listening, then closes the database", async () => {
+  it("stops listening, then closes the database", async () => {
     const server = await start();
-    const spaceId = await personalSpace();
-    await call("PUT", `/api/spaces/${spaceId}/apps/sleeper`, {});
-    await vi.waitFor(async () => expect((await statusOf(spaceId, "sleeper", "nap")).state).toBe("running"), soon);
-
-    const before = Date.now();
+    expect((await call<{ ok: boolean }>("GET", "/api/health")).status).toBe(200);
     await server.stop();
     expect(db.open).toBe(false);
     await expect(realFetch(`${base}/api/health`)).rejects.toThrow();
-    // Recorded as stopped: nothing kept of how it went, and due again at once, at the next start.
-    const again = openDatabase(file);
-    try {
-      const row = again.prepare("SELECT run_id, run_until, last_succeeded_at, last_failed_at, failures, next_run_at FROM app_jobs WHERE app_id = 'sleeper'").get() as {
-        next_run_at: string;
-      };
-      expect(row).toMatchObject({ run_id: null, run_until: null, last_succeeded_at: null, last_failed_at: null, failures: 0 });
-      expect(Date.parse(row.next_run_at)).toBeGreaterThanOrEqual(before - 1000);
-      expect(Date.parse(row.next_run_at)).toBeLessThanOrEqual(Date.now());
-    } finally {
-      again.close();
-    }
     // Stopping again changes nothing.
     await server.stop();
   });
 
   it("closes the database within 5 seconds whatever holds things up", async () => {
-    const server = await start({ jobs: "off", fetchStandIns: null });
+    const server = await start({ fetchStandIns: null });
     // A request whose body never ends keeps its connection open: the server cannot finish closing.
     const socket = connect(Number(new URL(base).port), "127.0.0.1");
     await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
@@ -341,14 +266,14 @@ describe("stopping", () => {
 });
 
 describe("what is left behind", () => {
-  it("logs a rejection that nothing handled on one line, a job's request apart", () => {
-    expect(unhandledRejectionLine(new FetchError("stopped", "The run is over, so ctx.fetch gave up on https://feeds.example.com/week.json."))).toBe(
-      "A job left behind a request of ctx.fetch that nothing waited for (stopped): The run is over, so ctx.fetch gave up on https://feeds.example.com/week.json.",
-    );
+  it("logs a rejection that nothing handled on one line", () => {
     const line = unhandledRejectionLine(new Error("Something\n  broke."));
     expect(line).toMatch(/^A rejected promise was left that nothing handled; the server goes on: Error: Something broke\. at /);
     expect(line).not.toContain("\n");
     expect(unhandledRejectionLine("plain text")).toBe("A rejected promise was left that nothing handled; the server goes on: plain text");
+    expect(unhandledRejectionLine(new FetchError("stopped", "The request is over."))).toMatch(
+      /^A rejected promise was left that nothing handled; the server goes on: FetchError: The request is over\. at /,
+    );
   });
 });
 
@@ -366,64 +291,69 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
+/** main.ts as a process of its own, with these settings and nothing else of this one's environment. */
+function serverProcess(env: Record<string, string>) {
+  const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
+    cwd: PACKAGE,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString()));
+  child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString()));
+  const ended = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
+  return { child, ended, output: () => output };
+}
+
 describe("a server process", () => {
   it(
-    "logs a rejection a job left behind and goes on serving, then ends with status 0 on SIGTERM, its database closed",
+    "applies the migrations, serves, and ends with status 0 on SIGTERM, its database closed",
     async () => {
       const port = await freePort();
       base = `http://127.0.0.1:${port}`;
       db.close();
-      // test-process.ts starts the process with a made-up app whose job leaves a promise of ctx.fetch behind (see there).
-      const child = spawn(process.execPath, ["--import", "tsx", "src/test-process.ts"], {
-        cwd: PACKAGE,
-        env: {
-          PATH: process.env.PATH ?? "",
-          HOME: process.env.HOME ?? "",
-          HOST: "127.0.0.1",
-          PORT: String(port),
-          HEARTH_AUTH: "dev",
-          HEARTH_OWNER_EMAIL: OWNER_EMAIL,
-          HEARTH_DB: file,
-          HEARTH_WEB_DIST: path.join(folder, "web"),
-          HEARTH_JOBS: "on",
-          HEARTH_FETCH_STANDINS: standIns,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
+      const fresh = path.join(folder, "fresh.db");
+      const { child, ended, output } = serverProcess({
+        HOST: "127.0.0.1",
+        PORT: String(port),
+        HEARTH_AUTH: "dev",
+        HEARTH_OWNER_EMAIL: OWNER_EMAIL,
+        HEARTH_DB: fresh,
+        HEARTH_WEB_DIST: path.join(folder, "web"),
+        HEARTH_FETCH_STANDINS: standIns,
+        // Read no more: the server goes on as if neither were set.
+        HEARTH_JOBS: "on",
+        HEARTH_APPS_DIR: path.join(folder, "apps"),
       });
-      let output = "";
-      child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString()));
-      child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString()));
-      const ended = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
       try {
-        await vi.waitFor(() => expect(output).toContain(`is listening on ${base}`), { timeout: 30_000, interval: 50 });
-        const spaceId = await personalSpace();
-        expect((await call("PUT", `/api/spaces/${spaceId}/apps/leaver`, {})).status).toBe(204);
-        // The run fails, and the request its job made and left behind is called off: nothing handles that.
-        await vi.waitFor(
-          () =>
-            expect(output).toContain(
-              "A job left behind a request of ctx.fetch that nothing waited for (stopped): The run is over, so ctx.fetch gave up on https://feeds.example.com/week.json.",
-            ),
-          { timeout: 10_000, interval: 50 },
-        );
-        expect(output).toMatch(/App "leaver", job "refresh", space .*: the run failed: The day's feed is down\./);
-        // It goes on serving.
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await vi.waitFor(() => expect(output()).toContain(`is listening on ${base}`), { timeout: 30_000, interval: 50 });
+        expect(output()).toMatch(/Applied database migration 1 /);
         expect((await call<{ ok: boolean }>("GET", "/api/health")).body).toMatchObject({ ok: true });
+        expect((await personalSpace()).length).toBeGreaterThan(0);
         expect(child.exitCode).toBeNull();
       } finally {
         child.kill("SIGTERM");
       }
       expect(await ended).toBe(0);
-      const again = openDatabase(file);
+      const again = openDatabase(fresh);
       try {
-        expect(again.prepare("SELECT last_failed_at IS NOT NULL AS failed, run_id FROM app_jobs WHERE app_id = 'leaver'").get()).toEqual({
-          failed: 1,
-          run_id: null,
-        });
+        expect(again.prepare("SELECT count(*) AS n FROM users").get()).toEqual({ n: 1 });
       } finally {
         again.close();
       }
+    },
+    60_000,
+  );
+
+  it(
+    "ends with status 1 before it opens the database when its settings are not valid",
+    async () => {
+      const never = path.join(folder, "never.db");
+      const { ended, output } = serverProcess({ HEARTH_AUTH: "cloudflare-access", HEARTH_OWNER_EMAIL: OWNER_EMAIL, HEARTH_DB: never });
+      expect(await ended).toBe(1);
+      expect(output()).toContain("Hearth cannot start: the configuration is not valid.");
+      expect(output()).toContain("HEARTH_CF_TEAM_DOMAIN is required");
+      expect(existsSync(never)).toBe(false);
     },
     60_000,
   );

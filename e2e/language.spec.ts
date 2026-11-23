@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.ts";
+import { PERSONAL_SPACE, builtInApp, emptySession, expect, sandbox, test } from "./fixtures.ts";
 
 test("the language toggle switches the interface to Chinese and it survives a reload", async ({ page, api }) => {
   await page.goto("/");
@@ -28,6 +28,20 @@ test("the language toggle switches the interface to Chinese and it survives a re
   await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: /English/ }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await expect(html).toHaveAttribute("lang", "en");
+});
+
+test("an app's page is drawn in the person's language, and drawn again when it changes", async ({ page, api }) => {
+  api.setSession({ ...emptySession(), apps: [builtInApp("checklist", PERSONAL_SPACE)] });
+  await page.goto("/");
+  const inCard = sandbox(page, "m-checklist");
+  await expect(inCard.getByRole("heading", { name: "Checklist" })).toBeVisible();
+  await expect(inCard.locator("html")).toHaveAttribute("lang", "en");
+
+  await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: /中文/ }).click();
+  await expect(inCard.getByRole("heading", { name: "清单" })).toBeVisible();
+  await expect(inCard.locator("html")).toHaveAttribute("lang", "zh-CN");
+  // The shell around it speaks Chinese too.
+  await expect(page.getByTestId("widget-grid").getByRole("heading", { level: 2, name: "清单" })).toBeVisible();
 });
 
 test("the first language comes from the session, not from the browser", async ({ page, api }) => {

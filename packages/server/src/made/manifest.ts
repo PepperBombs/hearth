@@ -16,8 +16,8 @@ export const FIELD_TYPES = ["text", "number", "boolean", "date", "choice", "list
 
 /**
  * The most texts a "list" field holds: as many #tags as the 4000 characters
- * of an idea can have, since the build's Ideas kept them all, and its rows
- * move to the built-in Ideas as they are.
+ * of an idea can have, since the Ideas of earlier releases kept them all,
+ * and its rows move to the built-in Ideas as they are.
  */
 export const MOST_LIST_ITEMS = 2000;
 

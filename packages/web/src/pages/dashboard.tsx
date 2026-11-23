@@ -3,7 +3,6 @@ import { useMemo } from "react";
 import { Link } from "react-router";
 import type { AppSummary, WidgetSize } from "@hearth/shared";
 import { EmptyState, Tag, buttonClass } from "@hearth/sdk/web";
-import { AppView } from "../apps/app-view";
 import { AppSettingsButton } from "../apps/manage";
 import { MadeAppFrame } from "../made/frame";
 import { AppIcon } from "../components/app-icon";
@@ -85,12 +84,13 @@ export function Dashboard() {
 /**
  * One app's card. The shell draws the frame: icon, name, the space's tag,
  * the button for the app's settings and the link to the app's page. What is
- * inside is the app's own widget.
+ * inside is the app's own page, drawn small in its sandbox (docs/platform.md).
  *
- * The same app can be on the dashboard twice, in the personal space and in
- * a group. The tag tells the two apart on screen; for a screen reader the
- * card and its link are named with the group too, so that a list of links
- * or of regions does not hold the same name twice for different places.
+ * Apps of the same name can be on the dashboard twice, as a built-in app
+ * added to the personal space and to a group. The tag tells the two apart
+ * on screen; for a screen reader the card and its link are named with the
+ * group too, so that a list of links or of regions does not hold the same
+ * name twice for different places.
  */
 function AppCard({ app }: { app: AppSummary }) {
   const session = useSession();
@@ -107,8 +107,7 @@ function AppCard({ app }: { app: AppSummary }) {
         tag={group === null ? undefined : <Tag>{group}</Tag>}
         aside={<AppSettingsButton app={app} className="-my-2 -mr-1.5" />}
       />
-      {/* An app made in Hearth draws its own page, in the sandbox (docs/platform.md). */}
-      {app.made ? <MadeAppFrame app={app} /> : <AppView app={app} part="widget" />}
+      <MadeAppFrame app={app} />
       {app.hasPage ? (
         <CardFooter>
           <Link to={appPath(app)} className="inline-flex items-center gap-1 font-medium text-accent hover:underline">

@@ -6,7 +6,7 @@
  * between two people on the real server in e2e/real-server.spec.ts.
  */
 import type { Page } from "@playwright/test";
-import { FAMILY_SPACE, KIM, LIN, PHONE, emptySession, expect, expectNothingPastTheEdge, ownAFamily, sampleApp, test } from "./fixtures.ts";
+import { FAMILY_SPACE, KIM, LIN, PHONE, builtInApp, emptySession, expect, expectNothingPastTheEdge, ownAFamily, test } from "./fixtures.ts";
 
 const card = (page: Page, name: string) => page.getByRole("main").getByRole("region", { name });
 
@@ -41,7 +41,7 @@ test.describe("groups in Settings", () => {
     await expect(family.getByText("pat@example.com is invited, and joins the group when they first open Hearth.")).toBeVisible();
     await expect(family.getByRole("listitem").filter({ hasText: "pat@example.com" })).toContainText("InvitedOwner");
 
-    // No apps yet; the card leads to the Apps page, where one added "everyone can view" then shows in the table.
+    // No apps yet; the card leads to the Apps page, where a built-in app added "everyone can view" then shows in the table.
     await expect(family.getByText("No apps in this group yet. Add one on the Apps page.")).toBeVisible();
     await family.getByRole("link", { name: "the Apps page" }).click();
     await card(page, "Family").getByRole("button", { name: "Add an app" }).click();
@@ -54,7 +54,7 @@ test.describe("groups in Settings", () => {
     await expect(table.getByRole("combobox", { name: "Everyone's access to Checklist" })).toHaveValue("view");
     await table.getByRole("combobox", { name: "Lin Example's access to Checklist" }).selectOption({ label: "Can edit" });
     const spaceId = api.session.spaces.find((space) => space.name === "Family")?.id;
-    await expect.poll(() => api.groupChanges.at(-1)).toBe(`PUT /api/spaces/${spaceId}/apps/checklist/access {"members":{"${LIN.id}":"edit"}}`);
+    await expect.poll(() => api.groupChanges.at(-1)).toBe(`PUT /api/spaces/${spaceId}/apps/m-checklist/access {"members":{"${LIN.id}":"edit"}}`);
     expect(api.groupChanges.slice(0, 3)).toEqual([
       'POST /api/spaces {"name":"Family"}',
       `POST /api/spaces/${spaceId}/members {"email":"lin@example.com","role":"member","canAddApps":false}`,
@@ -91,7 +91,7 @@ test.describe("groups in Settings", () => {
     await expect(table.getByRole("columnheader")).toHaveText(["App", "Everyone", "Lin Example"]);
 
     expect(api.groupChanges).toEqual([
-      `PUT /api/spaces/${FAMILY_SPACE}/apps/checklist/access {"memberAccess":"none"}`,
+      `PUT /api/spaces/${FAMILY_SPACE}/apps/m-checklist/access {"memberAccess":"none"}`,
       `PATCH /api/spaces/${FAMILY_SPACE}/members/${LIN.id} {"canAddApps":true}`,
       `DELETE /api/spaces/${FAMILY_SPACE}/invitations {"email":"pat@example.com"}`,
       `DELETE /api/spaces/${FAMILY_SPACE}/members/${KIM.id} null`,
@@ -143,7 +143,7 @@ test.describe("groups in Settings", () => {
           ],
         },
       ],
-      apps: [sampleApp("checklist", FAMILY_SPACE, { access: "view" })],
+      apps: [builtInApp("checklist", FAMILY_SPACE, { access: "view" })],
     });
     api.groups[FAMILY_SPACE] = { apps: [], members: [], invitations: [] };
     await page.goto("/settings");

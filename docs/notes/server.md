@@ -1,6 +1,6 @@
 # Notes: the server
 
-The Hono server in `packages/server` and the contract in `packages/shared`: who may use what (`VISIBLE`), installs, calls, the store, settings, groups, refusals, the database's own rules.
+The Hono server in `packages/server` and the contract in `packages/shared`: who may use what (`VISIBLE`), installs, the store, settings, groups, refusals, the process, the database's own rules. What is only about apps made in Hearth (their manifests, the sandbox, `hearth.fetch`, the built-in apps, the chat) is in `docs/notes/platform.md`.
 
 Notes for whoever changes this part, people and agents alike. They are read when needed, not at the start of every session: add what you learn as one line, and correct a note in the change that makes it untrue.
 
@@ -11,9 +11,11 @@ Notes for whoever changes this part, people and agents alike. They are read when
   tunnel passed on. Reach it by one of those names, also in tests.
 - Every email address goes through `normaliseEmail` in
   `packages/server/src/email.ts` before it is compared or stored.
-- A JSON config file may still name `HEARTH_APPS_DIR`; the server ignores
-  it (`IGNORED_NAMES` in `packages/server/src/config.ts`), so that a file
-  written for an earlier release does not fail the deploy's trial start.
+- A JSON config file may still name `HEARTH_APPS_DIR` or `HEARTH_JOBS`,
+  settings of the mini-apps framework that was removed; the server ignores
+  both (`IGNORED_NAMES` in `packages/server/src/config.ts`), so that a file
+  written for an earlier release still starts the server. A name it does
+  not know otherwise stops it.
 - Who may use an app is decided in one place, the SQL named `VISIBLE` in
   `packages/server/src/apps/installs.ts`, which `resolveInstall` and the
   session both read. A route about one app answers 404 when `resolveInstall`
@@ -28,11 +30,19 @@ Notes for whoever changes this part, people and agents alike. They are read when
   `assistant`: the lesser of the person's access and the space's level
   (`spaces.assistant`: `none`, the default, `view` or `edit`), and `none`
   for an app its owners left out (`space_apps.assistant` = 0).
-  `resolveInstall` with `by: "assistant"` (a `Caller`, which `callApp`'s
-  call and the chat's `MadeRequest` carry) reads it; the session's spaces
-  carry the level, the owners' list each app's `assistant`, and only
-  owners change either (`PUT /api/spaces/:spaceId/assistant`, in
-  `src/assistant`, and `assistant` in the access route).
+  `resolveInstall` with `by: "assistant"` (a `Caller`, which the chat's
+  `MadeRequest` carries) reads it; the session's spaces carry the level,
+  the owners' list each app's `assistant`, and only owners change either
+  (`PUT /api/spaces/:spaceId/assistant`, in `src/assistant`, and
+  `assistant` in the access route).
+- Every app the server holds is made in Hearth: the registry is
+  `madeAppsRegistry(db)` (`src/made/apps.ts`), which reads `made_apps`
+  each time it is asked, so a change to an app counts at once. An ID that
+  is no made app's, or whose manifest no longer reads, is no app: its
+  install is hidden from everyone and its data left alone, and an owner can
+  delete that data without removing it first. An install the move of the
+  old apps could not move (`docs/notes/platform.md`) is such an install
+  until a later start moves it.
 - Who may create a group and who may invite someone who is not on the
   server yet is `groupRights` in `packages/server/src/groups/policy.ts`, read
   from `HEARTH_GROUP_POLICY` (`owner`, the default, or `everyone`; owner's
@@ -67,51 +77,41 @@ Notes for whoever changes this part, people and agents alike. They are read when
   every statement there names its space and app. A test fails otherwise
   (`store-boundary.test.ts`); it reads source text, so a comment that names
   the tables in another file fails it too.
-- A mini-app's handler never gets a database handle, a space ID or a user ID
-  to pass on. `ctx.db` is built in `calls.ts` from the space and app of the
-  address and the signed-in person, after `resolveInstall`, inside the same
-  transaction (deferred for a query, immediate for a mutation). Keep it so
-  when adding to `ctx` or to the store.
-- Handlers are synchronous. One that returns a promise is answered with 500,
-  and the store is closed when the handler returns, so that an `async`
-  handler cannot write after the transaction. Do not add an `await` between
-  the access check and the handler.
-- What a handler does wrong has three kinds. `AppError` (from the SDK) is the
-  request turned down: 400, 404 or 409, not logged. `StoreUsageError` is the
-  app misusing the store, and `StoredRowError` a stored row that no longer
-  fits its collection: both are logged inside an `AppFaultError` and answered
-  with 500, like any other error a handler throws.
-- Every query, mutation and job needs a `description`, one English
-  sentence (owner's decision 7). The types require it and `checkServer`
-  (`packages/server/src/apps/definition.ts`) refuses a server file without
-  one at start-up, fixtures and test apps included. A job also needs
-  `everyMinutes`, a whole number from 15 to 10080 (`JOB_INTERVAL` there),
-  and takes no input; an input given to `app.job` past the types is kept
-  on the job so that the check can refuse it. An app whose manifest names
-  hosts in `network` must define a job, since only a job fetches:
-  `createRegistry` refuses it otherwise, an app without a server file
-  included.
-- `main.ts` only hands the build's list of apps to `serveHearth`
-  (`src/serve.ts`), which is the whole process: the settings and the apps
-  checked before the database opens (status 1 for either), the
-  migrations, `startServer` (the scheduler, its way out, the application
-  and the listening socket), the signals, and a rejected promise that
-  nothing handled, which it logs on one line (`unhandledRejectionLine`)
-  instead of letting Node end the process: a job's function may leave
-  one behind, and it is not waited for once its run is over. A test runs
-  `startServer` with a clock that moves when told and a global `fetch`
-  that refuses every host but this machine; a last one starts a whole
-  process with `serveHearth` and a made-up app (`src/test-process.ts`,
-  through `tsx`) and checks that a rejection its job leaves behind is
-  logged and the process serves on, then ends with status 0 on SIGTERM.
+- Nothing a request says names the space, the app or the person of a store.
+  `withCollection` (`src/made/apps.ts`) makes the store from the route's
+  address and the sign-in, after `resolveInstall`, inside the same
+  transaction, and closes it when the work returns; a closed store refuses
+  everything. Keep it so when adding to the store or to what a page may
+  ask for.
+- What the store does wrong has three kinds. `AppError` (`store.ts`) is a
+  request turned down: 400 for a row that does not fit, 404 for one that is
+  not there, 409, which `withCollection` turns into a `Refusal` of that
+  status, not logged. `StoreUsageError` is the store asked for something it
+  does not do, and `StoredRowError` a stored row that no longer fits its
+  collection: both are faults, logged and answered with 500. So a page's
+  `replace` whose `where` names a field the collection lacks answers 500
+  and is logged, not 400: not fixed yet.
+- `main.ts` only runs `serveHearth` (`src/serve.ts`), which is the whole
+  process: the settings checked before the database opens (status 1), the
+  migrations, `startServer` (the apps' way out, the built-in apps brought
+  up to date and the old apps' installs moved to them, the application and
+  the listening socket), the signals, and a rejected promise that nothing
+  handled, which it logs on one line (`unhandledRejectionLine`) instead of
+  letting Node end the process. On SIGTERM or SIGINT the server stops
+  listening, lets its connections finish and closes the database, within 5
+  seconds whatever holds things up (`STOP_LIMIT_MS`, on the clock it was
+  given). `src/serve.test.ts` runs `startServer` with a clock that moves
+  only when told (`fakeClock`, `src/apps/test-clock.ts`), and starts
+  `main.ts` as a whole process through `tsx`: it serves and ends with
+  status 0 on SIGTERM, and with status 1 before it opens the database when
+  its settings are not valid.
 - Settings are stored as values only, one JSON object for the space and
   one per person, and read against today's manifest in one place, `fill` in
-  `packages/server/src/apps/settings.ts`, which the two routes, a
-  handler's `ctx.settings` (`settingsFor`) and a job's
-  (`spaceSettingsFor`) share. A name the manifest does not
-  declare under that scope is not read; a value that no longer fits reads
-  as the default. Saving replaces the named values and must leave the rest
-  of the stored object alone, so that a rolled-back release finds its
+  `packages/server/src/apps/settings.ts`, which the two routes share. A
+  name the manifest does not declare under that scope is not read; a value
+  that no longer fits reads as the default. Saving replaces the named
+  values and must leave the rest of the stored object alone, so that an app
+  taken back to an earlier version, or a release rolled back, finds its
   values again. Never copy defaults into the database.
 - Whether a value fits a setting is decided by `settingValueProblems` in
   `packages/sdk/src/manifest-schema.ts`, for a manifest's defaults and for
@@ -130,13 +130,10 @@ Notes for whoever changes this part, people and agents alike. They are read when
   settings, switches and pins stay; bringing it back resets access
   (`member_access` as asked, exceptions deleted, and the app included for
   the assistant again) and nothing else.
-- `createApp` throws `AppRegistryError` for a bad manifest, an entry whose
-  `id` differs from its manifest's, an ID that comes twice, or an entry
-  that names `server` with nothing in it (a `server.ts` without a default
-  export; the generated list names `server` exactly when the file exists).
-  `serveHearth` (`src/serve.ts`, which `main.ts` runs) makes the same
-  check before it opens the database and exits with status 1, which is
-  what fails the deploy's trial start.
+- `PUT /api/spaces/:spaceId/apps/:appId` only brings back a removed app:
+  a made app is added to its space when it is made (`createMadeApp`, from
+  the chat or from the catalog's route) and to no other, so for any other
+  space the answer is 404.
 - A space may have several owners and must keep one. Triggers on
   `space_members` enforce it: insert the owner of a new space before anyone
   else, and expect `SQLITE_CONSTRAINT_TRIGGER` when the last owner is removed
@@ -146,7 +143,13 @@ Notes for whoever changes this part, people and agents alike. They are read when
   `packages/server/src/db/apps-schema.test.ts` fails without it): moving an
   app is one `UPDATE` of `space_apps.space_id`. `app_rows` and `app_settings`
   are `ON DELETE RESTRICT` on purpose; `app_jobs` is `ON DELETE CASCADE`,
-  since a job's status is not data and goes with the app's entry.
+  since a job's status is not data and goes with the app's entry, and so is
+  `made_apps`, since deleting the install deletes the app.
+- `app_jobs` (migration 3) is kept although nothing writes it any more: the
+  jobs of the mini-apps framework did, and the move of the old apps deletes
+  the rows of each install it moves (`forgetJobs` in `src/made/builtin.ts`).
+  Migration 3's comment still names `src/apps/jobs.ts`, which is gone: a
+  migration that has shipped is never changed, its comments included.
 - Moving an app (`moveApp` in `packages/server/src/apps/installs.ts`, one
   immediate transaction) cannot carry a row about a person into a space that
   person is not in: the database refuses it. So it first deletes every
@@ -159,6 +162,11 @@ Notes for whoever changes this part, people and agents alike. They are read when
   an owner there gets an `edit` exception, as when adding, and the app is
   included for the assistant under that space's level. A target with an
   entry for the app, removed or not, is 409: nothing is ever merged.
+- Server tests that need a group mostly insert it with SQL (`family()` in
+  `src/apps/test-world.ts`), and their apps with `makeApp` there, a made
+  app written straight into the database; `src/groups/routes.test.ts`
+  makes groups through the routes, and `src/made/made.test.ts` apps
+  through `createMadeApp`.
 - Request schemas in `packages/shared` refuse unknown properties
   (`z.strictObject`); answers such as the session do not, so that a browser
   holding an older web app survives a newer server.

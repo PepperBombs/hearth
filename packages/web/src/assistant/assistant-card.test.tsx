@@ -4,26 +4,44 @@
  * The whole web app is drawn against a stand-in for the server with one
  * person, their own space and a family.
  */
-import type { MemberAccess, Session, Space, SpaceApps, SpaceRole } from "@hearth/shared";
+import type { AppSummary, Localized, MemberAccess, Session, Space, SpaceApps, SpaceRole } from "@hearth/shared";
 import { focusManager, QueryClient } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import checklistManifest from "../../../fixture-apps/checklist/manifest";
-import feedManifest from "../../../fixture-apps/feed/manifest";
 import { App } from "../app";
-import { BundledAppsProvider, type BundledApp } from "../apps/bundled";
 import { SESSION_QUERY_KEY } from "../session/session";
 
 const PERSONAL = "space-personal";
 const FAMILY = "space-family";
-const Empty = () => null;
-const BUNDLED: readonly BundledApp[] = [
-  { id: "checklist", manifest: checklistManifest, hasPage: true, widget: () => Promise.resolve({ default: Empty }) },
-  { id: "feed", manifest: feedManifest, hasPage: false, widget: () => Promise.resolve({ default: Empty }) },
-];
+
+/** The names of the apps, all made in Hearth, as the session lists them. */
+const NAMES: Record<string, Localized> = {
+  checklist: { en: "Checklist", zh: "清单" },
+  feed: { en: "Feed", zh: "动态" },
+};
 
 type Install = { id: string; assistant: boolean };
+
+/** One of the apps in a space, as the session lists it. */
+function summary(install: Install, spaceId: string): AppSummary {
+  const name = NAMES[install.id] ?? { en: install.id, zh: install.id };
+  return {
+    id: install.id,
+    spaceId,
+    name,
+    description: { en: `${name.en}, made in Hearth.`, zh: `${name.zh}，在 Hearth 里做的。` },
+    icon: "list-checks",
+    color: "teal",
+    widgetSize: "wide",
+    access: "edit",
+    enabled: true,
+    pinned: false,
+    hasPage: true,
+    made: true,
+    version: 1,
+  };
+}
 
 class FakeServer {
   locale: "en" | "zh" = "en";
@@ -75,7 +93,7 @@ class FakeServer {
           }),
         ),
       ],
-      apps: [],
+      apps: Object.entries(this.apps).flatMap(([spaceId, installs]) => installs.map((install) => summary(install, spaceId))),
       canCreateGroups: true,
       canInvitePeople: true,
       version: "test",
@@ -145,9 +163,7 @@ function start(server: FakeServer): QueryClient {
   const client = new QueryClient();
   render(
     <MemoryRouter initialEntries={["/settings"]}>
-      <BundledAppsProvider apps={BUNDLED}>
-        <App queryClient={client} />
-      </BundledAppsProvider>
+      <App queryClient={client} />
     </MemoryRouter>,
   );
   return client;

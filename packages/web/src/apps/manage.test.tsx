@@ -1,40 +1,86 @@
 /**
- * The Apps page and the settings dialog: adding an app to a space,
- * removing it, each person's own switch and pin, and the settings form the
- * shell draws from an app's manifest. The whole web app is drawn with the
- * framework's sample apps (packages/fixture-apps), one test app with the
- * setting types the samples do not use, and a stand-in for the server.
+ * The Apps page and the settings dialog: adding a built-in app to a space,
+ * removing an app, each person's own switch and pin, moving an app to
+ * another space, and the settings form the shell draws from what an app
+ * declares. The whole web app is drawn with apps made in Hearth, a few
+ * built-in apps to add, and a stand-in for the server.
  */
-import { defineApp, type Manifest } from "@hearth/sdk";
+import type { Setting } from "@hearth/sdk";
 import type { AppSettings, AppSummary, CatalogApp, Session, SpaceApps } from "@hearth/shared";
 import { QueryClient } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ComponentType } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import checklistManifest from "../../../fixture-apps/checklist/manifest";
-import feedManifest from "../../../fixture-apps/feed/manifest";
 import { App } from "../app";
-import { BundledAppsProvider, type BundledApp, type LazyComponent } from "./bundled";
 
 const PERSONAL = "space-personal";
 const FAMILY = "space-family";
 
-const parts = import.meta.glob<{ default: ComponentType }>("../../../fixture-apps/*/{widget,page}.tsx");
-function part(file: string): LazyComponent {
-  const load = parts[`../../../fixture-apps/${file}.tsx`];
-  if (!load) throw new Error(`packages/fixture-apps has no ${file}.tsx`);
-  return load;
-}
+/** A built-in app, as GET /api/catalog lists it, with what an app made from it declares. */
+type Sample = CatalogApp & { widgetSize: AppSummary["widgetSize"]; settings?: Record<string, Setting> };
 
-/** An app with the two setting types the sample apps do not have: text and a number. */
-const counter = defineApp({
+const CHECKLIST: Sample = {
+  id: "checklist",
+  name: { en: "Checklist", zh: "清单" },
+  description: { en: "A list of things to do, ticked off as you go.", zh: "一份待办清单，完成一项勾选一项。" },
+  icon: "list-checks",
+  color: "teal",
+  network: [],
+  widgetSize: "tall",
+  settings: {
+    sections: {
+      type: "list",
+      scope: "space",
+      default: [],
+      maxItems: 20,
+      maxLength: 40,
+      label: { en: "Sections", zh: "分组" },
+      help: { en: "Items are grouped in this order.", zh: "事项按此顺序分组。" },
+    },
+    hideDone: { type: "switch", scope: "user", default: false, label: { en: "Hide ticked items", zh: "隐藏已勾选的事项" } },
+  },
+};
+
+const FEED: Sample = {
+  id: "feed",
+  name: { en: "Feed", zh: "动态" },
+  description: { en: "A card that each person filters for themselves.", zh: "每个人可以自行筛选的卡片。" },
+  icon: "trending-up",
+  color: "purple",
+  network: [],
+  widgetSize: "wide",
+  settings: {
+    topics: {
+      type: "multi-select",
+      scope: "user",
+      default: [],
+      options: {
+        science: { en: "Science", zh: "科学" },
+        sport: { en: "Sport", zh: "体育" },
+        food: { en: "Food", zh: "美食" },
+      },
+      label: { en: "Topics", zh: "主题" },
+      help: { en: "Leave empty to follow every topic.", zh: "留空则关注所有主题。" },
+    },
+    period: {
+      type: "select",
+      scope: "user",
+      default: "day",
+      options: { day: { en: "Today", zh: "今天" }, week: { en: "This week", zh: "本周" } },
+      label: { en: "Period", zh: "时间范围" },
+    },
+  },
+};
+
+/** An app with the two setting types the others do not have: text and a number. */
+const COUNTER: Sample = {
   id: "counter",
   name: { en: "Counter", zh: "计数器" },
   description: { en: "Counts things for you.", zh: "帮你数东西。" },
   icon: "clock",
   color: "amber",
-  widget: { size: "small" },
+  network: [],
+  widgetSize: "small",
   settings: {
     title: { type: "text", scope: "space", default: "Things", maxLength: 20, label: { en: "Title", zh: "标题" } },
     goal: {
@@ -48,45 +94,41 @@ const counter = defineApp({
       help: { en: "How many a day.", zh: "每天多少个。" },
     },
   },
-});
+};
 
-/** An app that fetches from two hosts on its own, as its manifest's `network` says. */
-const headlines = defineApp({
+/** An app that fetches from two hosts, through the server, as its manifest's `network` says. */
+const HEADLINES: Sample = {
   id: "headlines",
   name: { en: "Headlines", zh: "头条" },
   description: { en: "The latest headlines from two feeds.", zh: "两个来源的最新头条。" },
   icon: "file-text",
   color: "blue",
-  widget: { size: "wide" },
   network: ["feeds.example.com", "photos.example.net"],
-});
+  widgetSize: "wide",
+};
 
-const Empty = () => null;
-const BUNDLED: readonly BundledApp[] = [
-  { id: "checklist", manifest: checklistManifest, hasPage: true, widget: part("checklist/widget"), page: part("checklist/page") },
-  { id: "feed", manifest: feedManifest, hasPage: false, widget: part("feed/widget") },
-  { id: "counter", manifest: counter, hasPage: false, widget: () => Promise.resolve({ default: Empty }) },
-];
-/** The build of BUNDLED plus the app that fetches on its own. */
-const WITH_HEADLINES: readonly BundledApp[] = [
-  ...BUNDLED,
-  { id: "headlines", manifest: headlines, hasPage: false, widget: () => Promise.resolve({ default: Empty }) },
-];
-const MANIFESTS: Record<string, Manifest> = { checklist: checklistManifest, feed: feedManifest, counter, headlines };
+/** The built-in apps the stand-in offers unless a test gives others. */
+const BUILT_IN: readonly Sample[] = [CHECKLIST, FEED, COUNTER];
+const WITH_HEADLINES: readonly Sample[] = [...BUILT_IN, HEADLINES];
 
-function summary(manifest: Manifest, spaceId: string, extra: Partial<AppSummary> = {}): AppSummary {
+/** An app made in Hearth from a built-in app, in a space, as the session lists it. */
+function made(sample: Sample, spaceId: string, extra: Partial<AppSummary> = {}): AppSummary {
   return {
-    id: manifest.id,
+    id: `m-${sample.id}`,
     spaceId,
-    name: manifest.name,
-    description: manifest.description,
-    icon: manifest.icon,
-    color: manifest.color,
-    widgetSize: manifest.widget.size,
+    name: sample.name,
+    description: sample.description,
+    icon: sample.icon,
+    color: sample.color,
+    widgetSize: sample.widgetSize,
     access: "edit",
     enabled: true,
     pinned: false,
-    hasPage: BUNDLED.find((app) => app.id === manifest.id)?.hasPage ?? false,
+    hasPage: true,
+    made: true,
+    version: 1,
+    template: sample.id,
+    ...(sample.settings ? { settings: sample.settings } : {}),
     ...extra,
   };
 }
@@ -120,27 +162,36 @@ function sessionWith(apps: AppSummary[], options: { locale?: "en" | "zh"; family
 
 type Failure = { status: number; code: string };
 
+/** An app a space removed and kept the data of, as the owners' list counts it. */
+type Removed = { id: string; template?: string; rowCount: number };
+
+/** The app made from a built-in app that a space removed, with how many entries it holds. */
+const removedFrom = (sample: Sample, rowCount: number): Removed => ({ id: `m-${sample.id}`, template: sample.id, rowCount });
+
 /**
- * Stands in for the server: the session, adding and removing apps, switches
- * and pins, settings, and the owners' list of a space, which also has the
- * apps the space removed and kept the data of.
+ * Stands in for the server: the session, the built-in apps and adding one
+ * to a space, removing and moving apps, switches and pins, settings, and
+ * the owners' list of a space, which also has the apps the space removed
+ * and kept the data of.
  */
 class FakeServer {
   session: Session = sessionWith([]);
-  /** The apps shipped with Hearth. None unless a test gives some. */
-  catalog: CatalogApp[] = [];
-  /** Apps removed from a space whose data was kept, by space ID, with how many entries each holds. */
-  removed: Record<string, { id: string; rowCount: number }[]> = {};
+  /** The apps shipped with Hearth. */
+  catalog: readonly Sample[] = BUILT_IN;
+  /** Apps removed from a space whose data was kept, by space ID. */
+  removed: Record<string, Removed[]> = {};
+  /** The settings each app holds, by app ID. */
   settings: Record<string, AppSettings> = {
-    checklist: { space: { sections: [] }, user: { hideDone: false } },
-    feed: { space: {}, user: { topics: [], period: "day" } },
-    counter: { space: { title: "Things" }, user: { goal: 5 } },
+    "m-checklist": { space: { sections: [] }, user: { hideDone: false } },
+    "m-feed": { space: {}, user: { topics: [], period: "day" } },
+    "m-counter": { space: { title: "Things" }, user: { goal: 5 } },
   };
   /** Answer requests whose "METHOD path" ends like this with a failure, until cleared. */
   fail: { ending: string; with: Failure } | null = null;
   /** Every request that changes something, as "METHOD path body". */
   readonly changes: string[] = [];
   readonly requests: string[] = [];
+  private added = 0;
 
   count(ending: string): number {
     return this.requests.filter((request) => request.endsWith(ending)).length;
@@ -151,33 +202,34 @@ class FakeServer {
     const method = init.method ?? "GET";
     this.requests.push(`${method} ${path}`);
     const body: unknown = typeof init.body === "string" ? JSON.parse(init.body) : undefined;
-    if (method !== "GET" && !path.includes("/q/")) this.changes.push(`${method} ${path} ${JSON.stringify(body ?? null)}`);
+    if (method !== "GET") this.changes.push(`${method} ${path} ${JSON.stringify(body ?? null)}`);
     const json = (status: number, value: unknown) =>
       new Response(status === 204 ? null : JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
     if (this.fail && `${method} ${path}`.endsWith(this.fail.ending)) {
       return json(this.fail.with.status, { error: { code: this.fail.with.code, message: "Sample failure" } });
     }
     if (path === "/api/session") return json(200, this.session);
-    if (path === "/api/catalog") return json(200, this.catalog);
+    if (path === "/api/catalog") {
+      return json(
+        200,
+        this.catalog.map(({ id, name, description, icon, color, network }) => ({ id, name, description, icon, color, network })),
+      );
+    }
+
+    // A space has one app made from each built-in app: adding one it removed brings that one back.
     const fromCatalog = /^\/api\/spaces\/([^/]+)\/catalog\/([^/]+)$/.exec(path);
-    const template = this.catalog.find((candidate) => candidate.id === fromCatalog?.[2]);
-    if (fromCatalog && template && method === "POST") {
-      const spaceId = fromCatalog[1]!;
-      const made: AppSummary = {
-        ...template,
-        id: `m-${template.id.padEnd(10, "0").slice(0, 10)}`,
-        spaceId,
-        widgetSize: "wide",
-        access: "edit",
-        enabled: true,
-        pinned: false,
-        hasPage: false,
-        made: true,
-        version: 1,
-        template: template.id,
-      };
-      this.session = { ...this.session, apps: [...this.session.apps, made] };
-      return json(201, { appId: made.id, restored: false });
+    if (fromCatalog && method === "POST") {
+      const [, spaceId = "", templateId = ""] = fromCatalog;
+      const sample = this.catalog.find((candidate) => candidate.id === templateId);
+      if (!sample) return json(404, { error: { code: "not_found", message: "No such built-in app." } });
+      if (this.session.apps.some((app) => app.spaceId === spaceId && app.template === templateId)) {
+        return json(409, { error: { code: "conflict", message: "This space has this app already." } });
+      }
+      const back = (this.removed[spaceId] ?? []).find((entry) => entry.template === templateId);
+      this.removed[spaceId] = (this.removed[spaceId] ?? []).filter((entry) => entry !== back);
+      const appId = back?.id ?? `m-${templateId}-${++this.added}`;
+      this.session = { ...this.session, apps: [...this.session.apps, made(sample, spaceId, { id: appId })] };
+      return json(back ? 200 : 201, { appId, restored: back !== undefined });
     }
 
     const owners = /^\/api\/spaces\/([^/]+)\/apps$/.exec(path);
@@ -191,25 +243,14 @@ class FakeServer {
     const match = /^\/api\/spaces\/([^/]+)\/apps\/([^/]+)(?:\/(.+))?$/.exec(path);
     const [, spaceId = "", appId = "", rest = ""] = match ?? [];
     const listed = this.session.apps.find((app) => app.spaceId === spaceId && app.id === appId);
-    if (match && rest === "" && method === "PUT") {
-      const manifest = MANIFESTS[appId];
-      if (!manifest) return json(404, { error: { code: "not_found", message: "No such app." } });
-      // Adding a removed app brings it back.
-      this.removed[spaceId] = (this.removed[spaceId] ?? []).filter((entry) => entry.id !== appId);
-      if (!listed) this.session = { ...this.session, apps: [...this.session.apps, summary(manifest, spaceId)] };
-      return json(204, null);
-    }
     if (!listed) return json(404, { error: { code: "not_found", message: "No such app." } });
     if (rest === "" && method === "DELETE") {
       this.session = { ...this.session, apps: this.session.apps.filter((app) => app !== listed) };
-      this.removed[spaceId] = [...(this.removed[spaceId] ?? []), { id: appId, rowCount: 0 }];
+      this.removed[spaceId] = [...(this.removed[spaceId] ?? []), { id: appId, template: listed.template, rowCount: 0 }];
       return json(204, null);
     }
     if (rest === "move" && method === "POST") {
       const { toSpaceId } = body as { toSpaceId: string };
-      if (this.session.apps.some((app) => app.spaceId === toSpaceId && app.id === appId)) {
-        return json(409, { error: { code: "conflict", message: "That space has the app." } });
-      }
       this.session = { ...this.session, apps: this.session.apps.map((app) => (app === listed ? { ...app, spaceId: toSpaceId } : app)) };
       return json(204, null);
     }
@@ -226,14 +267,14 @@ class FakeServer {
         return json(200, this.settings[appId]);
       }
     }
-    if (rest === "q/list") return json(200, { output: [] });
     return json(404, { error: { code: "not_found", message: "No such route." } });
   };
 
   ownersList(spaceId: string): SpaceApps {
     const space = this.session.spaces.find((candidate) => candidate.id === spaceId);
-    const entry = (id: string, removedAt: string | null, rowCount: number) => ({
+    const entry = ({ id, template, rowCount }: Removed, removedAt: string | null) => ({
       id,
+      ...(template === undefined ? {} : { template }),
       hasCode: true,
       removedAt,
       rowCount,
@@ -243,8 +284,8 @@ class FakeServer {
     });
     return {
       apps: [
-        ...this.session.apps.filter((app) => app.spaceId === spaceId).map((app) => entry(app.id, null, 0)),
-        ...(this.removed[spaceId] ?? []).map((removed) => entry(removed.id, "2026-11-01T08:00:00.000Z", removed.rowCount)),
+        ...this.session.apps.filter((app) => app.spaceId === spaceId).map((app) => entry({ id: app.id, template: app.template, rowCount: 0 }, null)),
+        ...(this.removed[spaceId] ?? []).map((removed) => entry(removed, "2026-11-01T08:00:00.000Z")),
       ],
       members: (space?.members ?? []).map((member) => ({ ...member, email: `${member.id}@example.com`, canAddApps: member.role === "owner" })),
       invitations: [],
@@ -252,13 +293,11 @@ class FakeServer {
   }
 }
 
-function start(server: FakeServer, at = "/apps", bundled: readonly BundledApp[] = BUNDLED) {
+function start(server: FakeServer, at = "/apps") {
   vi.stubGlobal("fetch", server.fetch);
   render(
     <MemoryRouter initialEntries={[at]}>
-      <BundledAppsProvider apps={bundled}>
-        <App queryClient={new QueryClient()} />
-      </BundledAppsProvider>
+      <App queryClient={new QueryClient()} />
     </MemoryRouter>,
   );
 }
@@ -272,6 +311,11 @@ async function spaceCard(name: string): Promise<HTMLElement> {
 const dialog = async (name: string) => screen.findByRole("dialog", { name });
 const pressed = (element: HTMLElement) => element.getAttribute("aria-pressed") === "true";
 const switchedOn = (element: HTMLElement) => element.getAttribute("aria-checked") === "true";
+/** The built-in apps the dialog offers, by the ID of each. */
+const offered = (add: HTMLElement) =>
+  within(within(add).getByRole("group", { name: "App" }))
+    .getAllByRole("radio")
+    .map((radio) => (radio as HTMLInputElement).value);
 
 afterEach(() => {
   cleanup();
@@ -292,9 +336,9 @@ describe("the Apps page", () => {
   it("lists every app by space, switched-off ones included, with the person's own controls", async () => {
     const server = new FakeServer();
     server.session = sessionWith([
-      summary(checklistManifest, PERSONAL),
-      summary(feedManifest, PERSONAL, { enabled: false }),
-      summary(checklistManifest, FAMILY, { access: "view", pinned: true }),
+      made(CHECKLIST, PERSONAL),
+      made(FEED, PERSONAL, { enabled: false }),
+      made(CHECKLIST, FAMILY, { id: "m-checklist-family", access: "view", pinned: true }),
     ]);
     start(server);
 
@@ -303,19 +347,20 @@ describe("the Apps page", () => {
     expect(within(personal).getByRole("switch", { name: "Show Feed" }).getAttribute("aria-checked")).toBe("false");
     expect(within(personal).getByText(/Switched off/)).toBeTruthy();
     // A switched-off app has no link to its page; one that is on does.
-    expect(within(personal).getByRole("link", { name: "Checklist" }).getAttribute("href")).toBe(`/apps/${PERSONAL}/checklist`);
+    expect(within(personal).getByRole("link", { name: "Checklist" }).getAttribute("href")).toBe(`/apps/${PERSONAL}/m-checklist`);
+    expect(within(personal).queryByRole("link", { name: "Feed" })).toBeNull();
 
     const family = await spaceCard("Family");
     expect(within(family).getByText("View only")).toBeTruthy();
     expect(pressed(within(family).getByRole("button", { name: "Pin Checklist in Family" }))).toBe(true);
     // The pinned one is a shortcut at the top too.
     const pinned = within(main()).getByRole("region", { name: "Pinned" });
-    expect(within(pinned).getByRole("link", { name: "Checklist in Family" })).toBeTruthy();
+    expect(within(pinned).getByRole("link", { name: "Checklist in Family" }).getAttribute("href")).toBe(`/apps/${FAMILY}/m-checklist-family`);
   });
 
   it("switches an app off for this person, which takes it off the dashboard, and on again", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, PERSONAL), summary(feedManifest, PERSONAL)]);
+    server.session = sessionWith([made(CHECKLIST, PERSONAL), made(FEED, PERSONAL)]);
     start(server);
 
     const personal = await spaceCard("Personal");
@@ -323,7 +368,7 @@ describe("the Apps page", () => {
     fireEvent.click(show);
     // Saved by the server, and the session read again.
     await waitFor(() => expect(switchedOn(show)).toBe(false));
-    await waitFor(() => expect(server.changes).toEqual([`PATCH /api/spaces/${PERSONAL}/apps/feed/me {"enabled":false}`]));
+    await waitFor(() => expect(server.changes).toEqual([`PATCH /api/spaces/${PERSONAL}/apps/m-feed/me {"enabled":false}`]));
     await waitFor(() => expect(server.count("GET /api/session")).toBe(2));
 
     fireEvent.click(screen.getByRole("link", { name: "Dashboard" }));
@@ -333,23 +378,23 @@ describe("the Apps page", () => {
     fireEvent.click(screen.getAllByRole("link", { name: "Apps" })[0] as HTMLElement);
     fireEvent.click(within(await spaceCard("Personal")).getByRole("switch", { name: "Show Feed" }));
     await waitFor(() => expect(server.changes).toHaveLength(2));
-    expect(server.changes[1]).toBe(`PATCH /api/spaces/${PERSONAL}/apps/feed/me {"enabled":true}`);
+    expect(server.changes[1]).toBe(`PATCH /api/spaces/${PERSONAL}/apps/m-feed/me {"enabled":true}`);
   });
 
   it("pins an app: it joins the shortcuts and comes first on the dashboard", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(feedManifest, PERSONAL), summary(checklistManifest, PERSONAL)]);
+    server.session = sessionWith([made(FEED, PERSONAL), made(CHECKLIST, PERSONAL)]);
     start(server);
 
     const personal = await spaceCard("Personal");
     expect(within(main()).getByText("Nothing pinned yet.")).toBeTruthy();
     fireEvent.click(within(personal).getByRole("button", { name: "Pin Checklist" }));
-    await waitFor(() => expect(server.changes).toEqual([`PATCH /api/spaces/${PERSONAL}/apps/checklist/me {"pinned":true}`]));
+    await waitFor(() => expect(server.changes).toEqual([`PATCH /api/spaces/${PERSONAL}/apps/m-checklist/me {"pinned":true}`]));
     const pinned = within(main()).getByRole("region", { name: "Pinned" });
     expect(await within(pinned).findByRole("link", { name: "Checklist" })).toBeTruthy();
     // Pinned apps are listed first in their space as well.
     const rows = within(await spaceCard("Personal")).getAllByRole("listitem");
-    expect(rows.map((row) => row.getAttribute("data-app-row"))).toEqual(["checklist", "feed"]);
+    expect(rows.map((row) => row.getAttribute("data-app-row"))).toEqual(["m-checklist", "m-feed"]);
 
     fireEvent.click(screen.getByRole("link", { name: "Dashboard" }));
     const grid = await screen.findByTestId("widget-grid");
@@ -358,8 +403,8 @@ describe("the Apps page", () => {
 
   it("puts the switch back and says so when the server does not save it", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(feedManifest, PERSONAL)]);
-    server.fail = { ending: "/feed/me", with: { status: 500, code: "internal" } };
+    server.session = sessionWith([made(FEED, PERSONAL)]);
+    server.fail = { ending: "/m-feed/me", with: { status: 500, code: "internal" } };
     start(server);
 
     const personal = await spaceCard("Personal");
@@ -368,52 +413,36 @@ describe("the Apps page", () => {
     await waitFor(() => expect(switchedOn(within(personal).getByRole("switch", { name: "Show Feed" }))).toBe(true));
   });
 
-  it("adds an app this build holds to the personal space, without asking about anyone else", async () => {
+  it("adds a built-in app to the personal space as an app of its own, without asking about anyone else", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, PERSONAL)]);
+    server.session = sessionWith([made(CHECKLIST, PERSONAL)]);
     start(server);
 
     fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
     const add = await dialog("Add an app to your personal space");
     // The checklist is there already; the others are offered, the first one chosen.
-    expect(within(add).getAllByRole("radio").map((radio) => (radio as HTMLInputElement).value)).toEqual(["feed", "counter"]);
+    expect(offered(add)).toEqual(["feed", "counter"]);
+    expect((within(add).getByRole("radio", { name: /Feed/ }) as HTMLInputElement).checked).toBe(true);
     expect(within(add).queryByRole("group", { name: "Who else can use it" })).toBeNull();
     fireEvent.click(within(add).getByRole("radio", { name: /Counter/ }));
     fireEvent.click(within(add).getByRole("button", { name: "Add" }));
 
-    await waitFor(() => expect(server.changes).toEqual([`PUT /api/spaces/${PERSONAL}/apps/counter {}`]));
+    await waitFor(() => expect(server.changes).toEqual([`POST /api/spaces/${PERSONAL}/catalog/counter {}`]));
     expect(await within(await spaceCard("Personal")).findByRole("switch", { name: "Show Counter" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
-  });
-
-  it("offers the apps shipped with Hearth first, a build's app of the same ID as that alone, and adds one to the space", async () => {
-    const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, PERSONAL)]);
-    const builtIn = (id: string, en: string, network: string[] = []): CatalogApp => ({
-      id,
-      name: { en, zh: en },
-      description: { en: `${en}, built in.`, zh: `${en}，内置。` },
-      icon: "star",
-      color: "amber",
-      network,
-    });
-    server.catalog = [builtIn("ideas", "Ideas"), builtIn("feed", "Headlines", ["news.example.com"])];
-    start(server);
-
-    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
-    const add = await dialog("Add an app to your personal space");
-    expect(within(add).getAllByRole("radio").map((radio) => (radio as HTMLInputElement).value)).toEqual(["ideas", "feed", "counter"]);
-    expect(within(add).getByRole("radio", { name: /Headlines/ })).toBeTruthy();
-    expect(within(add).getByText("Fetches data from news.example.com on its own.")).toBeTruthy();
-    fireEvent.click(within(add).getByRole("radio", { name: /Headlines/ }));
-    fireEvent.click(within(add).getByRole("button", { name: "Add" }));
-    await waitFor(() => expect(server.changes).toEqual([`POST /api/spaces/${PERSONAL}/catalog/feed {}`]));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
     // Added, it is not offered again.
     fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
-    const again = await dialog("Add an app to your personal space");
-    expect(within(again).getAllByRole("radio").map((radio) => (radio as HTMLInputElement).value)).toEqual(["ideas", "counter"]);
+    expect(offered(await dialog("Add an app to your personal space"))).toEqual(["feed"]);
+  });
+
+  it("offers each built-in app to each space, whatever the other spaces have", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(CHECKLIST, PERSONAL), made(FEED, FAMILY)]);
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Add an app" }));
+    expect(offered(await dialog("Add an app to Family"))).toEqual(["checklist", "counter"]);
   });
 
   it("asks who else may use an app added to a group, with only me for now chosen first", async () => {
@@ -426,13 +455,13 @@ describe("the Apps page", () => {
     expect((within(who).getByRole("radio", { name: "Only me for now" }) as HTMLInputElement).checked).toBe(true);
     fireEvent.click(within(who).getByRole("radio", { name: "Everyone can edit" }));
     fireEvent.click(within(add).getByRole("button", { name: "Add" }));
-    await waitFor(() => expect(server.changes).toEqual([`PUT /api/spaces/${FAMILY}/apps/checklist {"memberAccess":"edit"}`]));
+    await waitFor(() => expect(server.changes).toEqual([`POST /api/spaces/${FAMILY}/catalog/checklist {"memberAccess":"edit"}`]));
   });
 
   it("says when an app cannot be added, and keeps the dialog open", async () => {
     const server = new FakeServer();
     server.session = sessionWith([], { familyRole: "member", canAdd: true });
-    server.fail = { ending: `PUT /api/spaces/${FAMILY}/apps/checklist`, with: { status: 409, code: "conflict" } };
+    server.fail = { ending: `POST /api/spaces/${FAMILY}/catalog/checklist`, with: { status: 409, code: "conflict" } };
     start(server);
 
     fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Add an app" }));
@@ -443,9 +472,9 @@ describe("the Apps page", () => {
     expect(server.count(`GET /api/spaces/${FAMILY}/apps`)).toBe(0);
   });
 
-  it("says that adding an app the space removed brings its data back, and still asks who else may use it", async () => {
+  it("says that adding a built-in app the space removed brings its data back, and still asks who else may use it", async () => {
     const server = new FakeServer();
-    server.removed[FAMILY] = [{ id: "checklist", rowCount: 3 }];
+    server.removed[FAMILY] = [removedFrom(CHECKLIST, 3)];
     start(server);
 
     fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Add an app" }));
@@ -464,17 +493,17 @@ describe("the Apps page", () => {
     fireEvent.click(checklist);
     fireEvent.click(within(who).getByRole("radio", { name: "Everyone can view" }));
     fireEvent.click(within(add).getByRole("button", { name: "Bring back" }));
-    await waitFor(() => expect(server.changes).toEqual([`PUT /api/spaces/${FAMILY}/apps/checklist {"memberAccess":"view"}`]));
+    await waitFor(() => expect(server.changes).toEqual([`POST /api/spaces/${FAMILY}/catalog/checklist {"memberAccess":"view"}`]));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(within(await spaceCard("Family")).getByRole("switch", { name: "Show Checklist in Family" })).toBeTruthy();
+    // The app that comes back is the one the space removed.
+    const family = await spaceCard("Family");
+    expect(within(family).getByRole("switch", { name: "Show Checklist in Family" })).toBeTruthy();
+    expect(within(family).getByRole("link", { name: "Checklist in Family" }).getAttribute("href")).toBe(`/apps/${FAMILY}/m-checklist`);
   });
 
   it("counts what comes back, and says when it is only the settings", async () => {
     const server = new FakeServer();
-    server.removed[PERSONAL] = [
-      { id: "checklist", rowCount: 1 },
-      { id: "feed", rowCount: 0 },
-    ];
+    server.removed[PERSONAL] = [removedFrom(CHECKLIST, 1), removedFrom(FEED, 0)];
     start(server);
 
     fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
@@ -483,6 +512,20 @@ describe("the Apps page", () => {
     expect(within(add).getByText("Removed earlier: adding it again brings back its settings.")).toBeTruthy();
     // The counter was never here.
     expect(within(add).getByRole("radio", { name: /Counter/ }).closest("label")?.textContent).not.toMatch(/Removed earlier/);
+  });
+
+  it("does not take an app made in the chat that the space removed for a built-in one", async () => {
+    const server = new FakeServer();
+    server.removed[PERSONAL] = [{ id: "m-ledger", rowCount: 4 }];
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
+    const add = await dialog("Add an app to your personal space");
+    // Adding waits for the owners' list, which is there once the button can be pressed.
+    await waitFor(() => expect((within(add).getByRole("button", { name: "Add" }) as HTMLButtonElement).disabled).toBe(false));
+    expect(offered(add)).toEqual(["checklist", "feed", "counter"]);
+    expect(within(add).queryByText(/Removed earlier/)).toBeNull();
+    expect(within(add).getByRole("button", { name: "Add" })).toBeTruthy();
   });
 
   it("adds nothing for an owner until it knows which apps the space removed, and offers to look again", async () => {
@@ -496,7 +539,7 @@ describe("the Apps page", () => {
     expect((within(add).getByRole("button", { name: "Add" }) as HTMLButtonElement).disabled).toBe(true);
 
     server.fail = null;
-    server.removed[PERSONAL] = [{ id: "checklist", rowCount: 2 }];
+    server.removed[PERSONAL] = [removedFrom(CHECKLIST, 2)];
     fireEvent.click(within(add).getByRole("button", { name: "Try again" }));
     expect(await within(add).findByText("Removed earlier: adding it again brings back its data, 2 saved entries.")).toBeTruthy();
     expect((within(add).getByRole("button", { name: "Bring back" }) as HTMLButtonElement).disabled).toBe(false);
@@ -509,15 +552,15 @@ describe("the Apps page", () => {
 
     fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Add an app" }));
     const add = await dialog("Add an app to Family");
-    // Meanwhile another owner added the checklist, for everyone to view: "only me for now" is not what it has.
-    server.session = sessionWith([summary(checklistManifest, FAMILY)]);
-    server.fail = { ending: `PUT /api/spaces/${FAMILY}/apps/checklist`, with: { status: 409, code: "conflict" } };
+    // Meanwhile another owner added the checklist to the family: the server turns a second one down.
+    server.session = sessionWith([made(CHECKLIST, FAMILY)]);
     const sessions = server.count("GET /api/session");
     fireEvent.click(within(add).getByRole("button", { name: "Add" }));
 
     expect(
       await within(add).findByText("The app could not be added: it may have been added here meanwhile. This page now shows what the space has."),
     ).toBeTruthy();
+    expect(server.changes).toEqual([`POST /api/spaces/${FAMILY}/catalog/checklist {"memberAccess":"none"}`]);
     expect(server.count("GET /api/session")).toBe(sessions + 1);
     // The family has the checklist now, so it is no longer offered, and the next app is chosen instead.
     expect(within(add).queryByRole("radio", { name: /Checklist/ })).toBeNull();
@@ -527,21 +570,19 @@ describe("the Apps page", () => {
 
   it("closes the dialog when someone else added the last app it offered", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, PERSONAL), summary(feedManifest, PERSONAL)]);
+    server.session = sessionWith([made(CHECKLIST, PERSONAL), made(FEED, PERSONAL)]);
     start(server);
 
     fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
     const add = await dialog("Add an app to your personal space");
-    expect(within(add).getAllByRole("radio").map((radio) => (radio as HTMLInputElement).value)).toEqual(["counter"]);
-    server.session = sessionWith([summary(checklistManifest, PERSONAL), summary(feedManifest, PERSONAL), summary(counter, PERSONAL)]);
-    server.fail = { ending: `PUT /api/spaces/${PERSONAL}/apps/counter`, with: { status: 409, code: "conflict" } };
+    expect(offered(add)).toEqual(["counter"]);
+    server.session = sessionWith([made(CHECKLIST, PERSONAL), made(FEED, PERSONAL), made(COUNTER, PERSONAL)]);
     fireEvent.click(within(add).getByRole("button", { name: "Add" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const personal = await spaceCard("Personal");
-    expect(within(personal).getByText("Every app this server holds is already here.")).toBeTruthy();
+    expect(within(personal).getByText(/^Every built-in app is already here\./)).toBeTruthy();
 
     // Removed again, the counter can be added again; the dialog waits to be asked for.
-    server.fail = null;
     fireEvent.click(within(personal).getByRole("button", { name: "Remove Counter" }));
     fireEvent.click(within(await dialog("Remove Counter?")).getByRole("button", { name: "Remove" }));
     expect(await within(personal).findByRole("button", { name: "Add an app" })).toBeTruthy();
@@ -550,7 +591,7 @@ describe("the Apps page", () => {
 
   it("says when the server no longer holds the app asked for", async () => {
     const server = new FakeServer();
-    server.fail = { ending: `PUT /api/spaces/${PERSONAL}/apps/checklist`, with: { status: 404, code: "not_found" } };
+    server.fail = { ending: `POST /api/spaces/${PERSONAL}/catalog/checklist`, with: { status: 404, code: "not_found" } };
     start(server);
 
     fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
@@ -559,38 +600,47 @@ describe("the Apps page", () => {
     expect(await within(add).findByText("This server no longer holds this app. Reload the page to update.")).toBeTruthy();
   });
 
-  it("says why there is nothing to add: no apps on the server, every one here already, or none for this kind of space", async () => {
+  it("says why there is nothing to add: no built-in apps, or every one here already, and leads to the chat", async () => {
     const server = new FakeServer();
-    start(server, "/apps", []);
-    const personal = await spaceCard("Personal");
-    expect(within(personal).getByText("No apps are installed on this server yet.")).toBeTruthy();
-    expect(within(personal).queryByRole("button", { name: "Add an app" })).toBeNull();
-    expect(within(await spaceCard("Family")).getByText("No apps are installed on this server yet.")).toBeTruthy();
-
-    cleanup();
-    server.session = sessionWith([summary(checklistManifest, PERSONAL), summary(feedManifest, PERSONAL), summary(counter, PERSONAL)]);
+    server.catalog = [];
     start(server);
-    expect(within(await spaceCard("Personal")).getByText("Every app this server holds is already here.")).toBeTruthy();
+    const personal = await spaceCard("Personal");
+    const none = await within(personal).findByText(/^This server has no built-in apps\./);
+    expect(none.textContent).toBe("This server has no built-in apps. Make an app in the chat.");
+    expect(within(none).getByRole("link", { name: "the chat" }).getAttribute("href")).toBe("/chat");
+    expect(within(personal).queryByRole("button", { name: "Add an app" })).toBeNull();
+    expect(within(await spaceCard("Family")).getByText(/^This server has no built-in apps\./)).toBeTruthy();
 
     cleanup();
-    const chores = defineApp({
-      id: "chores",
-      name: { en: "Chores", zh: "家务" },
-      description: { en: "Who does what at home.", zh: "家里谁做什么。" },
-      icon: "calendar",
-      color: "teal",
-      spaces: ["group"],
-      widget: { size: "small" },
-    });
-    server.session = sessionWith([]);
-    start(server, "/apps", [{ id: "chores", manifest: chores, hasPage: false, widget: () => Promise.resolve({ default: Empty }) }]);
-    expect(within(await spaceCard("Personal")).getByText("The other apps on this server cannot be added to this space.")).toBeTruthy();
-    expect(within(await spaceCard("Family")).getByRole("button", { name: "Add an app" })).toBeTruthy();
+    server.catalog = BUILT_IN;
+    server.session = sessionWith([made(CHECKLIST, PERSONAL), made(FEED, PERSONAL), made(COUNTER, PERSONAL)]);
+    start(server);
+    const full = await within(await spaceCard("Personal")).findByText(/^Every built-in app is already here\./);
+    expect(full.textContent).toBe("Every built-in app is already here. Make a new one in the chat.");
+    fireEvent.click(within(full).getByRole("link", { name: "the chat" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Chat" })).toBeTruthy();
+  });
+
+  it("says when the built-in apps could not be read, and reads them again", async () => {
+    const server = new FakeServer();
+    server.fail = { ending: "GET /api/catalog", with: { status: 500, code: "internal" } };
+    start(server);
+
+    const personal = await spaceCard("Personal");
+    expect(await within(personal).findByText("The built-in apps could not be loaded.")).toBeTruthy();
+    expect(within(personal).queryByRole("button", { name: "Add an app" })).toBeNull();
+    // What the server failed at is not asked again by itself.
+    expect(server.count("GET /api/catalog")).toBe(1);
+
+    server.fail = null;
+    fireEvent.click(within(personal).getByRole("button", { name: "Try again" }));
+    expect(await within(personal).findByRole("button", { name: "Add an app" })).toBeTruthy();
+    expect(within(personal).queryByText("The built-in apps could not be loaded.")).toBeNull();
   });
 
   it("offers adding only where the person may, and removing only to an owner", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, FAMILY, { access: "edit" })], { familyRole: "member" });
+    server.session = sessionWith([made(CHECKLIST, FAMILY, { access: "edit" })], { familyRole: "member" });
     start(server);
 
     const family = await spaceCard("Family");
@@ -603,31 +653,31 @@ describe("the Apps page", () => {
 
   it("takes an app someone else removed off the page when removing it is turned down", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, FAMILY), summary(feedManifest, FAMILY)]);
+    server.session = sessionWith([made(CHECKLIST, FAMILY), made(FEED, FAMILY)]);
     start(server);
 
     fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Remove Feed in Family" }));
     const remove = await dialog("Remove Feed in Family?");
     // Meanwhile another owner removed it.
-    server.session = sessionWith([summary(checklistManifest, FAMILY)]);
+    server.session = sessionWith([made(CHECKLIST, FAMILY)]);
     fireEvent.click(within(remove).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const family = await spaceCard("Family");
     expect(within(family).queryByRole("switch", { name: "Show Feed in Family" })).toBeNull();
     expect(within(family).getByRole("switch", { name: "Show Checklist in Family" })).toBeTruthy();
-    expect(server.changes).toEqual([`DELETE /api/spaces/${FAMILY}/apps/feed null`]);
+    expect(server.changes).toEqual([`DELETE /api/spaces/${FAMILY}/apps/m-feed null`]);
   });
 
   it("tells someone who is no longer an owner that removing is for owners", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, FAMILY)]);
+    server.session = sessionWith([made(CHECKLIST, FAMILY)]);
     start(server);
 
     fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Remove Checklist in Family" }));
     const remove = await dialog("Remove Checklist in Family?");
     // Meanwhile another owner made Sam a plain member.
-    server.session = sessionWith([summary(checklistManifest, FAMILY)], { familyRole: "member" });
-    server.fail = { ending: `DELETE /api/spaces/${FAMILY}/apps/checklist`, with: { status: 403, code: "forbidden" } };
+    server.session = sessionWith([made(CHECKLIST, FAMILY)], { familyRole: "member" });
+    server.fail = { ending: `DELETE /api/spaces/${FAMILY}/apps/m-checklist`, with: { status: 403, code: "forbidden" } };
     fireEvent.click(within(remove).getByRole("button", { name: "Remove" }));
     expect(await within(remove).findByText("Only an owner of this space can remove an app.")).toBeTruthy();
     expect(within(await spaceCard("Family")).queryByRole("button", { name: "Remove Checklist in Family" })).toBeNull();
@@ -635,7 +685,7 @@ describe("the Apps page", () => {
 
   it("removes an app from a space after asking, and says that its data is kept", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, FAMILY)]);
+    server.session = sessionWith([made(CHECKLIST, FAMILY)]);
     start(server);
 
     fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Remove Checklist in Family" }));
@@ -646,14 +696,14 @@ describe("the Apps page", () => {
 
     fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Remove Checklist in Family" }));
     fireEvent.click(within(await dialog("Remove Checklist in Family?")).getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(server.changes).toEqual([`DELETE /api/spaces/${FAMILY}/apps/checklist null`]));
+    await waitFor(() => expect(server.changes).toEqual([`DELETE /api/spaces/${FAMILY}/apps/m-checklist null`]));
     expect(await within(await spaceCard("Family")).findByText("No apps in this space yet.")).toBeTruthy();
   });
 
   it("speaks Chinese", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, FAMILY)], { locale: "zh" });
-    server.removed[FAMILY] = [{ id: "feed", rowCount: 2 }];
+    server.session = sessionWith([made(CHECKLIST, FAMILY)], { locale: "zh" });
+    server.removed[FAMILY] = [removedFrom(FEED, 2)];
     start(server);
     const family = await spaceCard("Family");
     expect(within(family).getByRole("switch", { name: "显示Family的清单" })).toBeTruthy();
@@ -663,9 +713,18 @@ describe("the Apps page", () => {
     expect(await within(add).findByText("曾被移除：再次添加会恢复它的数据，共 2 条。")).toBeTruthy();
     expect(within(add).getByRole("button", { name: "恢复" })).toBeTruthy();
   });
+
+  it("says why there is nothing to add in Chinese too", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(CHECKLIST, PERSONAL), made(FEED, PERSONAL), made(COUNTER, PERSONAL)], { locale: "zh" });
+    start(server);
+    const full = await within(await spaceCard("个人")).findByText(/^内置应用都已经在这里了。/);
+    expect(full.textContent).toBe("内置应用都已经在这里了。可以在对话里做一个新的。");
+    expect(within(full).getByRole("link", { name: "对话" }).getAttribute("href")).toBe("/chat");
+  });
 });
 
-describe("the hosts an app fetches from", () => {
+describe("the hosts a built-in app fetches from", () => {
   /** The choice of one app in the dialog that adds apps: its radio button with everything written beside it. */
   const choice = (add: HTMLElement, name: RegExp) => within(add).getByRole("radio", { name }).closest("label") as HTMLElement;
   /** The texts under an app's name in its choice, in order. */
@@ -674,7 +733,8 @@ describe("the hosts an app fetches from", () => {
 
   it("are named under the description of a new app, and nothing is said of an app that names none", async () => {
     const server = new FakeServer();
-    start(server, "/apps", WITH_HEADLINES);
+    server.catalog = WITH_HEADLINES;
+    start(server);
 
     fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
     const add = await dialog("Add an app to your personal space");
@@ -690,14 +750,15 @@ describe("the hosts an app fetches from", () => {
     // The dialog asks nothing more: the app is added as any other.
     fireEvent.click(within(add).getByRole("radio", { name: /Headlines/ }));
     fireEvent.click(within(add).getByRole("button", { name: "Add" }));
-    await waitFor(() => expect(server.changes).toEqual([`PUT /api/spaces/${PERSONAL}/apps/headlines {}`]));
+    await waitFor(() => expect(server.changes).toEqual([`POST /api/spaces/${PERSONAL}/catalog/headlines {}`]));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
   it("are named for an app brought back, before what comes back with it", async () => {
     const server = new FakeServer();
-    server.removed[FAMILY] = [{ id: "headlines", rowCount: 4 }];
-    start(server, "/apps", WITH_HEADLINES);
+    server.catalog = WITH_HEADLINES;
+    server.removed[FAMILY] = [removedFrom(HEADLINES, 4)];
+    start(server);
 
     fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Add an app" }));
     const add = await dialog("Add an app to Family");
@@ -710,14 +771,15 @@ describe("the hosts an app fetches from", () => {
     ]);
     fireEvent.click(within(add).getByRole("radio", { name: /Headlines/ }));
     fireEvent.click(within(add).getByRole("button", { name: "Bring back" }));
-    await waitFor(() => expect(server.changes).toEqual([`PUT /api/spaces/${FAMILY}/apps/headlines {"memberAccess":"none"}`]));
+    await waitFor(() => expect(server.changes).toEqual([`POST /api/spaces/${FAMILY}/catalog/headlines {"memberAccess":"none"}`]));
   });
 
   it("are named in Chinese, for a new app and for one brought back", async () => {
     const server = new FakeServer();
+    server.catalog = WITH_HEADLINES;
     server.session = sessionWith([], { locale: "zh" });
-    server.removed[FAMILY] = [{ id: "headlines", rowCount: 4 }];
-    start(server, "/apps", WITH_HEADLINES);
+    server.removed[FAMILY] = [removedFrom(HEADLINES, 4)];
+    start(server);
 
     fireEvent.click(within(await spaceCard("个人")).getByRole("button", { name: "添加应用" }));
     const personal = await dialog("向个人空间添加应用");
@@ -739,7 +801,7 @@ describe("the hosts an app fetches from", () => {
 describe("moving an app to another space", () => {
   it("moves a group's app to the owner's own space, after saying what goes along and who loses it", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, FAMILY, { pinned: true })]);
+    server.session = sessionWith([made(CHECKLIST, FAMILY, { pinned: true })]);
     start(server);
 
     fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Move Checklist in Family" }));
@@ -753,7 +815,7 @@ describe("moving an app to another space", () => {
     expect(within(move).getByText(/Anyone here who is not in that space loses it/)).toBeTruthy();
 
     fireEvent.click(within(move).getByRole("button", { name: "Move" }));
-    await waitFor(() => expect(server.changes).toEqual([`POST /api/spaces/${FAMILY}/apps/checklist/move {"toSpaceId":"${PERSONAL}"}`]));
+    await waitFor(() => expect(server.changes).toEqual([`POST /api/spaces/${FAMILY}/apps/m-checklist/move {"toSpaceId":"${PERSONAL}"}`]));
     // It is in the personal space now, which says so and has the focus the dialog had.
     const personal = await spaceCard("Personal");
     const notice = await within(personal).findByText("Checklist was moved here.");
@@ -770,7 +832,7 @@ describe("moving an app to another space", () => {
 
   it("moves a personal app into a group, asking who else may use it there, only me for now first", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(feedManifest, PERSONAL)]);
+    server.session = sessionWith([made(FEED, PERSONAL)]);
     start(server);
 
     fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Move Feed" }));
@@ -784,57 +846,34 @@ describe("moving an app to another space", () => {
     fireEvent.click(within(move).getByRole("button", { name: "Move" }));
 
     await waitFor(() =>
-      expect(server.changes).toEqual([`POST /api/spaces/${PERSONAL}/apps/feed/move {"toSpaceId":"${FAMILY}","memberAccess":"view"}`]),
+      expect(server.changes).toEqual([`POST /api/spaces/${PERSONAL}/apps/m-feed/move {"toSpaceId":"${FAMILY}","memberAccess":"view"}`]),
     );
     expect(await within(await spaceCard("Family")).findByRole("switch", { name: "Show Feed in Family" })).toBeTruthy();
     expect(within(await spaceCard("Family")).getByText("Feed was moved here.")).toBeTruthy();
   });
 
-  it("is offered to an owner of the space, towards spaces where the person may add apps, that lack the app and that its manifest allows", async () => {
-    const journal = defineApp({
-      id: "journal",
-      name: { en: "Journal", zh: "日记" },
-      description: { en: "One entry a day, for you alone.", zh: "每天一篇，只给自己看。" },
-      icon: "notebook-text",
-      color: "purple",
-      spaces: ["personal"],
-      widget: { size: "wide" },
-    });
-    const bundled = [...BUNDLED, { id: "journal", manifest: journal, hasPage: false, widget: () => Promise.resolve({ default: Empty }) }];
+  it("is offered to an owner of the space, towards the spaces where the person may add apps", async () => {
     const server = new FakeServer();
-    server.session = sessionWith(
-      [
-        summary(checklistManifest, PERSONAL),
-        summary(feedManifest, PERSONAL),
-        summary(journal, PERSONAL),
-        summary(checklistManifest, FAMILY),
-        summary(counter, FAMILY),
-      ],
-      { familyRole: "member", canAdd: true },
-    );
-    start(server, "/apps", bundled);
+    server.session = sessionWith([made(FEED, PERSONAL), made(CHECKLIST, FAMILY)], { familyRole: "member", canAdd: true });
+    start(server);
 
-    const personal = await spaceCard("Personal");
-    // The feed may go to the family; the family has a checklist already; the journal is for personal spaces only.
-    expect(within(personal).getByRole("button", { name: "Move Feed" })).toBeTruthy();
-    expect(within(personal).queryByRole("button", { name: "Move Checklist" })).toBeNull();
-    expect(within(personal).queryByRole("button", { name: "Move Journal" })).toBeNull();
+    // The feed may go to the family, where Sam may add apps.
+    expect(within(await spaceCard("Personal")).getByRole("button", { name: "Move Feed" })).toBeTruthy();
     // A member does not move the group's apps, not even one who may add apps there.
-    const family = await spaceCard("Family");
-    expect(within(family).queryByRole("button", { name: /^Move/ })).toBeNull();
+    expect(within(await spaceCard("Family")).queryByRole("button", { name: /^Move/ })).toBeNull();
 
     // A member who may not add apps to the group cannot move anything into it.
     cleanup();
-    server.session = sessionWith([summary(feedManifest, PERSONAL)], { familyRole: "member", canAdd: false });
-    start(server, "/apps", bundled);
+    server.session = sessionWith([made(FEED, PERSONAL)], { familyRole: "member", canAdd: false });
+    start(server);
     expect(within(await spaceCard("Personal")).getByRole("button", { name: "Pin Feed" })).toBeTruthy();
     expect(within(await spaceCard("Personal")).queryByRole("button", { name: "Move Feed" })).toBeNull();
   });
 
   it("says when the app cannot be moved there, keeps the dialog open and reads the session again", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(feedManifest, PERSONAL)]);
-    server.fail = { ending: `POST /api/spaces/${PERSONAL}/apps/feed/move`, with: { status: 409, code: "conflict" } };
+    server.session = sessionWith([made(FEED, PERSONAL)]);
+    server.fail = { ending: `POST /api/spaces/${PERSONAL}/apps/m-feed/move`, with: { status: 409, code: "conflict" } };
     start(server);
 
     fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Move Feed" }));
@@ -848,7 +887,7 @@ describe("moving an app to another space", () => {
     expect(screen.getByRole("dialog", { name: "Move Feed to another space" })).toBeTruthy();
 
     // Anything else is worth another try.
-    server.fail = { ending: `POST /api/spaces/${PERSONAL}/apps/feed/move`, with: { status: 500, code: "internal" } };
+    server.fail = { ending: `POST /api/spaces/${PERSONAL}/apps/m-feed/move`, with: { status: 500, code: "internal" } };
     fireEvent.click(within(move).getByRole("button", { name: "Move" }));
     expect(await within(move).findByText("The app could not be moved. Try again.")).toBeTruthy();
     fireEvent.click(within(move).getByRole("button", { name: "Cancel" }));
@@ -858,7 +897,7 @@ describe("moving an app to another space", () => {
 
   it("speaks Chinese", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, FAMILY)], { locale: "zh" });
+    server.session = sessionWith([made(CHECKLIST, FAMILY)], { locale: "zh" });
     start(server);
 
     fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "移动Family的清单" }));
@@ -871,11 +910,16 @@ describe("moving an app to another space", () => {
 });
 
 describe("the settings dialog", () => {
-  it("is drawn from the manifest in two groups, and saves only what was changed", async () => {
-    const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, FAMILY)]);
-    start(server, `/apps/${FAMILY}/checklist`);
+  /** Where an app's page is drawn, in its sandbox. */
+  const frameOf = (appId: string) => document.querySelector<HTMLIFrameElement>(`iframe[data-made-app="${appId}"]`);
 
+  it("is drawn from what the app declares in two groups, saves only what was changed, and tells the app's page", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(CHECKLIST, FAMILY)]);
+    start(server, `/apps/${FAMILY}/m-checklist`);
+
+    await waitFor(() => expect(frameOf("m-checklist")).not.toBeNull());
+    const told = vi.spyOn(frameOf("m-checklist")!.contentWindow!, "postMessage");
     fireEvent.click(await screen.findByRole("button", { name: "Settings of Checklist in Family" }));
     const settings = await dialog("Checklist settings");
     const everyone = await within(settings).findByRole("group", { name: "For everyone in this space" });
@@ -888,20 +932,21 @@ describe("the settings dialog", () => {
     expect(save.disabled).toBe(true);
     fireEvent.click(hide);
     expect(save.disabled).toBe(false);
+    expect(told).not.toHaveBeenCalled();
     fireEvent.click(save);
 
     await waitFor(() =>
-      expect(server.changes).toEqual([`PATCH /api/spaces/${FAMILY}/apps/checklist/settings {"user":{"hideDone":true}}`]),
+      expect(server.changes).toEqual([`PATCH /api/spaces/${FAMILY}/apps/m-checklist/settings {"user":{"hideDone":true}}`]),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    // The app's own code reads its settings and queries again.
-    await waitFor(() => expect(server.count(`POST /api/spaces/${FAMILY}/apps/checklist/q/list`)).toBe(2));
+    // The app's page reads its settings itself, and is told to read them again.
+    expect(told).toHaveBeenCalledWith({ type: "hearth:changed" }, "*");
   });
 
   it("edits a list: adds, moves and removes entries", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, PERSONAL)]);
-    server.settings.checklist = { space: { sections: ["Garden", "House"] }, user: { hideDone: false } };
+    server.session = sessionWith([made(CHECKLIST, PERSONAL)]);
+    server.settings["m-checklist"] = { space: { sections: ["Garden", "House"] }, user: { hideDone: false } };
     start(server, "/");
 
     fireEvent.click(await screen.findByRole("button", { name: "Settings of Checklist" }));
@@ -920,14 +965,14 @@ describe("the settings dialog", () => {
     fireEvent.click(within(settings).getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(server.changes).toEqual([
-        `PATCH /api/spaces/${PERSONAL}/apps/checklist/settings {"space":{"sections":["Errands","Home"]}}`,
+        `PATCH /api/spaces/${PERSONAL}/apps/m-checklist/settings {"space":{"sections":["Errands","Home"]}}`,
       ]),
     );
   });
 
   it("chooses options of a select and a multi-select, in the order of the options", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(feedManifest, PERSONAL)]);
+    server.session = sessionWith([made(FEED, PERSONAL)]);
     start(server, "/");
 
     fireEvent.click(await screen.findByRole("button", { name: "Settings of Feed" }));
@@ -942,16 +987,19 @@ describe("the settings dialog", () => {
     fireEvent.click(within(settings).getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(server.changes).toEqual([
-        `PATCH /api/spaces/${PERSONAL}/apps/feed/settings {"user":{"topics":["science","food"],"period":"week"}}`,
+        `PATCH /api/spaces/${PERSONAL}/apps/m-feed/settings {"user":{"topics":["science","food"],"period":"week"}}`,
       ]),
     );
-    // The card shows the new settings.
-    expect(await screen.findByText("Following 2 topics")).toBeTruthy();
+    // Opened again, it shows what was saved.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Settings of Feed" }));
+    const again = await within(await dialog("Feed settings")).findByRole("group", { name: "Topics" });
+    expect(within(again).getAllByRole("button").filter((chip) => pressed(chip)).map((chip) => chip.textContent)).toEqual(["Science", "Food"]);
   });
 
   it("checks a number against its limits before sending it, and edits text", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(counter, PERSONAL)]);
+    server.session = sessionWith([made(COUNTER, PERSONAL)]);
     start(server);
 
     fireEvent.click(await screen.findByRole("button", { name: "Settings of Counter" }));
@@ -980,14 +1028,14 @@ describe("the settings dialog", () => {
     fireEvent.click(save);
     await waitFor(() =>
       expect(server.changes).toEqual([
-        `PATCH /api/spaces/${PERSONAL}/apps/counter/settings {"space":{"title":"Glasses of water"},"user":{"goal":8}}`,
+        `PATCH /api/spaces/${PERSONAL}/apps/m-counter/settings {"space":{"title":"Glasses of water"},"user":{"goal":8}}`,
       ]),
     );
   });
 
   it("shows the space's settings to someone who may only view, and lets them change only their own", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(counter, FAMILY, { access: "view" })], { familyRole: "member" });
+    server.session = sessionWith([made(COUNTER, FAMILY, { access: "view" })], { familyRole: "member" });
     start(server);
 
     fireEvent.click(await screen.findByRole("button", { name: "Settings of Counter in Family" }));
@@ -999,21 +1047,21 @@ describe("the settings dialog", () => {
     fireEvent.change(within(settings).getByRole("spinbutton", { name: "Daily goal" }), { target: { value: "3" } });
     fireEvent.click(within(settings).getByRole("button", { name: "Save" }));
     await waitFor(() =>
-      expect(server.changes).toEqual([`PATCH /api/spaces/${FAMILY}/apps/counter/settings {"user":{"goal":3}}`]),
+      expect(server.changes).toEqual([`PATCH /api/spaces/${FAMILY}/apps/m-counter/settings {"user":{"goal":3}}`]),
     );
   });
 
   it("stays open and says so when the server turns the change down", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(counter, PERSONAL)]);
-    server.fail = { ending: "/counter/settings", with: { status: 403, code: "forbidden" } };
+    server.session = sessionWith([made(COUNTER, PERSONAL)]);
+    server.fail = { ending: "/m-counter/settings", with: { status: 403, code: "forbidden" } };
     start(server);
 
     fireEvent.click(await screen.findByRole("button", { name: "Settings of Counter" }));
     const settings = await dialog("Counter settings");
     // Even the settings could not be read: the dialog says so and offers to try again.
     expect(await within(settings).findByText("The settings could not be loaded.")).toBeTruthy();
-    server.fail = { ending: "PATCH /api/spaces/space-personal/apps/counter/settings", with: { status: 403, code: "forbidden" } };
+    server.fail = { ending: `PATCH /api/spaces/${PERSONAL}/apps/m-counter/settings`, with: { status: 403, code: "forbidden" } };
     fireEvent.click(within(settings).getByRole("button", { name: "Try again" }));
 
     fireEvent.change(await within(settings).findByRole("textbox", { name: "Title" }), { target: { value: "Ours" } });
@@ -1022,10 +1070,52 @@ describe("the settings dialog", () => {
     expect(screen.getByRole("dialog", { name: "Counter settings" })).toBeTruthy();
   });
 
+  it("reads the session again when the server says the app is not there, and the app goes with its dialog", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(COUNTER, PERSONAL), made(FEED, PERSONAL)]);
+    start(server);
+
+    fireEvent.click(await within(await spaceCard("Personal")).findByRole("button", { name: "Settings of Counter" }));
+    const settings = await dialog("Counter settings");
+    fireEvent.change(await within(settings).findByRole("textbox", { name: "Title" }), { target: { value: "Ours" } });
+    // Meanwhile an owner removed it.
+    server.session = sessionWith([made(FEED, PERSONAL)]);
+    const sessions = server.count("GET /api/session");
+    fireEvent.click(within(settings).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(server.count("GET /api/session")).toBe(sessions + 1);
+    const personal = await spaceCard("Personal");
+    expect(within(personal).queryByRole("switch", { name: "Show Counter" })).toBeNull();
+    expect(within(personal).getByRole("switch", { name: "Show Feed" })).toBeTruthy();
+  });
+
+  it("does the same when it is reading the settings that finds the app gone", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(COUNTER, PERSONAL)]);
+    start(server);
+
+    const open = await within(await spaceCard("Personal")).findByRole("button", { name: "Settings of Counter" });
+    server.session = sessionWith([]);
+    fireEvent.click(open);
+    await waitFor(() => expect(within(main()).queryByRole("switch", { name: "Show Counter" })).toBeNull());
+    expect(server.count("GET /api/session")).toBe(2);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("is not offered for an app that declares no settings", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(HEADLINES, PERSONAL), made(COUNTER, PERSONAL)]);
+    start(server);
+
+    expect(await within(await spaceCard("Personal")).findByRole("button", { name: "Settings of Counter" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Settings of Headlines" })).toBeNull();
+  });
+
   it("speaks Chinese, the app's labels included", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([summary(checklistManifest, FAMILY)], { locale: "zh" });
-    start(server, `/apps/${FAMILY}/checklist`);
+    server.session = sessionWith([made(CHECKLIST, FAMILY)], { locale: "zh" });
+    start(server, `/apps/${FAMILY}/m-checklist`);
 
     fireEvent.click(await screen.findByRole("button", { name: "Family的清单的设置" }));
     const settings = await dialog("清单设置");
@@ -1035,45 +1125,11 @@ describe("the settings dialog", () => {
     expect(within(settings).getByText("事项按此顺序分组。")).toBeTruthy();
     expect(within(settings).getByRole("button", { name: "保存" })).toBeTruthy();
   });
-});
 
-describe("an app made in Hearth", () => {
-  const made = (id: string, name: string, extra: Partial<AppSummary> = {}): AppSummary => ({
-    id,
-    spaceId: PERSONAL,
-    name: { en: name, zh: name },
-    description: { en: name, zh: name },
-    icon: "star",
-    color: "amber",
-    widgetSize: "wide",
-    access: "edit",
-    enabled: true,
-    pinned: false,
-    hasPage: true,
-    made: true,
-    version: 1,
-    ...extra,
-  });
-  const frameOf = (appId: string) => document.querySelector(`iframe[data-made-app="${appId}"]`);
-
-  it("gets a frame of its own on each app's page, so that the page shown before is never answered as the next app", async () => {
-    const server = new FakeServer();
-    server.session = sessionWith([made("m-aaaaaaaaaa", "Notes"), made("m-bbbbbbbbbb", "Ledger")]);
-    start(server, `/apps/${PERSONAL}/m-aaaaaaaaaa`);
-    await waitFor(() => expect(frameOf("m-aaaaaaaaaa")).not.toBeNull());
-    const first = frameOf("m-aaaaaaaaaa")!;
-
-    // To the other app's page from the sidebar, without leaving the web app.
-    fireEvent.click(screen.getAllByRole("link", { name: "Ledger" })[0]!);
-    await waitFor(() => expect(frameOf("m-bbbbbbbbbb")).not.toBeNull());
-    expect(frameOf("m-bbbbbbbbbb")).not.toBe(first);
-    expect(first.isConnected).toBe(false);
-  });
-
-  it("opens its settings on what the server holds now, not on what an earlier opening read", async () => {
+  it("opens on what the server holds now, not on what an earlier opening read", async () => {
     const server = new FakeServer();
     const settings = { shown: { type: "switch", scope: "user", default: false, label: { en: "Show done", zh: "显示已完成" } } };
-    server.session = sessionWith([made("m-aaaaaaaaaa", "Notes", { settings })]);
+    server.session = sessionWith([made(HEADLINES, PERSONAL, { id: "m-aaaaaaaaaa", name: { en: "Notes", zh: "Notes" }, settings })]);
     server.settings["m-aaaaaaaaaa"] = { space: {}, user: { shown: false } };
     start(server, "/");
 
@@ -1091,3 +1147,23 @@ describe("an app made in Hearth", () => {
   });
 });
 
+describe("an app's page", () => {
+  const frameOf = (appId: string) => document.querySelector(`iframe[data-made-app="${appId}"]`);
+
+  it("gets a frame of its own on each app's page, so that the page shown before is never answered as the next app", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([
+      made(HEADLINES, PERSONAL, { id: "m-aaaaaaaaaa", name: { en: "Notes", zh: "Notes" } }),
+      made(HEADLINES, PERSONAL, { id: "m-bbbbbbbbbb", name: { en: "Ledger", zh: "Ledger" } }),
+    ]);
+    start(server, `/apps/${PERSONAL}/m-aaaaaaaaaa`);
+    await waitFor(() => expect(frameOf("m-aaaaaaaaaa")).not.toBeNull());
+    const first = frameOf("m-aaaaaaaaaa")!;
+
+    // To the other app's page from the sidebar, without leaving the web app.
+    fireEvent.click(screen.getAllByRole("link", { name: "Ledger" })[0]!);
+    await waitFor(() => expect(frameOf("m-bbbbbbbbbb")).not.toBeNull());
+    expect(frameOf("m-bbbbbbbbbb")).not.toBe(first);
+    expect(first.isConnected).toBe(false);
+  });
+});

@@ -1,49 +1,121 @@
 /**
- * Mini-apps' data and settings: the tables `app_rows` and `app_settings`.
+ * Apps' data and settings: the tables `app_rows` and `app_settings`.
  *
  * This is the only file with SQL for those two tables (a test fails if
  * their names appear in any other source file), so that there is one place
  * to check that every statement names its space and its app.
  *
- * - `readOnlyStore` and `writableStore` are what a handler gets as `ctx.db`,
- *   and what a job's `ctx.read` and `ctx.write` give their work: the
+ * - `readOnlyStore` and `writableStore` are what the rows of an app made in
+ *   Hearth are read and written through (src/made/apps.ts): the
  *   collections the app declared, each limited to one app in one space.
  *   The space, the app and the person come from the caller of these
- *   functions, who has checked the person's access, or for a job that the
- *   run still holds its install (jobs.ts); nothing a mini-app or a request
- *   body says can change them. The caller closes the store when the
- *   handler or the work has returned, and a closed store refuses
- *   everything.
+ *   functions, who has checked the person's access in the same
+ *   transaction; nothing a request body says can change them. The caller
+ *   closes the store when its work has returned, and a closed store
+ *   refuses everything.
  * - `readSettingsData` and `writeSettingsData` read and replace what was
  *   saved for an app's settings in one space: one JSON object for the space
- *   and one for each person. `readSpaceSettingsData` reads the space's
- *   alone, for a job. What the values mean is settings.ts's business.
+ *   and one for each person. What the values mean is settings.ts's business.
+ * - `rowsNotFitting` finds the rows a change to an app would leave unreadable.
  * - `countRows` says how many rows an app holds in a space, for its owners.
  * - `deleteAllData` deletes everything an app has in a space.
  * - `deleteOwnSettingsOfOthers` deletes, before an app moves to another
  *   space, the own settings of the people who are not in that space.
  *
- * Design: docs/mini-app-contract.md, sections A3 and A6.
+ * Design: docs/mini-app-contract.md, sections A3 and A6, and
+ * docs/platform.md.
  */
-import { AppError, type Collection, type ReadCollection, type z } from "@hearth/sdk/server";
-import { safeParse } from "zod";
+import { safeParse, type z } from "zod";
 import type { Db } from "../db/database";
 import { newId } from "../db/ids";
-import { PLAIN_NAME } from "./definition";
+
+/** The ways the store turns a request down. Each becomes the HTTP answer of the same name. */
+export const APP_ERROR_CODES = ["invalid_request", "not_found", "conflict"] as const;
+export type AppErrorCode = (typeof APP_ERROR_CODES)[number];
+
+/**
+ * A request the store turns down: 400 `invalid_request` for a row that does
+ * not fit its collection, 404 `not_found` for a row that is not there, or
+ * 409 `conflict`. Whatever the transaction wrote is undone. The message is
+ * in English, for logs and network traces; it reaches the caller, so it must
+ * not say what the caller may not know. Any other error the store throws is
+ * a fault: it is logged and answered with 500.
+ */
+export class AppError extends Error {
+  readonly code: AppErrorCode;
+  constructor(code: AppErrorCode, message: string) {
+    super(message);
+    this.name = "AppError";
+    this.code = code;
+  }
+}
+
+/**
+ * A stored row: the collection's fields, plus what the store records.
+ * `createdBy` and `updatedBy` are user IDs; the two times are ISO strings.
+ */
+export type Row<T> = T & {
+  id: string;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ListOptions<T> = {
+  /**
+   * Only rows whose fields equal these. A value is text, a number, true,
+   * false or null, and is compared together with its kind: `true` does not
+   * match a stored 1. A key the collection does not have, a value of another
+   * kind and an undefined value are errors: leave a key out to match all.
+   */
+  where?: Partial<T>;
+  /** Only rows the person of the store created. */
+  mine?: boolean;
+  /** A field of the collection, or when the row was created or last changed. Default: `createdAt`. */
+  orderBy?: Extract<keyof T, string> | "createdAt" | "updatedAt";
+  /** Last first. Rows that tie are in the order they were inserted, reversed with `desc`. */
+  desc?: boolean;
+  /** At most this many rows. Default 1000; more than 5000 is an error. */
+  limit?: number;
+};
+
+/** What reading a collection may do. All of it is limited to one app in one space. */
+export interface ReadCollection<T> {
+  /** The row with this ID, or null. A row of another space or another app is not found. */
+  get(id: string): Row<T> | null;
+  list(options?: ListOptions<T>): Row<T>[];
+  count(where?: Partial<T>): number;
+}
+
+/** What changing a collection may do: read and write. */
+export interface Collection<T> extends ReadCollection<T> {
+  /**
+   * Stores a row. The value is checked against the collection's schema; one
+   * that does not fit throws `AppError("invalid_request")`.
+   */
+  insert(value: T): Row<T>;
+  /**
+   * Replaces the given top-level fields of a row; a field given as undefined
+   * is left as it is. The result is checked like an insert. An unknown ID
+   * throws `AppError("not_found")`.
+   */
+  update(id: string, patch: Partial<T>): Row<T>;
+  /** Deletes the row with this ID. An unknown ID is not an error. */
+  remove(id: string): void;
+  /** Deletes the rows whose fields equal these, as in `list`, and says how many went. `{}` deletes all. */
+  removeWhere(where: Partial<T>): number;
+}
+
+/** The names of the fields the store matches and orders by, which end up in a JSON path. */
+const PLAIN_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 /** Which rows a store reaches, and who is reaching for them. */
 export type StoreScope = {
   spaceId: string;
   appId: string;
-  /**
-   * Who is recorded on what is written. For a query or a mutation, the
-   * signed-in person, whom `list({ mine: true })` means. For a job, the
-   * person who added the app to the space (`space_apps.created_by`), on
-   * whose behalf it runs; a job is no one, so `mine` is refused there.
-   */
+  /** Who is recorded on what is written: the signed-in person, whom `list({ mine: true })` means. */
   userId: string;
-  /** The job whose `ctx.read` or `ctx.write` opened the store, or null for a handler's `ctx.db`. */
-  job: string | null;
   /** The time that rows written through this store carry. */
   now: Date;
 };
@@ -64,10 +136,9 @@ type StoredRow = {
 type Bindings = Record<string, string | number>;
 
 /**
- * A handler asked the store for something it does not do: a `where` on a
- * field the collection lacks, a limit above the maximum, anything at all
- * once its request is over. This is a mistake in the app's code, not in the
- * request, so it is a fault: logged, 500.
+ * The store was asked for something it does not do: a `where` on a field
+ * the collection lacks, a limit above the maximum, anything at all once its
+ * work is over. It is a fault, not a refusal: logged, 500.
  */
 export class StoreUsageError extends Error {
   constructor(message: string) {
@@ -86,10 +157,7 @@ export class StoredRowError extends Error {
   readonly collection: string;
   readonly rowId: string;
   constructor(appId: string, collection: string, rowId: string, reason: string) {
-    super(
-      `App "${appId}": the row "${rowId}" in the collection "${collection}" does not fit the collection's schema (${reason}). ` +
-        "Give every field added to a collection a default, so that rows stored before still fit.",
-    );
+    super(`App "${appId}": the row "${rowId}" in the collection "${collection}" does not fit the collection's schema (${reason}).`);
     this.name = "StoredRowError";
     this.appId = appId;
     this.collection = collection;
@@ -128,19 +196,13 @@ function openCollection(
     new StoreUsageError(`App "${appId}", collection "${collection}": ${message}`);
 
   /**
-   * Refuses a store that outlived its request, or its job's work: by then
-   * the transaction that held the access check, or the check that the run
-   * still holds its install, is over, so nothing may be read or written on
-   * its strength. An `async` handler or work gets here after its first
-   * `await`.
+   * Refuses a store that outlived its work: by then the transaction that
+   * held the access check is over, so nothing may be read or written on its
+   * strength. Work that is `async` gets here after its first `await`.
    */
   function live(): void {
     if (lifetime.closed) {
-      throw misuse(
-        scope.job === null
-          ? "ctx.db was used after the handler returned. A handler cannot keep it for later, and cannot use it after an await."
-          : `the db that ctx.read or ctx.write gave the job "${scope.job}" was used after its work returned. Work cannot keep it for later, and cannot use it after an await.`,
-      );
+      throw misuse("the store was used after its work returned. It cannot be kept for later, nor used after an await.");
     }
   }
 
@@ -238,8 +300,7 @@ function openCollection(
   /**
    * Checks a value that is about to be stored and returns it as the JSON to
    * store and as the fields a later read will give. What does not fit the
-   * schema is the request's fault: a route may leave the collection's rules
-   * (a name's length, say) to the collection.
+   * schema is the request's fault.
    */
   function accept(value: unknown): { data: string; fields: Fields } {
     const parsed = schema.safeParse(value);
@@ -275,12 +336,6 @@ function openCollection(
       const bindings = scoped();
       let conditions = matching(options.where, bindings);
       if (options.mine) {
-        if (scope.job !== null) {
-          // What the job writes carries whoever added the app, and `mine` would find their rows as if they had asked.
-          throw misuse(
-            `list({ mine: true }) finds the rows of the person asking, and the job "${scope.job}" runs for no one in the space. Leave mine out.`,
-          );
-        }
         conditions += " AND created_by = @userId";
         bindings.userId = userId;
       }
@@ -380,7 +435,7 @@ function openCollection(
 
 type Schemas = Readonly<Record<string, z.ZodObject>>;
 
-/** A handler's `ctx.db`, and the way to end it. */
+/** An app's collections, and the way to end them. */
 export type Store<C> = {
   /** The app's collections by name. */
   collections: Readonly<Record<string, C>>;
@@ -412,18 +467,18 @@ function openStore<C>(
 }
 
 /**
- * An app's collections for a mutation: read and write, all of it limited to
- * the scope's space and app. Call it only with a scope taken from an install
- * the person was found to have edit access to, inside the same transaction
- * as that check, and close it when the handler has returned.
+ * An app's collections to read and write, all of it limited to the scope's
+ * space and app. Call it only with a scope taken from an install the person
+ * was found to have edit access to, inside the same transaction as that
+ * check, and close it when the work has returned.
  */
 export function writableStore(db: Db, scope: StoreScope, collections: Schemas): Store<Collection<Fields>> {
   return openStore(db, scope, collections, (collection) => collection);
 }
 
 /**
- * An app's collections for a query. The methods that write are not there at
- * all, so a query cannot change data whatever its code tries.
+ * An app's collections to read, for someone who may only view them: the
+ * methods that write are not there at all.
  */
 export function readOnlyStore(db: Db, scope: StoreScope, collections: Schemas): Store<ReadCollection<Fields>> {
   return openStore(db, scope, collections, ({ get, list, count }) => ({ get, list, count }));
@@ -471,18 +526,6 @@ export function readSettingsData(db: Db, owner: SettingsOwner): Record<SettingsS
 }
 
 /**
- * What was saved for the settings an app shares with its whole space, and
- * nobody's own: what a job, which runs for no one, reads. Empty when nothing
- * was saved. The caller has checked that the app is in the space.
- */
-export function readSpaceSettingsData(db: Db, install: { spaceId: string; appId: string }): SettingsData {
-  const row = db
-    .prepare("SELECT data FROM app_settings WHERE space_id = @spaceId AND app_id = @appId AND user_id IS NULL")
-    .get({ spaceId: install.spaceId, appId: install.appId }) as { data: string } | undefined;
-  return row ? settingsObject(row.data) : {};
-}
-
-/**
  * Replaces what is saved for an app's settings in one space: the shared
  * values, or this person's own. The caller holds the transaction, has
  * checked that the person may change them, and passes the whole object.
@@ -522,8 +565,8 @@ export type RowMisfit = { collection: string; rowId: string; reason: string };
 /**
  * The rows one app holds in one space that would not fit these schemas: a
  * row of a collection they lack, or one its collection's schema refuses.
- * For a change to an app made in Hearth (src/made/apps.ts), which must
- * leave every stored row readable. Gives the first `limit` and how many in
+ * For a change to an app (src/made/apps.ts), which must leave every stored
+ * row readable. Gives the first `limit` and how many in
  * all; the reasons name fields, never their content.
  */
 export function rowsNotFitting(

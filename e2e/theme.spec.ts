@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.ts";
+import { PERSONAL_SPACE, builtInApp, emptySession, expect, sandbox, test } from "./fixtures.ts";
 
 const LIGHT_BG = "rgb(241, 244, 249)";
 const DARK_BG = "rgb(16, 20, 27)";
@@ -26,6 +26,17 @@ test("the theme toggle switches to dark, saves it, and it survives a reload", as
   await page.getByRole("button", { name: "Light mode" }).click();
   await expect(html).toHaveAttribute("data-theme", "light");
   await expect.poll(() => api.saved).toEqual([{ theme: "dark" }, { theme: "light" }]);
+});
+
+test("an app's page is drawn in the theme the person sees, and drawn again when it changes", async ({ page, api }) => {
+  api.setSession({ ...emptySession(), apps: [builtInApp("checklist", PERSONAL_SPACE)] });
+  await page.goto("/");
+  const inCard = sandbox(page, "m-checklist");
+  await expect(inCard.locator("html")).toHaveAttribute("data-theme", "light");
+
+  await page.getByRole("button", { name: "Dark mode" }).click();
+  await expect(inCard.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(inCard.getByRole("heading", { name: "Checklist" })).toBeVisible();
 });
 
 test("the remembered theme is applied before the app's script runs", async ({ page, api }) => {

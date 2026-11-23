@@ -8,9 +8,8 @@ import { addApp } from "../apps/installs";
 import { notFound, Refusal } from "../http/errors";
 import type { Template } from "./catalog";
 import { asSdkManifest } from "./manifest";
-import { FetchError } from "@hearth/sdk/server";
 import { z } from "zod";
-import { fetchFor, type Outbound } from "../apps/fetch";
+import { FetchError, fetchFor, type Outbound } from "../apps/fetch";
 import type { Hono } from "hono";
 import type { Registry } from "../apps/registry";
 import type { Db } from "../db/database";
@@ -153,7 +152,7 @@ export function registerMadeRoutes(
   });
 
   // A GET from one of the hosts the app names, by the server, under the rules
-  // of a job's ctx.fetch (src/apps/fetch.ts): no cookie, no sign-in, paced.
+  // of src/apps/fetch.ts: no cookie, no sign-in, paced.
   // Whoever may see the app may ask; the answer is the fetched page's alone.
   app.post(`${BASE}/fetch`, requireMember, async (c) => {
     const { url, headers } = await readBody(c, fetchSchema);

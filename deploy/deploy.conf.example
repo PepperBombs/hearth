@@ -5,16 +5,13 @@
 # Everything the deployment owns lives under this folder.
 HEARTH_BASE=/opt/hearth
 
-# Clones the script fetches from. It never writes to them.
-# Each release is built with the mini-apps of APPS_REPO's main branch at the
-# same moment. Left empty, releases hold no mini-apps: they disappear from
-# the site, and their data stays in the database until they come back.
-# Mini-apps need not live in hearth-stones: APPS_REPO may name several
-# clones, separated by colons, and a release holds the apps of all of them
-# (docs/self-hosting.md, step 3). Their code runs inside the server, so name
-# only repositories you trust.
+# The clone of the framework the script fetches from. It never writes to it.
 FRAMEWORK_REPO=/opt/hearth/repos/hearth
-APPS_REPO=/opt/hearth/repos/hearth-stones
+
+# APPS_REPO is no longer used. It named the clones of mini-apps that each
+# release was built with; every app is made in Hearth now, and kept in the
+# database. A file that still holds it deploys all the same, and each build
+# says that the line is ignored: delete it when convenient.
 
 REMOTE=origin
 BRANCH=main

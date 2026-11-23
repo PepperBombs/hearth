@@ -2,17 +2,22 @@
  * What an assistant may do, as a space's owners decide it
  * (docs/mini-app-contract.md, section F, "The switches", build step F1):
  * the space's level, an app left out, and what that leaves for each person,
- * worked out in VISIBLE and checked again inside callApp's transaction.
+ * worked out in VISIBLE and checked again inside the transaction in which
+ * an assistant reads or writes an app's rows (src/made/apps.ts).
  */
 import { apiErrorSchema, sessionSchema, type ApiErrorCode, type MemberAccess } from "@hearth/shared";
 import { beforeEach, describe, expect, it } from "vitest";
-import { callApp } from "../apps/calls";
 import { resolveInstall, type Caller } from "../apps/installs";
-import { createRegistry, type Registry } from "../apps/registry";
-import { APPS, family, grant, install, KIM, LIN, NOA, SAM } from "../apps/test-world";
+import type { Registry } from "../apps/registry";
+import { family, grant, install, KIM, LIN, makeApp, NOA, SAM } from "../apps/test-world";
+import { addMadeRow, listMadeRows, madeAppsRegistry } from "../made/apps";
 import { as, testApp } from "../testing";
 
 const BASE = "http://hearth.example.com";
+/** The family's checklist. */
+const CHECKLIST = "m-checklist0";
+/** Sam's own checklist. */
+const OWN = "m-samslist00";
 
 let world: ReturnType<typeof family>;
 let app: ReturnType<typeof testApp>["app"];
@@ -20,8 +25,8 @@ let registry: Registry;
 
 beforeEach(() => {
   world = family();
-  ({ app } = testApp({ db: world.db, apps: APPS }));
-  registry = createRegistry(APPS);
+  ({ app } = testApp({ db: world.db }));
+  registry = madeAppsRegistry(world.db);
 });
 
 function call(who: string, method: string, path: string, body?: unknown) {
@@ -58,7 +63,7 @@ const setLevelDirectly = (spaceId: string, level: MemberAccess) =>
   world.db.prepare("UPDATE spaces SET assistant = ? WHERE id = ?").run(level, spaceId);
 
 /** What someone in the world may do with the family's checklist, by themselves or through an assistant. */
-const levelOf = (userId: string, by: Caller, appId = "checklist", spaceId = world.family) =>
+const levelOf = (userId: string, by: Caller, appId = CHECKLIST, spaceId = world.family) =>
   resolveInstall(world.db, registry, userId, spaceId, appId, by);
 
 async function sessionLevels(who: string): Promise<Record<string, MemberAccess>> {
@@ -71,8 +76,8 @@ async function sessionLevels(who: string): Promise<Record<string, MemberAccess>>
 describe("what an assistant may do with an app for a person", () => {
   beforeEach(() => {
     // Every member may view the checklist; Kim may edit it; Noa is not in the family.
-    install(world.db, world.family, "checklist", world.sam.id, { memberAccess: "view" });
-    grant(world.db, world.family, "checklist", world.kim.id, "edit", world.sam.id);
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id, { memberAccess: "view" });
+    grant(world.db, world.family, CHECKLIST, world.kim.id, "edit", world.sam.id);
   });
 
   it("is nothing while the space is Off, whatever the person may do", () => {
@@ -111,28 +116,28 @@ describe("what an assistant may do with an app for a person", () => {
 
   it("is nothing for someone with no access, and for an app left out, at any level", () => {
     setLevelDirectly(world.family, "edit");
-    grant(world.db, world.family, "checklist", world.lin.id, "none", world.sam.id);
+    grant(world.db, world.family, CHECKLIST, world.lin.id, "none", world.sam.id);
     expect(levelOf(world.lin.id, "assistant")).toBeNull();
-    world.db.prepare("UPDATE space_apps SET assistant = 0 WHERE space_id = ? AND app_id = 'checklist'").run(world.family);
+    world.db.prepare("UPDATE space_apps SET assistant = 0 WHERE space_id = ? AND app_id = ?").run(world.family, CHECKLIST);
     expect([world.sam, world.kim].map((person) => levelOf(person.id, "assistant"))).toEqual([null, null]);
     // Leaving an app out changes nothing for the people themselves.
     expect([world.sam, world.kim].map((person) => levelOf(person.id, "person"))).toEqual(["edit", "edit"]);
   });
 
-  it("is nothing for an app that was removed or whose code the server does not hold", () => {
+  it("is nothing for an app that was removed or that the server does not hold", () => {
     setLevelDirectly(world.family, "edit");
     install(world.db, world.family, "retired", world.sam.id, { memberAccess: "edit" });
-    install(world.db, world.family, "feed", world.sam.id, { memberAccess: "edit", removedAt: "2026-01-05T00:00:00.000Z" });
+    makeApp(world.db, world.family, "m-feed000000", world.sam.id, { memberAccess: "edit", removedAt: "2026-01-05T00:00:00.000Z" });
     expect(levelOf(world.sam.id, "assistant", "retired")).toBeNull();
-    expect(levelOf(world.sam.id, "assistant", "feed")).toBeNull();
+    expect(levelOf(world.sam.id, "assistant", "m-feed000000")).toBeNull();
   });
 
   it("follows each space's own level: a personal space is its owner's to switch", () => {
-    install(world.db, world.samsSpace, "checklist", world.sam.id);
+    makeApp(world.db, world.samsSpace, OWN, world.sam.id);
     setLevelDirectly(world.family, "edit");
-    expect(levelOf(world.sam.id, "assistant", "checklist", world.samsSpace)).toBeNull();
+    expect(levelOf(world.sam.id, "assistant", OWN, world.samsSpace)).toBeNull();
     setLevelDirectly(world.samsSpace, "view");
-    expect(levelOf(world.sam.id, "assistant", "checklist", world.samsSpace)).toBe("view");
+    expect(levelOf(world.sam.id, "assistant", OWN, world.samsSpace)).toBe("view");
   });
 });
 
@@ -162,7 +167,7 @@ describe("PUT /api/spaces/:spaceId/assistant", () => {
     for (const level of ["admin", "", null, 1]) {
       await expectError(await setLevel(SAM, world.family, level), 400, "invalid_request");
     }
-    await expectError(await call(SAM, "PUT", `/api/spaces/${world.family}/assistant`, { level: "view", app: "checklist" }), 400, "invalid_request");
+    await expectError(await call(SAM, "PUT", `/api/spaces/${world.family}/assistant`, { level: "view", app: CHECKLIST }), 400, "invalid_request");
     expect(levelIn(world.family)).toBe("none");
     expect(levelIn(world.linsSpace)).toBe("none");
   });
@@ -170,89 +175,72 @@ describe("PUT /api/spaces/:spaceId/assistant", () => {
 
 describe("leaving an app out through the access route", () => {
   beforeEach(() => {
-    install(world.db, world.family, "checklist", world.sam.id, { memberAccess: "edit" });
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id, { memberAccess: "edit" });
     setLevelDirectly(world.family, "edit");
   });
 
   it("lets an owner leave an app out and take it back in, keeping the rest as it was", async () => {
-    await expectDone(await setAccess(SAM, world.family, "checklist", { assistant: false }));
-    expect(includedIn(world.family, "checklist")).toBe(0);
+    await expectDone(await setAccess(SAM, world.family, CHECKLIST, { assistant: false }));
+    expect(includedIn(world.family, CHECKLIST)).toBe(0);
     expect(levelOf(world.lin.id, "assistant")).toBeNull();
     expect(levelOf(world.lin.id, "person")).toBe("edit");
-    await expectDone(await setAccess(SAM, world.family, "checklist", { assistant: true, memberAccess: "view" }));
-    expect(includedIn(world.family, "checklist")).toBe(1);
+    await expectDone(await setAccess(SAM, world.family, CHECKLIST, { assistant: true, memberAccess: "view" }));
+    expect(includedIn(world.family, CHECKLIST)).toBe(1);
     expect(levelOf(world.lin.id, "assistant")).toBe("view");
   });
 
   it("refuses a member and anyone outside, and changes nothing then", async () => {
-    await expectError(await setAccess(KIM, world.family, "checklist", { assistant: false }), 403, "forbidden");
-    await expectError(await setAccess(NOA, world.family, "checklist", { assistant: false }), 404, "not_found");
-    await expectError(await setAccess(SAM, world.family, "checklist", { assistant: "no" }), 400, "invalid_request");
-    expect(includedIn(world.family, "checklist")).toBe(1);
+    await expectError(await setAccess(KIM, world.family, CHECKLIST, { assistant: false }), 403, "forbidden");
+    await expectError(await setAccess(NOA, world.family, CHECKLIST, { assistant: false }), 404, "not_found");
+    await expectError(await setAccess(SAM, world.family, CHECKLIST, { assistant: "no" }), 400, "invalid_request");
+    expect(includedIn(world.family, CHECKLIST)).toBe(1);
   });
 });
 
 describe("moving an app and bringing one back", () => {
   it("includes the app again where it goes, under that space's level", async () => {
-    install(world.db, world.family, "checklist", world.sam.id, { memberAccess: "edit" });
-    world.db.prepare("UPDATE space_apps SET assistant = 0 WHERE space_id = ? AND app_id = 'checklist'").run(world.family);
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id, { memberAccess: "edit" });
+    world.db.prepare("UPDATE space_apps SET assistant = 0 WHERE space_id = ? AND app_id = ?").run(world.family, CHECKLIST);
     setLevelDirectly(world.samsSpace, "edit");
-    const response = await call(SAM, "POST", `/api/spaces/${world.family}/apps/checklist/move`, { toSpaceId: world.samsSpace });
+    const response = await call(SAM, "POST", `/api/spaces/${world.family}/apps/${CHECKLIST}/move`, { toSpaceId: world.samsSpace });
     await expectDone(response);
-    expect(includedIn(world.samsSpace, "checklist")).toBe(1);
-    expect(levelOf(world.sam.id, "assistant", "checklist", world.samsSpace)).toBe("edit");
+    expect(includedIn(world.samsSpace, CHECKLIST)).toBe(1);
+    expect(levelOf(world.sam.id, "assistant", CHECKLIST, world.samsSpace)).toBe("edit");
   });
 
   it("includes an app brought back, as access starts afresh", async () => {
-    install(world.db, world.family, "checklist", world.sam.id, { memberAccess: "view", removedAt: "2026-01-05T00:00:00.000Z" });
-    world.db.prepare("UPDATE space_apps SET assistant = 0 WHERE space_id = ? AND app_id = 'checklist'").run(world.family);
-    await expectDone(await call(SAM, "PUT", `/api/spaces/${world.family}/apps/checklist`, { memberAccess: "view" }));
-    expect(includedIn(world.family, "checklist")).toBe(1);
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id, { memberAccess: "view", removedAt: "2026-01-05T00:00:00.000Z" });
+    world.db.prepare("UPDATE space_apps SET assistant = 0 WHERE space_id = ? AND app_id = ?").run(world.family, CHECKLIST);
+    await expectDone(await call(SAM, "PUT", `/api/spaces/${world.family}/apps/${CHECKLIST}`, { memberAccess: "view" }));
+    expect(includedIn(world.family, CHECKLIST)).toBe(1);
   });
 });
 
-describe("a call by an assistant", () => {
+describe("an assistant reading and writing an app's rows", () => {
   beforeEach(() => {
-    install(world.db, world.family, "checklist", world.sam.id, { memberAccess: "edit" });
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id, { memberAccess: "edit" });
   });
 
   const rows = () => (world.db.prepare("SELECT count(*) AS n FROM app_rows WHERE space_id = 'family'").get() as { n: number }).n;
-  const add = (by: Caller) =>
-    callApp(world.db, registry, {
-      user: world.sam,
-      spaceId: world.family,
-      appId: "checklist",
-      kind: "mutation",
-      name: "add",
-      input: { name: "Milk" },
-      by,
-    });
-  const list = (by: Caller) =>
-    callApp(world.db, registry, {
-      user: world.sam,
-      spaceId: world.family,
-      appId: "checklist",
-      kind: "query",
-      name: "list",
-      input: undefined,
-      by,
-    });
+  const request = (by: Caller) => ({ userId: world.sam.id, spaceId: world.family, appId: CHECKLIST, by });
+  const add = (by: Caller) => addMadeRow(world.db, registry, request(by), "items", { name: "Milk" });
+  const list = (by: Caller) => listMadeRows(world.db, registry, request(by), "items");
 
   it("is not there while the space is Off, as for an app that does not exist", () => {
     expect(() => list("assistant")).toThrow(expect.objectContaining({ status: 404, code: "not_found" }));
-    expect(JSON.parse(list("person"))).toEqual({ output: [] });
+    expect(list("person")).toEqual([]);
   });
 
   it("may read but not change while the space is Read only, and changes nothing", () => {
     setLevelDirectly(world.family, "view");
-    expect(JSON.parse(list("assistant"))).toEqual({ output: [] });
+    expect(list("assistant")).toEqual([]);
     expect(() => add("assistant")).toThrow(expect.objectContaining({ status: 403, code: "forbidden" }));
     expect(rows()).toBe(0);
   });
 
   it("changes data while the space is Read and change, as the person", () => {
     setLevelDirectly(world.family, "edit");
-    expect(JSON.parse(add("assistant"))).toEqual({ output: expect.objectContaining({ name: "Milk" }) });
+    expect(add("assistant")).toEqual(expect.objectContaining({ name: "Milk", createdBy: world.sam.id }));
     expect(rows()).toBe(1);
     expect(world.db.prepare("SELECT created_by AS by FROM app_rows").get()).toEqual({ by: world.sam.id });
   });

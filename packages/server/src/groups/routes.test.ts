@@ -16,7 +16,7 @@ import {
   type Session,
 } from "@hearth/shared";
 import { beforeEach, describe, expect, it } from "vitest";
-import { install, APPS, family, grant, KIM, LIN, NOA, NOW, SAM, setPrefs } from "../apps/test-world";
+import { family, grant, KIM, LIN, makeApp, NOA, NOW, SAM, setPrefs } from "../apps/test-world";
 import type { Config } from "../config";
 import { hasInvitation } from "../db/people";
 import { as, testApp, testConfig } from "../testing";
@@ -27,8 +27,11 @@ let world: ReturnType<typeof family>;
 let app: ReturnType<typeof testApp>["app"];
 let errors: unknown[];
 
+/** The family's checklist, an app made in Hearth. */
+const CHECKLIST = "m-checklist0";
+
 function serverWith(config: Config = testConfig()) {
-  return testApp({ db: world.db, apps: APPS, config });
+  return testApp({ db: world.db, config });
 }
 
 beforeEach(() => {
@@ -318,8 +321,8 @@ describe("changing a member", () => {
   });
 
   it("keeps the exceptions made for a member while they are an owner, and applies them again after", async () => {
-    install(world.db, world.family, "checklist", world.sam.id, { memberAccess: "edit" });
-    grant(world.db, world.family, "checklist", world.lin.id, "none", world.sam.id);
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id, { memberAccess: "edit" });
+    grant(world.db, world.family, CHECKLIST, world.lin.id, "none", world.sam.id);
     expect((await sessionOf(LIN)).apps).toEqual([]);
     await changeMember(SAM, world.family, world.lin.id, { role: "owner" });
     expect((await sessionOf(LIN)).apps.map((entry) => entry.access)).toEqual(["edit"]);
@@ -349,21 +352,21 @@ describe("changing a member", () => {
 
 describe("removing a member, and leaving", () => {
   it("takes the member out with their access, switches, pins and own settings, and keeps the rows they wrote", async () => {
-    install(world.db, world.family, "checklist", world.sam.id, { memberAccess: "view" });
-    grant(world.db, world.family, "checklist", world.lin.id, "edit", world.sam.id);
-    setPrefs(world.db, world.family, "checklist", world.lin.id, { enabled: true, pinned: true });
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id, { memberAccess: "view" });
+    grant(world.db, world.family, CHECKLIST, world.lin.id, "edit", world.sam.id);
+    setPrefs(world.db, world.family, CHECKLIST, world.lin.id, { enabled: true, pinned: true });
     world.db
       .prepare(
         `INSERT INTO app_settings (space_id, app_id, user_id, data, created_by, updated_by, updated_at)
-         VALUES ('family', 'checklist', ?, '{"hideDone":true}', ?, ?, ?)`,
+         VALUES ('family', ?, ?, '{"hideDone":true}', ?, ?, ?)`,
       )
-      .run(world.lin.id, world.lin.id, world.lin.id, NOW);
+      .run(CHECKLIST, world.lin.id, world.lin.id, world.lin.id, NOW);
     world.db
       .prepare(
         `INSERT INTO app_rows (id, space_id, app_id, collection, data, created_by, updated_by, created_at, updated_at)
-         VALUES ('row-1', 'family', 'checklist', 'items', '{"name":"Milk","section":"","done":false}', ?, ?, ?, ?)`,
+         VALUES ('row-1', 'family', ?, 'items', '{"name":"Milk","section":"","done":false}', ?, ?, ?, ?)`,
       )
-      .run(world.lin.id, world.lin.id, NOW, NOW);
+      .run(CHECKLIST, world.lin.id, world.lin.id, NOW, NOW);
     const about = (table: string) =>
       (world.db.prepare(`SELECT count(*) AS n FROM ${table} WHERE space_id = 'family' AND user_id = ?`).get(world.lin.id) as { n: number }).n;
     expect([about("app_access"), about("app_prefs"), about("app_settings")]).toEqual([1, 1, 1]);
@@ -372,10 +375,10 @@ describe("removing a member, and leaving", () => {
     expect(await spacesSeenBy(LIN)).toEqual(["personal: owner"]);
     expect((await sessionOf(LIN)).apps).toEqual([]);
     expect([about("app_access"), about("app_prefs"), about("app_settings")]).toEqual([0, 0, 0]);
-    await expectError(await call(LIN, "POST", `/api/spaces/${world.family}/apps/checklist/q/list`, {}), 404, "not_found");
+    await expectError(await call(LIN, "GET", `/api/spaces/${world.family}/apps/${CHECKLIST}/rows/items`), 404, "not_found");
     // The row Lin added belongs to the group.
-    const list = await call(SAM, "POST", `/api/spaces/${world.family}/apps/checklist/q/list`, {});
-    expect(((await list.json()) as { output: { name: string; createdBy: string }[] }).output).toEqual([
+    const list = await call(SAM, "GET", `/api/spaces/${world.family}/apps/${CHECKLIST}/rows/items`);
+    expect(((await list.json()) as { rows: { name: string; createdBy: string }[] }).rows).toEqual([
       expect.objectContaining({ name: "Milk", createdBy: world.lin.id }),
     ]);
   });

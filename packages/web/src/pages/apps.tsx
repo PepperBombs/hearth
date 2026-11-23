@@ -9,26 +9,27 @@
  *   the space "Move", which takes the app with its data to another space,
  *   and "Remove", which hides the app for everyone and keeps its data.
  * - Where the person may add apps, "Add an app" offers the apps shipped with
- *   Hearth (docs/platform.md, "Built-in apps"), each added as an app made in
- *   Hearth of the space's own, and the apps this build holds, that the space
- *   does not have yet. Adding is a saved setting: no rebuild, no restart. In a group the person adding is asked who else may
- *   use it, "only me for now" first (owner's decision 1). Moving an app into
- *   a group asks the same.
- * - An app the space had and removed kept its data, and adding it again
- *   brings that back (owner's decision 2). Only an owner can, and for an
- *   owner the dialog reads the owners' list first and says so, with how many
- *   entries come back, so that who else may use it is chosen knowing that.
- * - An app whose manifest names hosts in `network` fetches from them on its
- *   own, and the dialog says so under its description, new or brought back
- *   (owner's decision 14). It asks nothing more: the app is trusted code
- *   that the server's owner chose to build in.
+ *   Hearth (docs/platform.md, "Built-in apps") that the space does not have
+ *   yet, each added as an app made in Hearth of the space's own. Any other
+ *   app is made in the chat. Adding is a saved setting: no rebuild, no
+ *   restart. In a group the person adding is asked who else may use it,
+ *   "only me for now" first (owner's decision 1). Moving an app into a
+ *   group asks the same.
+ * - A built-in app the space had and removed kept its data, and adding it
+ *   again brings that back (owner's decision 2). Only an owner can, and for
+ *   an owner the dialog reads the owners' list first and says so, with how
+ *   many entries come back, so that who else may use it is chosen knowing
+ *   that.
+ * - A built-in app that names hosts in `network` fetches from them, through
+ *   the server, and the dialog says so under its description, new or
+ *   brought back (owner's decision 14). It asks nothing more: the app ships
+ *   with Hearth.
  */
 import { ArrowRightLeft, ChevronRight, LayoutGrid, Pin, Plus, RefreshCw, Trash2, UserRound, Users } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router";
-import type { AppSummary, InstalledApp, Localized, MemberAccess, Space } from "@hearth/shared";
+import type { AppSummary, CatalogApp, InstalledApp, Localized, MemberAccess, Space } from "@hearth/shared";
 import { Button, Dialog, DialogBody, EmptyState, IconButton, Row, Rows, Switch, Tag } from "@hearth/sdk/web";
-import { useBundledApps } from "../apps/bundled";
 import { useSpaceApps } from "../groups/queries";
 import {
   AppSettingsButton,
@@ -43,6 +44,7 @@ import {
 import { AppIcon } from "../components/app-icon";
 import { Page } from "../components/shell/page";
 import { Card, CardFooter, CardHeader } from "../components/card";
+import { LinkedText } from "../components/linked-text";
 import { joinNames, pickLocalized, type PlainMessageKey, type Translate } from "../i18n";
 import { cx } from "../lib/cx";
 import { failureCode } from "../session/api";
@@ -412,61 +414,30 @@ function RemoveDialog({ app, open, onClose }: { app: AppSummary; open: boolean; 
 }
 
 /**
- * An app the Add dialog offers: one shipped with Hearth, which becomes an
- * app made in Hearth of the space's own (`fromCatalog`), or one of the build's.
+ * The built-in apps that a space does not have yet, and when there are
+ * none, why: Hearth ships none, every one of them is here already, or they
+ * could not be read. Null while they are being read.
  */
-type Addable = {
-  id: string;
-  fromCatalog: boolean;
-  name: Localized;
-  description: Localized;
-  icon: string;
-  color: string;
-  network: readonly string[];
-};
-
-/**
- * The built-in apps and the apps this build holds that a space does not
- * list for this person and that fit its kind, and when there are none, why:
- * there are no apps at all (a plain `pnpm build` holds none), every one of
- * them is here already, or the others are not for this kind of space. Null
- * while the built-in apps are being asked for.
- */
-function useAddable(space: Space): { apps: Addable[]; none: PlainMessageKey | null } {
+function useAddable(space: Space): { apps: CatalogApp[]; none: PlainMessageKey | null; retry: () => void } {
   const session = useSession();
-  const bundled = useBundledApps();
   const catalog = useCatalog();
-  const here = session.apps.filter((app) => app.spaceId === space.id);
   const builtIn = catalog.data ?? [];
-  const offered = [
-    ...builtIn.map((template) => ({
-      app: { ...template, fromCatalog: true } satisfies Addable,
-      here: here.some((app) => app.template === template.id),
-      fits: true,
-    })),
-    // A build's app that Hearth now ships as a built-in app is offered as that alone.
-    ...bundled
-      .filter((app) => !builtIn.some((template) => template.id === app.id))
-      .map(({ id, manifest }) => ({
-        app: { id, fromCatalog: false, name: manifest.name, description: manifest.description, icon: manifest.icon, color: manifest.color, network: manifest.network ?? [] } satisfies Addable,
-        here: here.some((app) => app.id === id),
-        fits: !manifest.spaces || manifest.spaces.includes(space.kind),
-      })),
-  ];
-  const apps = offered.filter((entry) => !entry.here && entry.fits).map((entry) => entry.app);
-  const none: PlainMessageKey | null = catalog.isPending
-    ? null
-    : offered.length === 0
-      ? "apps.addNoneInstalled"
-      : offered.every((entry) => entry.here)
-        ? "apps.addNothing"
-        : "apps.addNothingFits";
-  return { apps, none };
+  // A space has one of each built-in app: the made app added from it says which.
+  const here = (template: CatalogApp) => session.apps.some((app) => app.spaceId === space.id && app.template === template.id);
+  const apps = builtIn.filter((template) => !here(template));
+  const none: PlainMessageKey | null = catalog.isError
+    ? "apps.addLoadFailed"
+    : catalog.isPending
+      ? null
+      : builtIn.length === 0
+        ? "apps.addNoneInstalled"
+        : "apps.addNothing";
+  return { apps, none, retry: () => void catalog.refetch() };
 }
 
 function AddApp({ space }: { space: Space }) {
   const { t } = useI18n();
-  const { apps: addable, none } = useAddable(space);
+  const { apps: addable, none, retry } = useAddable(space);
   // Asked for with the page, for an owner only, so that the dialog knows which apps the space removed.
   useSpaceApps(space);
   const [open, setOpen] = useState(false);
@@ -475,9 +446,7 @@ function AddApp({ space }: { space: Space }) {
   if (open && addable.length === 0) setOpen(false);
   return (
     <CardFooter className="flex flex-wrap items-center gap-3">
-      {addable.length === 0 ? (
-        none ? <p className="text-xs text-fg-3">{t(none)}</p> : null
-      ) : (
+      {addable.length > 0 ? (
         <>
           <Button size="sm" aria-haspopup="dialog" onClick={() => setOpen(true)}>
             <Plus size={14} aria-hidden="true" />
@@ -485,7 +454,19 @@ function AddApp({ space }: { space: Space }) {
           </Button>
           <AddAppDialog space={space} addable={addable} open={open} onClose={() => setOpen(false)} />
         </>
-      )}
+      ) : none === "apps.addLoadFailed" ? (
+        <div role="alert" className="flex flex-wrap items-center gap-2">
+          <p className="text-xs text-down">{t(none)}</p>
+          <Button size="sm" onClick={retry}>
+            <RefreshCw size={14} aria-hidden="true" />
+            {t("apps.retry")}
+          </Button>
+        </div>
+      ) : none ? (
+        <p className="text-xs text-fg-3">
+          <LinkedText text={t(none)} to="/chat" />
+        </p>
+      ) : null}
     </CardFooter>
   );
 }
@@ -498,7 +479,7 @@ const ACCESS_CHOICES: ReadonlyArray<{ value: MemberAccess; label: PlainMessageKe
 
 const RADIO = "size-4 flex-none accent-accent";
 
-function AddAppDialog(props: { space: Space; addable: Addable[]; open: boolean; onClose: () => void }) {
+function AddAppDialog(props: { space: Space; addable: CatalogApp[]; open: boolean; onClose: () => void }) {
   const { t } = useI18n();
   const title = props.space.kind === "group" ? t("apps.addTo", { space: props.space.name }) : t("apps.addToPersonal");
   return (
@@ -515,12 +496,11 @@ function restoreNote(entry: InstalledApp, t: Translate): string {
 }
 
 /** Mounted each time the dialog opens, so that it starts from the first app and "only me for now". */
-function AddAppForm({ space, addable, onClose, title }: { space: Space; addable: Addable[]; onClose: () => void; title: string }) {
+function AddAppForm({ space, addable, onClose, title }: { space: Space; addable: CatalogApp[]; onClose: () => void; title: string }) {
   const { locale, t } = useI18n();
   const name = useId();
   const add = useAddApp();
   const list = useSpaceApps(space);
-  // IDs do not repeat: a build's app that is also a built-in app is offered as the built-in one alone.
   const [chosenId, setChosenId] = useState(addable[0]?.id ?? "");
   const [memberAccess, setMemberAccess] = useState<MemberAccess>("none");
   // The session is loaded again after a refusal; an app it no longer offers is not chosen.
@@ -531,19 +511,15 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
   // the list that says which were removed. Until it is known, nothing is added.
   const known = !owner || list.data !== undefined;
   // A built-in app the space removed is the made app added from it.
-  const removed = (app: Addable) =>
-    owner
-      ? list.data?.apps.find((entry) => (app.fromCatalog ? entry.template === app.id : entry.id === app.id) && entry.removedAt !== null)
-      : undefined;
+  const removed = (app: CatalogApp) =>
+    owner ? list.data?.apps.find((entry) => entry.template === app.id && entry.removedAt !== null) : undefined;
   const restoring = chosen ? removed(chosen) !== undefined : false;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!chosen || !known || add.isPending) return;
     // Closed whether or not the dialog is still there when the session is loaded again.
-    add
-      .mutateAsync({ install: { spaceId: space.id, appId: chosen.id }, memberAccess: group ? memberAccess : undefined, fromCatalog: chosen.fromCatalog })
-      .then(onClose, () => undefined);
+    add.mutateAsync({ spaceId: space.id, templateId: chosen.id, memberAccess: group ? memberAccess : undefined }).then(onClose, () => undefined);
   };
 
   // By the time a refusal shows, the session is loaded again, and the space says what it has.

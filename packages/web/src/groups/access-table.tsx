@@ -12,7 +12,6 @@
 import type { AppAccessRequest, MemberAccess, Space, SpaceApps, SpaceMemberDetail } from "@hearth/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useId } from "react";
-import { useBundledApps } from "../apps/bundled";
 import { AppIcon } from "../components/app-icon";
 import { LinkedText } from "../components/linked-text";
 import { pickLocalized, type PlainMessageKey } from "../i18n";
@@ -52,16 +51,17 @@ export function applied(list: SpaceApps, { appId, body }: Change): SpaceApps {
   };
 }
 
-/** The name and icon of an app as this browser knows it: from the session, else the build, else its ID. */
+/**
+ * The name and icon of an app as the session describes it, or its ID when
+ * the session does not list it. An owner's session lists every app of the
+ * space that is in use, and an app made in Hearth is in one space alone.
+ */
 export function useAppLabel(): (appId: string) => { name: string; icon: string; color: string } {
   const session = useSession();
-  const bundled = useBundledApps();
   const { locale } = useI18n();
   return (appId) => {
     const listed = session.apps.find((app) => app.id === appId);
     if (listed) return { name: pickLocalized(listed.name, locale), icon: listed.icon, color: listed.color };
-    const manifest = bundled.find((app) => app.id === appId)?.manifest;
-    if (manifest) return { name: pickLocalized(manifest.name, locale), icon: manifest.icon, color: manifest.color };
     return { name: appId, icon: "box", color: "" };
   };
 }

@@ -1,8 +1,9 @@
 /**
  * The settings of one app in one space, in a dialog the shell draws from
- * the app's manifest (docs/mini-app-contract.md, section A8). The app writes
- * no form of its own: each setting it declares becomes a control of its
- * type, with its label and help in the reader's language.
+ * the settings the app's manifest declares, as the session describes them
+ * (docs/platform.md, "An app made in Hearth"). The app writes no form of
+ * its own: each setting it declares becomes a control of its type, with its
+ * label and help in the reader's language.
  *
  * The form has two groups. "For everyone in this space" holds the
  * space-scope settings, which need edit access; for someone who may only
@@ -11,12 +12,11 @@
  *
  * Saving sends only the values the person changed: a value that is saved
  * stays saved even when it equals today's default, so sending the rest would
- * pin them to it. The server saves the request as a whole or not at all and
- * answers with every setting as it now holds them; the app's queries are then
- * read again, since a route may read its settings.
+ * pin them to it. The server saves the request as a whole or not at all;
+ * the app's pages on the screen, which read their settings through their
+ * bridge, are then told to read them again.
  */
-import type { Manifest, Setting } from "@hearth/sdk";
-import { notifyMadeAppChanged } from "../made/frame";
+import type { Setting } from "@hearth/sdk";
 import { settingValueProblems } from "@hearth/sdk/manifest-schema";
 import { Button, Chip, Dialog, Field, IconButton, Input, Segmented, Switch } from "@hearth/sdk/web";
 import type { AppSettings, AppSettingsPatch, AppSummary, SettingValue } from "@hearth/shared";
@@ -26,22 +26,21 @@ import { useId, useState, type FormEvent, type KeyboardEvent } from "react";
 import { AppIcon } from "../components/app-icon";
 import { pickLocalized, type Translate } from "../i18n";
 import { cx } from "../lib/cx";
+import { notifyMadeAppChanged } from "../made/frame";
 import { failureCode } from "../session/api";
 import { useI18n } from "../session/preferences";
 import { useSession } from "../session/session";
 import { saveAppSettings, type Install } from "./api";
-import { forApp, installQueryKey, settingsQuery, settingsQueryKey } from "./scope";
+import { declaredSettings, forApp, settingsQuery } from "./settings";
 
 export type AppSettingsDialogProps = {
-  /** The app in its space, as the session lists it. */
+  /** The app in its space, as the session lists it, with the settings it declares. */
   app: AppSummary;
-  /** The app's manifest, from the build: what its settings are. */
-  manifest: Manifest;
   open: boolean;
   onClose: () => void;
 };
 
-export function AppSettingsDialog({ app, manifest, open, onClose }: AppSettingsDialogProps) {
+export function AppSettingsDialog({ app, open, onClose }: AppSettingsDialogProps) {
   const { locale, t } = useI18n();
   const title = t("appSettings.title", { app: pickLocalized(app.name, locale) });
   return (
@@ -56,21 +55,21 @@ export function AppSettingsDialog({ app, manifest, open, onClose }: AppSettingsD
           <AppIcon icon={app.icon} color={app.color} />
           <h2 className="clip min-w-0 text-md font-semibold">{title}</h2>
         </div>
-        <SettingsLoader app={app} manifest={manifest} onClose={onClose} />
+        <SettingsLoader app={app} onClose={onClose} />
       </div>
     </Dialog>
   );
 }
 
-/** The settings as the server holds them, shared with the app's own code in the same cache. */
-function SettingsLoader({ app, manifest, onClose }: Omit<AppSettingsDialogProps, "open">) {
+/** The settings as the server holds them. */
+function SettingsLoader({ app, onClose }: Omit<AppSettingsDialogProps, "open">) {
   const { t } = useI18n();
   const client = useQueryClient();
   const install = { spaceId: app.spaceId, appId: app.id };
-  const settings = useQuery(settingsQuery(client, install, manifest));
+  const settings = useQuery(settingsQuery(client, install));
 
   if (settings.data) {
-    return <SettingsForm app={app} manifest={manifest} install={install} saved={settings.data} onClose={onClose} />;
+    return <SettingsForm app={app} install={install} saved={settings.data} onClose={onClose} />;
   }
   return (
     <div className="flex flex-col items-start gap-2.5 p-5" role={settings.isError ? "alert" : "status"}>
@@ -110,19 +109,7 @@ type Entry = { name: string; setting: Setting };
 /** What is wrong with a value in the form. Only a number's box can hold one that does not fit. */
 type Problem = "appSettings.numberNeeded" | "appSettings.numberOff";
 
-function SettingsForm({
-  app,
-  manifest,
-  install,
-  saved,
-  onClose,
-}: {
-  app: AppSummary;
-  manifest: Manifest;
-  install: Install;
-  saved: AppSettings;
-  onClose: () => void;
-}) {
+function SettingsForm({ app, install, saved, onClose }: { app: AppSummary; install: Install; saved: AppSettings; onClose: () => void }) {
   const { t } = useI18n();
   const session = useSession();
   const client = useQueryClient();
@@ -137,7 +124,7 @@ function SettingsForm({
     Object.fromEntries(Object.entries(base).filter(([, value]) => typeof value === "number").map(([name, value]) => [name, String(value)])),
   );
 
-  const entries: Entry[] = Object.entries(manifest.settings ?? {}).map(([name, setting]) => ({ name, setting }));
+  const entries: Entry[] = Object.entries(declaredSettings(app)).map(([name, setting]) => ({ name, setting }));
   const spaceEntries = entries.filter((entry) => entry.setting.scope === "space");
   const userEntries = entries.filter((entry) => entry.setting.scope === "user");
   const editable = (entry: Entry) => entry.setting.scope === "user" || canEditSpace;
@@ -157,13 +144,10 @@ function SettingsForm({
 
   const save = useMutation({
     mutationFn: (patch: AppSettingsPatch) => forApp(client, () => saveAppSettings(install, patch)),
-    onSuccess: async (answer) => {
-      client.setQueryData(settingsQueryKey(install), answer);
+    onSuccess: () => {
       onClose();
-      // A made app's page reads its settings itself, and is told to read them again.
-      if (app.made) notifyMadeAppChanged(app.id);
-      // A route may read the settings, so the app's queries are read again too.
-      await client.invalidateQueries({ queryKey: installQueryKey(install) });
+      // The app's pages read their settings themselves, and are told to read them again.
+      notifyMadeAppChanged(app.id);
     },
   });
 

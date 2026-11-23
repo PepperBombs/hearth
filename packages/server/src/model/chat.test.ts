@@ -6,9 +6,8 @@
  * answers as the service would.
  */
 import { describe, expect, it } from "vitest";
-import { createRegistry } from "../apps/registry";
 import { family, SAM } from "../apps/test-world";
-import { createMadeApp, listMadeRows, withMadeApps } from "../made/apps";
+import { createMadeApp, listMadeRows, madeAppsRegistry } from "../made/apps";
 import { madeManifestSchema } from "../made/manifest";
 import { as, testApp, testConfig } from "../testing";
 import { checkBaseUrl } from "./settings";
@@ -57,7 +56,7 @@ function world(modelFetch?: typeof fetch) {
       .filter((line) => line.startsWith("data: "))
       .map((line) => JSON.parse(line.slice("data: ".length)) as { type: string; [key: string]: unknown });
   };
-  return { ...people, call, saveModel, assistant, chat, errors, registry: withMadeApps(db, createRegistry([])) };
+  return { ...people, call, saveModel, assistant, chat, errors, registry: madeAppsRegistry(db) };
 }
 
 const openAiAnswer = (message: Record<string, unknown>, finish = "stop") =>
@@ -144,7 +143,7 @@ describe("the chat", () => {
 
   it("reads an app, changes it as a new version, and goes back when asked", async () => {
     const people = family();
-    const registry = withMadeApps(people.db, createRegistry([]));
+    const registry = madeAppsRegistry(people.db);
     const { appId } = createMadeApp(people.db, registry, {
       userId: people.sam.id,
       spaceId: people.samsSpace,
@@ -233,7 +232,7 @@ describe("the chat", () => {
 
   it("hands Claude its own content back with the tool's result, through Anthropic's SDK", async () => {
     const people = family();
-    const registry = withMadeApps(people.db, createRegistry([]));
+    const registry = madeAppsRegistry(people.db);
     const { appId } = createMadeApp(people.db, registry, {
       userId: people.sam.id,
       spaceId: people.samsSpace,

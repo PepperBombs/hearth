@@ -1,5 +1,7 @@
 # The mini-app contract
 
+**Removed in November 2026.** The owner removed the framework this document designed: mini-apps written against `@hearth/sdk` (a manifest, a server file of queries, mutations and jobs, a widget and a page), checked and built into each release by `hearth-apps` from `hearth-stones` and the other repositories `APPS_REPO` named, and run by the server and the web app. Every app is now made in Hearth: a manifest and one HTML page, kept in the database and run in the browser's sandbox (`docs/platform.md`), and the grocery list, Ideas and GitHub Trending are built-in apps of it, to which the installs of the mini-apps of those names move. What the platform uses of this design stays and still follows it: apps in spaces and who may use them (A5, A6), adding, removing, moving them and deleting their data, the store and its tables, settings, the rules and pace of an outbound fetch (section C's `ctx.fetch`, now `hearth.fetch`), the manifest's rules and the UI kit in `@hearth/sdk`, and the assistant's switches of section F. The routes that ran an app's queries, mutations and jobs are gone, and so is what sections A, B and C say of the SDK's server side, the hooks, `hearth-apps`, the sample apps, the build, jobs and the scheduler. What follows is the record of how it was designed and built.
+
 This is the design the framework is being built to. It was agreed with the
 owner before any of it was written, and it changes only by agreement. Parts
 that are not built yet are marked in section B. Section C, the design of

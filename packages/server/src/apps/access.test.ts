@@ -3,27 +3,26 @@
  * (docs/mini-app-contract.md, sections A6 "Access" and A8): the owners' list
  * of a space's apps (GET /api/spaces/:spaceId/apps) and the access route
  * (PUT /api/spaces/:spaceId/apps/:appId/access), and what members then see
- * and may do. The Testable line of build step 10 is the first block.
+ * and may do with an app made in Hearth: its page and its rows. The
+ * Testable line of build step 10 is the first block.
  */
 import { apiErrorSchema, sessionSchema, spaceAppsSchema, type ApiErrorCode, type SpaceApps } from "@hearth/shared";
 import { beforeEach, describe, expect, it } from "vitest";
 import { as, testApp } from "../testing";
-import type { BundledApp } from "./registry";
-import { APPS, family, grant, install, KIM, LIN, NOA, NOW, SAM } from "./test-world";
+import { family, grant, install, JOURNAL, KIM, LIN, makeApp, NOA, NOW, SAM, unreadable } from "./test-world";
 
 const BASE = "http://hearth.example.com";
+const CHECKLIST = "m-checklist0";
+const FEED = "m-feed000000";
+const JOURNAL_APP = "m-journal000";
 
 let world: ReturnType<typeof family>;
 let app: ReturnType<typeof testApp>["app"];
 let errors: unknown[];
 
-function serverWith(apps: readonly BundledApp[]) {
-  return testApp({ db: world.db, apps });
-}
-
 beforeEach(() => {
   world = family();
-  ({ app, errors } = serverWith(APPS));
+  ({ app, errors } = testApp({ db: world.db }));
 });
 
 function call(who: string, method: string, path: string, body?: unknown, on = app) {
@@ -44,10 +43,11 @@ const about = (request: () => [who: string, spaceId: string]) => request;
 const setAccess = (who: string, spaceId: string, appId: string, body: unknown) =>
   call(who, "PUT", `/api/spaces/${spaceId}/apps/${appId}/access`, body);
 const spaceApps = (who: string, spaceId: string, on = app) => call(who, "GET", `/api/spaces/${spaceId}/apps`, undefined, on);
-const query = (who: string, spaceId: string, appId: string, name: string) =>
-  call(who, "POST", `/api/spaces/${spaceId}/apps/${appId}/q/${name}`, {});
-const mutate = (who: string, spaceId: string, appId: string, name: string, input?: unknown) =>
-  call(who, "POST", `/api/spaces/${spaceId}/apps/${appId}/m/${name}`, input === undefined ? {} : { input });
+/** The checklist's items, as its page reads them. */
+const items = (who: string, spaceId: string, appId: string) => call(who, "GET", `/api/spaces/${spaceId}/apps/${appId}/rows/items`);
+/** An item added, as its page adds one. */
+const addItem = (who: string, spaceId: string, appId: string, name: string) =>
+  call(who, "POST", `/api/spaces/${spaceId}/apps/${appId}/rows/items`, { data: { name } });
 
 async function expectDone(response: Response) {
   expect(response.status).toBe(204);
@@ -84,153 +84,163 @@ const memberAccess = (appId: string) =>
 
 describe("build step 10: access, as members live it", () => {
   it("hides an app from a member with no access: it is absent from their session and every route of it is 404", async () => {
-    install(world.db, world.family, "checklist", world.sam.id, { memberAccess: "edit" });
-    expect(await seenBy(LIN)).toEqual([`${world.family}/checklist: edit`]);
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id, { memberAccess: "edit" });
+    expect(await seenBy(LIN)).toEqual([`${world.family}/${CHECKLIST}: edit`]);
 
-    await expectDone(await setAccess(SAM, world.family, "checklist", { members: { [world.lin.id]: "none" } }));
+    await expectDone(await setAccess(SAM, world.family, CHECKLIST, { members: { [world.lin.id]: "none" } }));
     expect(await seenBy(LIN)).toEqual([]);
-    await expectError(await query(LIN, world.family, "checklist", "list"), 404, "not_found");
-    await expectError(await mutate(LIN, world.family, "checklist", "add", { name: "Milk" }), 404, "not_found");
-    await expectError(await call(LIN, "GET", `/api/spaces/${world.family}/apps/checklist/settings`), 404, "not_found");
-    await expectError(await call(LIN, "PATCH", `/api/spaces/${world.family}/apps/checklist/me`, { pinned: true }), 404, "not_found");
+    await expectError(await items(LIN, world.family, CHECKLIST), 404, "not_found");
+    await expectError(await addItem(LIN, world.family, CHECKLIST, "Milk"), 404, "not_found");
+    await expectError(await call(LIN, "GET", `/api/spaces/${world.family}/apps/${CHECKLIST}/frame`), 404, "not_found");
+    await expectError(await call(LIN, "GET", `/api/spaces/${world.family}/apps/${CHECKLIST}/settings`), 404, "not_found");
+    await expectError(await call(LIN, "PATCH", `/api/spaces/${world.family}/apps/${CHECKLIST}/me`, { pinned: true }), 404, "not_found");
     // Everyone else keeps what they had.
-    expect(await seenBy(KIM)).toEqual([`${world.family}/checklist: edit`]);
-    expect(await seenBy(SAM)).toEqual([`${world.family}/checklist: edit`]);
+    expect(await seenBy(KIM)).toEqual([`${world.family}/${CHECKLIST}: edit`]);
+    expect(await seenBy(SAM)).toEqual([`${world.family}/${CHECKLIST}: edit`]);
 
     // And the same when the app gives every member nothing.
-    await expectDone(await setAccess(SAM, world.family, "checklist", { memberAccess: "none", members: { [world.lin.id]: null } }));
+    await expectDone(await setAccess(SAM, world.family, CHECKLIST, { memberAccess: "none", members: { [world.lin.id]: null } }));
     expect(await seenBy(LIN)).toEqual([]);
     expect(await seenBy(KIM)).toEqual([]);
-    await expectError(await query(KIM, world.family, "checklist", "list"), 404, "not_found");
+    await expectError(await items(KIM, world.family, CHECKLIST), 404, "not_found");
   });
 
   it("lets a member with view read and not change anything", async () => {
-    install(world.db, world.family, "checklist", world.sam.id);
-    expect((await mutate(SAM, world.family, "checklist", "add", { name: "Milk" })).status).toBe(200);
-    await expectDone(await setAccess(SAM, world.family, "checklist", { memberAccess: "view" }));
-    expect(await seenBy(LIN)).toEqual([`${world.family}/checklist: view`]);
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id);
+    expect((await addItem(SAM, world.family, CHECKLIST, "Milk")).status).toBe(201);
+    await expectDone(await setAccess(SAM, world.family, CHECKLIST, { memberAccess: "view" }));
+    expect(await seenBy(LIN)).toEqual([`${world.family}/${CHECKLIST}: view`]);
 
-    const list = await query(LIN, world.family, "checklist", "list");
+    const list = await items(LIN, world.family, CHECKLIST);
     expect(list.status).toBe(200);
-    const items = ((await list.json()) as { output: { id: string; name: string }[] }).output;
-    expect(items.map((item) => item.name)).toEqual(["Milk"]);
-    await expectError(await mutate(LIN, world.family, "checklist", "add", { name: "Bread" }), 403, "forbidden");
-    await expectError(await mutate(LIN, world.family, "checklist", "tick", { id: items[0]?.id, done: true }), 403, "forbidden");
-    await expectError(await mutate(LIN, world.family, "checklist", "clearTicked"), 403, "forbidden");
+    const rows = ((await list.json()) as { rows: { id: string; name: string }[] }).rows;
+    expect(rows.map((item) => item.name)).toEqual(["Milk"]);
+    const base = `/api/spaces/${world.family}/apps/${CHECKLIST}/rows/items`;
+    await expectError(await addItem(LIN, world.family, CHECKLIST, "Bread"), 403, "forbidden");
+    await expectError(await call(LIN, "PATCH", `${base}/${rows[0]?.id}`, { data: { done: true } }), 403, "forbidden");
+    await expectError(await call(LIN, "POST", `${base}/replace`, { where: { done: true }, rows: [] }), 403, "forbidden");
+    await expectError(await call(LIN, "DELETE", `${base}/${rows[0]?.id}`), 403, "forbidden");
     await expectError(
-      await call(LIN, "PATCH", `/api/spaces/${world.family}/apps/checklist/settings`, { space: { sections: ["Garden"] } }),
+      await call(LIN, "PATCH", `/api/spaces/${world.family}/apps/${CHECKLIST}/settings`, { space: { sections: ["Garden"] } }),
       403,
       "forbidden",
     );
+    expect(((await (await items(SAM, world.family, CHECKLIST)).json()) as { rows: unknown[] }).rows).toEqual([
+      expect.objectContaining({ name: "Milk" }),
+    ]);
 
     // An exception gives one member edit; the others still only view.
-    await expectDone(await setAccess(SAM, world.family, "checklist", { members: { [world.kim.id]: "edit" } }));
-    expect((await mutate(KIM, world.family, "checklist", "add", { name: "Bread" })).status).toBe(200);
-    await expectError(await mutate(LIN, world.family, "checklist", "add", { name: "Eggs" }), 403, "forbidden");
+    await expectDone(await setAccess(SAM, world.family, CHECKLIST, { members: { [world.kim.id]: "edit" } }));
+    expect((await addItem(KIM, world.family, CHECKLIST, "Bread")).status).toBe(201);
+    await expectError(await addItem(LIN, world.family, CHECKLIST, "Eggs"), 403, "forbidden");
   });
 
   it("gives a new member what the app gives every member, whether they were on the server or invited", async () => {
-    install(world.db, world.family, "checklist", world.sam.id, { memberAccess: "view" });
-    install(world.db, world.family, "feed", world.sam.id, { memberAccess: "edit" });
-    install(world.db, world.family, "journal", world.sam.id, { memberAccess: "edit", removedAt: NOW });
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id, { memberAccess: "view" });
+    makeApp(world.db, world.family, FEED, world.sam.id, { memberAccess: "edit" });
+    makeApp(world.db, world.family, JOURNAL_APP, world.sam.id, { manifest: JOURNAL, memberAccess: "edit", removedAt: NOW });
 
     // Noa is on the server already.
     expect((await call(SAM, "POST", `/api/spaces/${world.family}/members`, { email: NOA })).status).toBe(200);
-    expect(await seenBy(NOA)).toEqual([`${world.family}/checklist: view`, `${world.family}/feed: edit`]);
+    expect(await seenBy(NOA)).toEqual([`${world.family}/${CHECKLIST}: view`, `${world.family}/${FEED}: edit`]);
     // Pat is not: they get the same when they first arrive.
     expect((await call(SAM, "POST", `/api/spaces/${world.family}/members`, { email: "pat@example.com" })).status).toBe(200);
-    expect(await seenBy("pat@example.com")).toEqual([`${world.family}/checklist: view`, `${world.family}/feed: edit`]);
+    expect(await seenBy("pat@example.com")).toEqual([`${world.family}/${CHECKLIST}: view`, `${world.family}/${FEED}: edit`]);
 
     // A later change of what every member gets reaches them all, but not past an exception.
-    await expectDone(await setAccess(SAM, world.family, "checklist", { memberAccess: "edit", members: { [world.lin.id]: "view" } }));
-    expect(await seenBy(NOA)).toEqual([`${world.family}/checklist: edit`, `${world.family}/feed: edit`]);
-    expect(await seenBy(LIN)).toEqual([`${world.family}/checklist: view`, `${world.family}/feed: edit`]);
+    await expectDone(await setAccess(SAM, world.family, CHECKLIST, { memberAccess: "edit", members: { [world.lin.id]: "view" } }));
+    expect(await seenBy(NOA)).toEqual([`${world.family}/${CHECKLIST}: edit`, `${world.family}/${FEED}: edit`]);
+    expect(await seenBy(LIN)).toEqual([`${world.family}/${CHECKLIST}: view`, `${world.family}/${FEED}: edit`]);
   });
 
   it("lets a member an owner allowed to add apps add one, and gives them edit", async () => {
-    await expectError(await call(LIN, "PUT", `/api/spaces/${world.family}/apps/checklist`, {}), 403, "forbidden");
+    const addFromCatalog = (who: string, templateId: string, body: unknown = {}) =>
+      call(who, "POST", `/api/spaces/${world.family}/catalog/${templateId}`, body);
+    await expectError(await addFromCatalog(LIN, "grocery"), 403, "forbidden");
     await expectDone(await call(SAM, "PATCH", `/api/spaces/${world.family}/members/${world.lin.id}`, { canAddApps: true }));
-    await expectDone(await call(LIN, "PUT", `/api/spaces/${world.family}/apps/checklist`, { memberAccess: "view" }));
-    expect(await seenBy(LIN)).toEqual([`${world.family}/checklist: edit`]);
-    expect(await seenBy(KIM)).toEqual([`${world.family}/checklist: view`]);
-    expect(exceptions()).toEqual([{ appId: "checklist", userId: world.lin.id, level: "edit" }]);
+    const added = await addFromCatalog(LIN, "grocery", { memberAccess: "view" });
+    expect(added.status).toBe(201);
+    const { appId } = (await added.json()) as { appId: string };
+    expect(await seenBy(LIN)).toEqual([`${world.family}/${appId}: edit`]);
+    expect(await seenBy(KIM)).toEqual([`${world.family}/${appId}: view`]);
+    expect(exceptions()).toEqual([{ appId, userId: world.lin.id, level: "edit" }]);
 
     // Taken away again, the right goes; the app they added stays theirs to use.
     await expectDone(await call(SAM, "PATCH", `/api/spaces/${world.family}/members/${world.lin.id}`, { canAddApps: false }));
-    await expectError(await call(LIN, "PUT", `/api/spaces/${world.family}/apps/feed`, {}), 403, "forbidden");
-    expect(await seenBy(LIN)).toEqual([`${world.family}/checklist: edit`]);
+    await expectError(await addFromCatalog(LIN, "ideas"), 403, "forbidden");
+    expect(await seenBy(LIN)).toEqual([`${world.family}/${appId}: edit`]);
   });
 });
 
 describe("PUT /api/spaces/:spaceId/apps/:appId/access", () => {
   beforeEach(() => {
-    install(world.db, world.family, "checklist", world.sam.id, { memberAccess: "view" });
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id, { memberAccess: "view" });
   });
 
   it("sets what every member gets and exceptions together, and takes an exception away with null", async () => {
     await expectDone(
-      await setAccess(SAM, world.family, "checklist", { memberAccess: "none", members: { [world.lin.id]: "edit", [world.kim.id]: "view" } }),
+      await setAccess(SAM, world.family, CHECKLIST, { memberAccess: "none", members: { [world.lin.id]: "edit", [world.kim.id]: "view" } }),
     );
-    expect(memberAccess("checklist")).toBe("none");
+    expect(memberAccess(CHECKLIST)).toBe("none");
     expect(exceptions()).toEqual(
       [
-        { appId: "checklist", userId: world.lin.id, level: "edit" },
-        { appId: "checklist", userId: world.kim.id, level: "view" },
+        { appId: CHECKLIST, userId: world.lin.id, level: "edit" },
+        { appId: CHECKLIST, userId: world.kim.id, level: "view" },
       ].sort((a, b) => a.userId.localeCompare(b.userId)),
     );
-    expect(await seenBy(LIN)).toEqual([`${world.family}/checklist: edit`]);
+    expect(await seenBy(LIN)).toEqual([`${world.family}/${CHECKLIST}: edit`]);
 
-    await expectDone(await setAccess(SAM, world.family, "checklist", { members: { [world.lin.id]: "none", [world.kim.id]: null } }));
-    expect(exceptions()).toEqual([{ appId: "checklist", userId: world.lin.id, level: "none" }]);
-    expect(memberAccess("checklist")).toBe("none");
+    await expectDone(await setAccess(SAM, world.family, CHECKLIST, { members: { [world.lin.id]: "none", [world.kim.id]: null } }));
+    expect(exceptions()).toEqual([{ appId: CHECKLIST, userId: world.lin.id, level: "none" }]);
+    expect(memberAccess(CHECKLIST)).toBe("none");
     // Nothing named, nothing changed.
-    await expectDone(await setAccess(SAM, world.family, "checklist", {}));
-    expect(exceptions()).toEqual([{ appId: "checklist", userId: world.lin.id, level: "none" }]);
+    await expectDone(await setAccess(SAM, world.family, CHECKLIST, {}));
+    expect(exceptions()).toEqual([{ appId: CHECKLIST, userId: world.lin.id, level: "none" }]);
   });
 
   it("is for any owner of the space", async () => {
     await call(SAM, "PATCH", `/api/spaces/${world.family}/members/${world.lin.id}`, { role: "owner" });
-    await expectDone(await setAccess(LIN, world.family, "checklist", { memberAccess: "edit" }));
-    expect(memberAccess("checklist")).toBe("edit");
+    await expectDone(await setAccess(LIN, world.family, CHECKLIST, { memberAccess: "edit" }));
+    expect(memberAccess(CHECKLIST)).toBe("edit");
   });
 
   it("stores an exception for an owner, which counts only once they are a member again", async () => {
-    await expectDone(await setAccess(SAM, world.family, "checklist", { members: { [world.sam.id]: "none" } }));
-    expect(await seenBy(SAM)).toEqual([`${world.family}/checklist: edit`]);
+    await expectDone(await setAccess(SAM, world.family, CHECKLIST, { members: { [world.sam.id]: "none" } }));
+    expect(await seenBy(SAM)).toEqual([`${world.family}/${CHECKLIST}: edit`]);
   });
 
   it.each([
-    ["a member who can change the app", at(() => [KIM, world.family, "checklist"]), 403, "forbidden"],
-    ["a member who may only look at it", at(() => [LIN, world.family, "checklist"]), 403, "forbidden"],
-    ["someone outside the space", at(() => [NOA, world.family, "checklist"]), 404, "not_found"],
-    ["an owner, about an app the space does not have", at(() => [SAM, world.family, "feed"]), 404, "not_found"],
-    ["an owner, in a space that does not exist", at(() => [SAM, "nowhere", "checklist"]), 404, "not_found"],
+    ["a member who can change the app", at(() => [KIM, world.family, CHECKLIST]), 403, "forbidden"],
+    ["a member who may only look at it", at(() => [LIN, world.family, CHECKLIST]), 403, "forbidden"],
+    ["someone outside the space", at(() => [NOA, world.family, CHECKLIST]), 404, "not_found"],
+    ["an owner, about an app the space does not have", at(() => [SAM, world.family, FEED]), 404, "not_found"],
+    ["an owner, in a space that does not exist", at(() => [SAM, "nowhere", CHECKLIST]), 404, "not_found"],
   ] as const)("is refused to %s", async (_label, request, status, code) => {
     const [who, spaceId, appId] = request();
     await expectError(await setAccess(who, spaceId, appId, { memberAccess: "edit" }), status, code);
-    expect(memberAccess("checklist")).toBe("view");
+    expect(memberAccess(CHECKLIST)).toBe("view");
   });
 
-  it("answers 404 for a removed app and for one whose code is gone, also to an owner", async () => {
-    install(world.db, world.family, "journal", world.sam.id, { removedAt: NOW });
-    await expectError(await setAccess(SAM, world.family, "journal", { memberAccess: "edit" }), 404, "not_found");
-    const withoutCode = serverWith(APPS.filter((entry) => entry.id !== "checklist")).app;
-    const response = await withoutCode.request(`${BASE}/api/spaces/${world.family}/apps/checklist/access`, {
-      method: "PUT",
-      headers: { ...as(SAM), "content-type": "application/json" },
-      body: JSON.stringify({ memberAccess: "edit" }),
-    });
-    await expectError(response, 404, "not_found");
-    expect(memberAccess("checklist")).toBe("view");
+  it("answers 404 for a removed app and for one the server holds no app for, also to an owner", async () => {
+    makeApp(world.db, world.family, JOURNAL_APP, world.sam.id, { manifest: JOURNAL, removedAt: NOW });
+    await expectError(await setAccess(SAM, world.family, JOURNAL_APP, { memberAccess: "edit" }), 404, "not_found");
+    // Its manifest is one this release cannot read.
+    unreadable(world.db, CHECKLIST);
+    await expectError(await setAccess(SAM, world.family, CHECKLIST, { memberAccess: "edit" }), 404, "not_found");
+    expect(memberAccess(CHECKLIST)).toBe("view");
+    // An install a release before the built-in apps left, which did not move.
+    install(world.db, world.family, "grocery", world.sam.id, { memberAccess: "view" });
+    await expectError(await setAccess(SAM, world.family, "grocery", { memberAccess: "edit" }), 404, "not_found");
+    expect(memberAccess("grocery")).toBe("view");
   });
 
   it("refuses an exception for someone outside the space, and then saves nothing of the request", async () => {
     await expectError(
-      await setAccess(SAM, world.family, "checklist", { memberAccess: "edit", members: { [world.lin.id]: "edit", [world.noa.id]: "view" } }),
+      await setAccess(SAM, world.family, CHECKLIST, { memberAccess: "edit", members: { [world.lin.id]: "edit", [world.noa.id]: "view" } }),
       400,
       "invalid_request",
     );
-    expect(memberAccess("checklist")).toBe("view");
+    expect(memberAccess(CHECKLIST)).toBe("view");
     expect(exceptions()).toEqual([]);
   });
 
@@ -241,28 +251,29 @@ describe("PUT /api/spaces/:spaceId/apps/:appId/access", () => {
     ["a property the contract does not name", { memberAccess: "edit", pinned: true }],
     ["text that is not JSON", "{ memberAccess"],
   ])("refuses %s", async (_label, body) => {
-    await expectError(await setAccess(SAM, world.family, "checklist", body), 400, "invalid_request");
-    expect(memberAccess("checklist")).toBe("view");
+    await expectError(await setAccess(SAM, world.family, CHECKLIST, body), 400, "invalid_request");
+    expect(memberAccess(CHECKLIST)).toBe("view");
   });
 
   it("logs nothing for what it turns down", async () => {
-    await setAccess(LIN, world.family, "checklist", { memberAccess: "edit" });
-    await setAccess(SAM, world.family, "checklist", { members: { nobody: "edit" } });
+    await setAccess(LIN, world.family, CHECKLIST, { memberAccess: "edit" });
+    await setAccess(SAM, world.family, CHECKLIST, { members: { nobody: "edit" } });
     expect(errors).toEqual([]);
   });
 });
 
 describe("GET /api/spaces/:spaceId/apps", () => {
   it("shows an owner every app the space has, who can use it, and everyone in it", async () => {
-    install(world.db, world.family, "checklist", world.sam.id, { memberAccess: "view", createdAt: "2026-01-05T00:00:00.000Z" });
-    install(world.db, world.family, "journal", world.sam.id, { removedAt: NOW, createdAt: "2026-01-06T00:00:00.000Z" });
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id, { memberAccess: "view", createdAt: "2026-01-05T00:00:00.000Z" });
+    makeApp(world.db, world.family, JOURNAL_APP, world.sam.id, { manifest: JOURNAL, removedAt: NOW, createdAt: "2026-01-06T00:00:00.000Z" });
+    // An install a release before the built-in apps left, which did not move: the server holds no app of its ID.
     install(world.db, world.family, "retired", world.sam.id, { memberAccess: "edit", createdAt: "2026-01-07T00:00:00.000Z" });
-    grant(world.db, world.family, "checklist", world.lin.id, "edit", world.sam.id);
-    grant(world.db, world.family, "checklist", world.kim.id, "none", world.sam.id);
+    grant(world.db, world.family, CHECKLIST, world.lin.id, "edit", world.sam.id);
+    grant(world.db, world.family, CHECKLIST, world.kim.id, "none", world.sam.id);
     // Left out of what an assistant may use.
     world.db.prepare("UPDATE space_apps SET assistant = 0 WHERE space_id = ? AND app_id = 'retired'").run(world.family);
     for (const name of ["Milk", "Bread"]) {
-      expect((await mutate(SAM, world.family, "checklist", "add", { name })).status).toBe(200);
+      expect((await addItem(SAM, world.family, CHECKLIST, name)).status).toBe(201);
     }
     await call(SAM, "POST", `/api/spaces/${world.family}/members`, { email: "pat@example.com", role: "owner" });
 
@@ -274,7 +285,7 @@ describe("GET /api/spaces/:spaceId/apps", () => {
     expect(body).toEqual({
       apps: [
         {
-          id: "checklist",
+          id: CHECKLIST,
           hasCode: true,
           removedAt: null,
           rowCount: 2,
@@ -282,7 +293,7 @@ describe("GET /api/spaces/:spaceId/apps", () => {
           members: { [world.lin.id]: "edit", [world.kim.id]: "none" },
           assistant: true,
         },
-        { id: "journal", hasCode: true, removedAt: NOW, rowCount: 0, memberAccess: "none", members: {}, assistant: true },
+        { id: JOURNAL_APP, hasCode: true, removedAt: NOW, rowCount: 0, memberAccess: "none", members: {}, assistant: true },
         { id: "retired", hasCode: false, removedAt: null, rowCount: 0, memberAccess: "edit", members: {}, assistant: false },
       ],
       members: [
@@ -295,17 +306,23 @@ describe("GET /api/spaces/:spaceId/apps", () => {
   });
 
   it("counts only the space's own rows of each app", async () => {
-    install(world.db, world.family, "checklist", world.sam.id);
-    install(world.db, world.samsSpace, "checklist", world.sam.id);
-    await mutate(SAM, world.samsSpace, "checklist", "add", { name: "Mine" });
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id);
+    // The same app's ID in Sam's own space too, as the tables allow, with a row there.
+    install(world.db, world.samsSpace, CHECKLIST, world.sam.id);
+    world.db
+      .prepare(
+        `INSERT INTO app_rows (id, space_id, app_id, collection, data, created_by, updated_by, created_at, updated_at)
+         VALUES ('own-row', ?, ?, 'items', '{"name":"Mine"}', ?, ?, ?, ?)`,
+      )
+      .run(world.samsSpace, CHECKLIST, world.sam.id, world.sam.id, NOW, NOW);
     expect((await listOf(SAM, world.family)).apps.map((entry) => entry.rowCount)).toEqual([0]);
     expect((await listOf(SAM, world.samsSpace)).apps.map((entry) => entry.rowCount)).toEqual([1]);
   });
 
   it("works for a personal space too, whose one member is its owner", async () => {
-    install(world.db, world.linsSpace, "checklist", world.lin.id, { removedAt: NOW });
+    makeApp(world.db, world.linsSpace, CHECKLIST, world.lin.id, { removedAt: NOW });
     expect(await listOf(LIN, world.linsSpace)).toEqual({
-      apps: [{ id: "checklist", hasCode: true, removedAt: NOW, rowCount: 0, memberAccess: "none", members: {}, assistant: true }],
+      apps: [{ id: CHECKLIST, hasCode: true, removedAt: NOW, rowCount: 0, memberAccess: "none", members: {}, assistant: true }],
       members: [{ id: world.lin.id, name: "lin", role: "owner", email: LIN, canAddApps: false }],
       invitations: [],
     });
@@ -323,12 +340,13 @@ describe("GET /api/spaces/:spaceId/apps", () => {
 });
 
 it("describes access in a way that matches what each member's session lists", async () => {
-  install(world.db, world.family, "checklist", world.sam.id, { memberAccess: "view" });
-  install(world.db, world.family, "feed", world.sam.id, { memberAccess: "none" });
-  install(world.db, world.family, "journal", world.sam.id, { memberAccess: "edit", removedAt: NOW });
-  grant(world.db, world.family, "feed", world.kim.id, "edit", world.sam.id);
-  grant(world.db, world.family, "checklist", world.lin.id, "none", world.sam.id);
-  grant(world.db, world.family, "checklist", world.sam.id, "none", world.sam.id);
+  makeApp(world.db, world.family, CHECKLIST, world.sam.id, { memberAccess: "view" });
+  makeApp(world.db, world.family, FEED, world.sam.id, { memberAccess: "none" });
+  makeApp(world.db, world.family, JOURNAL_APP, world.sam.id, { manifest: JOURNAL, memberAccess: "edit", removedAt: NOW });
+  install(world.db, world.family, "retired", world.sam.id, { memberAccess: "edit" });
+  grant(world.db, world.family, FEED, world.kim.id, "edit", world.sam.id);
+  grant(world.db, world.family, CHECKLIST, world.lin.id, "none", world.sam.id);
+  grant(world.db, world.family, CHECKLIST, world.sam.id, "none", world.sam.id);
 
   const list = await listOf(SAM, world.family);
   expect(list.members.map((member) => member.email)).toEqual([SAM, LIN, KIM]);

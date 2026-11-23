@@ -46,7 +46,10 @@ Notes for whoever changes this part, people and agents alike. They are read when
   makes it restart `SERVICE` until `/api/health` at `LIVE_URL` reports that
   version; `state/failed` is one line, `<stage> <framework commit> <apps
   commit>`; and it deletes `hearth-deploy-trial-*.db` and
-  `DATABASE.restoring` beside the database. It stops before any of that on
+  `DATABASE.restoring` beside the database. `apps=` and the apps commit are
+  `none` now, as they always were for a release without mini-apps: a
+  release holds none since the mini-apps framework was removed, and the
+  word stays because such a copy compares it. It stops before any of that on
   a setting it does not know or a value it refuses, so adding a setting is
   safe, and giving an old file or folder a new meaning is not. Everything
   else may change. Both lists are at the top of the script: keep them
@@ -120,8 +123,7 @@ Notes for whoever changes this part, people and agents alike. They are read when
   fetched before the restart, which a test holds it to. A script that
   parses is handed every run while its commit is the newest, whatever it
   then does: if it fails or does nothing, no run does anything, a pending
-  restart and newer mini-apps included, and one that ends with status 0
-  says nothing. `SELF_UPDATE=off` is the way out then, once the script of
+  restart included, and one that ends with status 0 says nothing. `SELF_UPDATE=off` is the way out then, once the script of
   the running release is installed in the old copy's place (of the release
   before it, when the faulty script deployed its own commit before its
   fault showed); so is the next commit whose script works. With
@@ -135,13 +137,16 @@ Notes for whoever changes this part, people and agents alike. They are read when
   one; the guide warns of that. An unexpected error names the file with the
   line, since after a hand-over the copy that speaks is
   `state/deploy-script`.
-- The deploy tests run the real `hearth-apps sync`: each made-up framework
-  commit in `deploy/tests/deploy.test.sh` carries a copy of
-  `packages/sdk/bin` and `packages/sdk/tools/*.mjs` with an SDK version of
-  its own, and the pnpm stand-in's `build` runs it. In the mini-apps folder
-  the stand-in makes the links a `link:` dependency asks for, as pnpm does.
-  The made-up server writes each start into `started-with` beside it, the
-  trial's or the service's, with the `HEARTH_JOBS` it was given.
+- Each made-up framework commit of `deploy/tests/deploy.test.sh` is built
+  already: the pnpm stand-in's `install` and `build` do nothing, unless the
+  commit was made to fail one of them (`fails-install`, `fails-build`, as a
+  lockfile out of date or a type error would), and it notes every call in
+  `pnpm.log` with the folder it was made in. The made-up server writes each
+  start into `started-with` beside it: the trial's, with the name of
+  everything in its environment, or the service's. A test holds the trial
+  start to the made-up settings the script gives it, and to nothing of the
+  run's own environment (`HEARTH_JOBS` and `HEARTH_APPS_DIR` included, which
+  the mini-apps framework used).
 - Every made-up framework commit of the deploy tests also carries the
   deploy script under test (`commit_files`), so no run is handed over
   unless a test gives a commit another script. `newer_script` writes that
@@ -185,4 +190,13 @@ Notes for whoever changes this part, people and agents alike. They are read when
   builds nothing, and
   `deploy` waits a second first, because releases are named after the
   second.
-- `APPS_REPO` names one clone of mini-apps or several separated by colons. A release holds them as `hearth-stones`, `hearth-stones-2`, ... in that order, and `apps=` in `RELEASE` (so the key in `state/failed` too) is their commits joined by "+": with one repository it is the bare commit it always was, which is why nothing changed for a server that names one. Adding or taking out a repository changes that key, so it is built at once. An installed copy from before this that must do the work itself takes the line for one clone and stops at its fetch ("git cannot use"), after the leftovers and a pending restart.
+- `APPS_REPO` named the clones of mini-apps that each release was built
+  with, until the mini-apps framework was removed in November 2026. It is
+  still a setting the script knows, since a server's `deploy.conf` may hold
+  it, and it is ignored, whatever it holds: a run that builds says so once
+  (`say_apps_repo_ignored`), and so does a verbose run that finds nothing
+  new, but not the quiet run of every minute, so that such a server gets no
+  journal line every minute. Its clones are never fetched. A stage `sdk` in
+  `state/failed`, which an earlier version wrote for mini-apps written for
+  another SDK version, names a commit of theirs and so holds back no commit
+  now.

@@ -3,31 +3,30 @@
  *
  * `api` stands in for the server: it answers GET /api/session and
  * PATCH /api/me from memory, checks both against the shared contract, and
- * remembers what was saved, so a reload sees it. It also answers for the
- * framework's three sample apps (packages/fixture-apps), which the tested
- * build holds: the checklist's routes, from a list kept here, the
- * headlines' query and its job's two routes (its status, from `jobs`, and
- * a run asked for), the apps' settings, adding any of them to a space,
- * removing an app, moving one to another space, and each person's switch
- * and pin. And it keeps groups:
- * creating one, renaming it, adding,
+ * remembers what was saved, so a reload sees it. Every app it lists is an
+ * app made in Hearth (docs/platform.md), and it answers for them as the
+ * server would: each app's page, which the shell draws in a sandboxed
+ * frame, as a small page of the stand-in's own (`framePage`); the apps'
+ * settings, from what each one declares; the built-in apps it ships
+ * (`catalog`), added to a space or brought back with the data the space
+ * kept; removing an app, moving one to another space, and each person's
+ * switch and pin. And it keeps groups: creating one, renaming it, adding,
  * changing and removing people, invitations, the owners' list of a group
  * and who can use each app (`groups`, `people`). The owners' list of a
  * space no test set up, a personal one included, is drawn from the
  * session. All names and addresses are made up.
  */
-import { expect, test as base, type Page, type Route } from "@playwright/test";
+import { expect, test as base, type FrameLocator, type Page, type Route } from "@playwright/test";
+import type { Setting } from "../packages/sdk/src/index.ts";
 import {
-  addAppRequestSchema,
+  addFromCatalogRequestSchema,
   addMemberRequestSchema,
   appAccessRequestSchema,
-  appCallRequestSchema,
-  appCallResponseSchema,
   appPrefsPatchSchema,
   appSettingsPatchSchema,
   appSettingsSchema,
+  catalogAppSchema,
   createSpaceRequestSchema,
-  jobStatusSchema,
   memberPatchSchema,
   moveAppRequestSchema,
   preferencesPatchSchema,
@@ -38,11 +37,13 @@ import {
   type ApiErrorCode,
   type AppSettings,
   type AppSummary,
-  type JobStatus,
+  type CatalogApp,
   type PreferencesPatch,
   type Session,
+  type SettingValue,
   type SpaceApps,
   type SpaceMember,
+  type WidgetSize,
 } from "../packages/shared/src/index.ts";
 
 export const PERSONAL_SPACE = "space-personal";
@@ -78,6 +79,11 @@ export function emptySession(overrides: Partial<Session["user"]> = {}): Session 
   };
 }
 
+/**
+ * An app made in Hearth, as the session lists it (every app a server lists
+ * is one): its page drawn small in its card on the dashboard, and whole on
+ * a page of its own.
+ */
 function app(
   id: string,
   spaceId: string,
@@ -101,15 +107,16 @@ function app(
     enabled: true,
     pinned: false,
     hasPage: true,
+    made: true,
+    version: 1,
     ...extra,
   };
 }
 
 /**
- * A member with a family space and a few apps, to exercise the shell's own
- * lists: sidebar, dashboard grid, app list, quick switcher. The tested build
- * holds none of these apps, so each card and page says "Reload to update";
- * `sessionWithSampleApps` lists the ones it does hold.
+ * A member with a family space and a few apps made in the chat, to exercise
+ * the shell's own lists: sidebar, dashboard grid, app list, quick switcher.
+ * Each card and page holds the stand-in's page for the app (`framePage`).
  */
 export function sessionWithApps(overrides: Partial<Session["user"]> = {}): Session {
   const session = emptySession(overrides);
@@ -144,75 +151,146 @@ export function sessionWithApps(overrides: Partial<Session["user"]> = {}): Sessi
   };
 }
 
+/** The built-in apps the stand-in ships, in the order GET /api/catalog lists them. */
+export const BUILT_IN_IDS = ["checklist", "feed"] as const;
+export type BuiltInId = (typeof BUILT_IN_IDS)[number];
+
+/** A built-in app: what GET /api/catalog says of it, and what an app added from it declares. */
+type BuiltIn = Omit<CatalogApp, "id"> & { widgetSize: WidgetSize; settings: Record<string, Setting> };
+
 /**
- * A member whose spaces hold two of the apps this build really carries: the
- * checklist in the family space and the feed in their own. Their widgets
- * and the checklist's page are drawn from the apps' own code. A test of the
- * headlines, whose job the stand-in answers for too, adds them itself
- * (`sampleApp("headlines", ...)`).
+ * What the stand-in's built-in apps are, made up as everything here: the
+ * checklist, whose settings are the space's sections and each person's
+ * "Hide ticked items", and the feed, which fetches from a host of its own
+ * and whose topics and period each person picks.
  */
-export function sessionWithSampleApps(overrides: Partial<Session["user"]> = {}, checklist: Partial<AppSummary> = {}): Session {
-  const session = sessionWithApps(overrides);
-  return {
-    ...session,
-    apps: [sampleApp("checklist", FAMILY_SPACE, checklist), sampleApp("feed", PERSONAL_SPACE)],
-  };
+const BUILT_IN: Record<BuiltInId, BuiltIn> = {
+  checklist: {
+    name: { en: "Checklist", zh: "清单" },
+    description: { en: "A list of things to do, ticked off as you go.", zh: "一份待办清单，完成一项勾选一项。" },
+    icon: "list-checks",
+    color: "teal",
+    network: [],
+    widgetSize: "tall",
+    settings: {
+      sections: {
+        type: "list",
+        scope: "space",
+        default: [],
+        maxItems: 20,
+        maxLength: 40,
+        label: { en: "Sections", zh: "分组" },
+        help: { en: "Items are grouped in this order.", zh: "事项按此顺序分组。" },
+      },
+      hideDone: { type: "switch", scope: "user", default: false, label: { en: "Hide ticked items", zh: "隐藏已勾选的事项" } },
+    },
+  },
+  feed: {
+    name: { en: "Feed", zh: "动态" },
+    description: { en: "The latest posts of a sample feed, which each person filters for themselves.", zh: "示例订阅源的最新动态，每个人可以自行筛选。" },
+    icon: "trending-up",
+    color: "purple",
+    network: ["feeds.example.com"],
+    widgetSize: "wide",
+    settings: {
+      topics: {
+        type: "multi-select",
+        scope: "user",
+        default: [],
+        options: { science: { en: "Science", zh: "科学" }, sport: { en: "Sport", zh: "体育" }, food: { en: "Food", zh: "美食" } },
+        label: { en: "Topics", zh: "主题" },
+        help: { en: "Leave empty to follow every topic.", zh: "留空则关注所有主题。" },
+      },
+      period: {
+        type: "select",
+        scope: "user",
+        default: "day",
+        options: { day: { en: "Today", zh: "今天" }, week: { en: "This week", zh: "本周" } },
+        label: { en: "Period", zh: "时间范围" },
+      },
+    },
+  },
+};
+
+/** A built-in app as GET /api/catalog lists it. */
+function catalogApp(id: BuiltInId): CatalogApp {
+  const { name, description, icon, color, network } = BUILT_IN[id];
+  return { id, name, description, icon, color, network };
 }
 
-/** The apps this build holds: the framework's sample apps. */
-export const SAMPLE_APPS = ["checklist", "feed", "headlines"] as const;
-export type SampleAppId = (typeof SAMPLE_APPS)[number];
-
-/** One of the apps this build holds, in a space, as the session lists it. */
-export function sampleApp(id: SampleAppId, spaceId: string, extra: Partial<AppSummary> = {}): AppSummary {
-  if (id === "checklist") {
-    return app("checklist", spaceId, "Checklist", "清单", "A list of things to do, ticked off as you go.", "一份待办清单，完成一项勾选一项。", "list-checks", "teal", {
-      widgetSize: "tall",
-      ...extra,
-    });
-  }
-  if (id === "headlines") {
-    return app(
-      "headlines",
-      spaceId,
-      "Headlines",
-      "头条",
-      "The latest headlines of a sample news feed, fetched every hour.",
-      "示例新闻源的最新头条，每小时获取一次。",
-      "file-text",
-      "orange",
-      { widgetSize: "tall", hasPage: false, ...extra },
-    );
-  }
-  return app("feed", spaceId, "Feed", "动态", "A sample card that each person filters for themselves.", "每个人可以自行筛选的示例卡片。", "trending-up", "purple", {
-    widgetSize: "wide",
-    hasPage: false,
+/**
+ * An app added from one of the stand-in's built-in apps, in a space, as the
+ * session lists it. Its ID is `m-` and the built-in app's (on a server, `m-`
+ * and ten letters and digits): a second copy of one needs an `id` of its own.
+ */
+export function builtInApp(template: BuiltInId, spaceId: string, extra: Partial<AppSummary> = {}): AppSummary {
+  const about = BUILT_IN[template];
+  return app(`m-${template}`, spaceId, about.name.en, about.name.zh, about.description.en, about.description.zh, about.icon, about.color, {
+    widgetSize: about.widgetSize,
+    template,
+    settings: about.settings,
     ...extra,
   });
 }
 
-/** The status of a job that ran once and went well, the run starting at `startedAt` and ending two seconds later. */
-export function jobThatRan(startedAt: string): JobStatus {
-  const ended = new Date(Date.parse(startedAt) + 2_000).toISOString();
-  const next = new Date(Date.parse(startedAt) + 60 * 60_000).toISOString();
-  return { lastStartedAt: startedAt, lastSucceededAt: ended, lastFailedAt: null, lastError: null, nextRunAt: next, state: "idle" };
+/** A member whose spaces hold two built-in apps: the checklist in the family space, and the feed in their own. */
+export function sessionWithBuiltInApps(overrides: Partial<Session["user"]> = {}): Session {
+  return { ...sessionWithApps(overrides), apps: [builtInApp("checklist", FAMILY_SPACE), builtInApp("feed", PERSONAL_SPACE)] };
 }
 
-/** One item of the sample checklist, as its `list` query answers. */
-export type ChecklistItem = {
-  id: string;
-  name: string;
-  section: string;
-  done: boolean;
-  createdBy: string;
-  updatedBy: string;
-  createdAt: string;
-  updatedAt: string;
-};
+/** The settings an app declares, as an SDK manifest declares them: what the session hands on for the settings dialog. */
+const declaredSettings = (app: AppSummary): Record<string, Setting> => (app.settings ?? {}) as Record<string, Setting>;
 
-function item(id: string, name: string, done = false, section = ""): ChecklistItem {
-  const at = "2026-11-10T08:00:00.000Z";
-  return { id, name, section, done, createdBy: "user-1", updatedBy: "user-1", createdAt: at, updatedAt: at };
+/** A setting's default as a value to answer with: a list is copied, since nothing changes a default. */
+const valueOf = (value: Setting["default"]): SettingValue => (typeof value === "object" ? [...value] : value);
+
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
+
+/**
+ * The page the stand-in serves for an app's sandboxed frame (GET
+ * .../frame). On a server it is the app's own page with the bridge in front
+ * of it; here it is a small page of the stand-in's own, which names the app
+ * in the language the frame asked for and says on its elements what else it
+ * was asked: the theme and language on `<html>` (`data-theme`, `lang`),
+ * where it is drawn and which version on `<body>` (`data-view`,
+ * `data-version`). Like every page behind the bridge it reports its height,
+ * and it counts the times the shell told it that the app's data or
+ * settings changed (`data-changes` on `<body>`).
+ */
+function framePage(app: AppSummary, query: URLSearchParams): string {
+  const locale = query.get("locale") === "zh" ? "zh" : "en";
+  const theme = query.get("theme") === "dark" ? "dark" : "light";
+  const view = query.get("view") === "page" ? "page" : "card";
+  const colours = theme === "dark" ? "background:#1a2029;color:#e6eaf0" : "background:#ffffff;color:#141a24";
+  const name = escapeHtml(app.name[locale]);
+  return `<!doctype html>
+<html lang="${locale === "zh" ? "zh-CN" : "en"}" data-theme="${theme}">
+<head>
+<meta charset="utf-8">
+<title>${name}</title>
+<style>:root{color-scheme:${theme}}body{margin:0;${colours};font:14px/1.5 system-ui,sans-serif}h1{margin:0 0 4px;font-size:14px}p{margin:0}</style>
+</head>
+<body data-view="${view}" data-version="${escapeHtml(query.get("v") ?? "")}" data-changes="0">
+<h1>${name}</h1>
+<p>${locale === "zh" ? "测试替身提供的页面。" : "A page of the stand-in server."}</p>
+<script>
+  let heard = 0;
+  addEventListener("message", (event) => {
+    if (event.source !== parent || !event.data || event.data.type !== "hearth:changed") return;
+    heard += 1;
+    document.body.dataset.changes = String(heard);
+  });
+  const report = () => parent.postMessage({ type: "hearth:size", height: Math.ceil(document.body.scrollHeight) }, "*");
+  new ResizeObserver(report).observe(document.body);
+</script>
+</body>
+</html>
+`;
+}
+
+/** What an app's sandboxed frame shows, by the app's ID: a page draws an app once. */
+export function sandbox(page: Page, appId: string): FrameLocator {
+  return page.frameLocator(`iframe[data-made-app="${appId}"]`);
 }
 
 type Failure = { status: number; code: ApiErrorCode; message: string };
@@ -230,27 +308,25 @@ export class FakeApi {
   readonly saved: PreferencesPatch[] = [];
   sessionRequests = 0;
 
-  /** What the sample checklist holds, wherever it is. Change it to stand in for someone else's change. */
-  items: ChecklistItem[] = [item("item-1", "Water the plants"), item("item-2", "Book the dentist"), item("item-3", "Return the library books", true)];
-  /** The sample apps' settings, by app ID. The headlines have none, so nothing asks for theirs. */
-  appSettings: Record<string, AppSettings> = {
-    checklist: { space: { sections: [] }, user: { hideDone: false } },
-    feed: { space: {}, user: { topics: [], period: "day" } },
-  };
-  /** What the sample headlines' job kept, wherever the app is: the titles its `latest` query answers, in order. */
-  headlines: string[] = ["Rain expected in the hills tonight", "The library opens a new reading room", "Market prices hold steady"];
+  /** The built-in apps GET /api/catalog lists, which the Add dialog offers: every one the stand-in ships, unless a test says otherwise. */
+  catalog: BuiltInId[] = [...BUILT_IN_IDS];
   /**
-   * How the sample apps' jobs are doing, by "app/job": what GET
-   * .../jobs/:job answers. A run asked for (POST .../run) turns an idle job
-   * into "requested", as the server does; a test then plays the run by
-   * setting the status it ended with.
+   * What was saved of each app's settings, by app ID: the values the space
+   * shares and the person's own. GET .../settings answers every setting the
+   * app declares, with its default where nothing was saved, as the server
+   * does.
    */
-  jobs: Record<string, JobStatus> = { "headlines/refresh": jobThatRan("2026-11-10T08:00:00.000Z") };
-  /** Make every route of every app fail, for example `{ status: 500, code: "internal", message: "Sample failure" }`. */
+  appSettings: Record<string, AppSettings> = {};
+  /**
+   * Make every route for an app in a space fail but its page, adding a
+   * built-in app included: for example `{ status: 409, code: "conflict", message: "Sample failure" }`.
+   */
   appFailure: Failure | null = null;
-  /** Every request made for an app, as "METHOD path", in order. */
-  readonly appRequests: string[] = [];
-  /** Every change asked of the routes for apps in a space (add, remove, move, switch and pin, settings), as "METHOD path body". */
+  /**
+   * Every change asked of the routes for apps in a space (adding a built-in
+   * app, removing, moving, the person's switch and pin, settings), as
+   * "METHOD path body", whether or not it was made.
+   */
   readonly appChanges: string[] = [];
   /**
    * The owners' list of each group the session's person owns, by space ID,
@@ -261,24 +337,6 @@ export class FakeApi {
   people: KnownPerson[] = [];
   /** Every change asked of the routes for groups and access, as "METHOD path body". */
   readonly groupChanges: string[] = [];
-  private held: Promise<void> | null = null;
-
-  /** Keeps the answers to requests for apps back until the returned function is called. */
-  holdApps(): () => void {
-    let release = () => {};
-    this.held = new Promise((resolve) => {
-      release = resolve;
-    });
-    return () => {
-      this.held = null;
-      release();
-    };
-  }
-
-  /** How many requests for apps ended like this, for example "/q/list". */
-  appRequestCount(ending: string): number {
-    return this.appRequests.filter((request) => request.endsWith(ending)).length;
-  }
 
   get session(): Session {
     return this.current;
@@ -300,104 +358,163 @@ export class FakeApi {
 
   private async handle(route: Route): Promise<void> {
     const request = route.request();
-    const path = new URL(request.url()).pathname;
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+    const body: unknown = request.postDataJSON();
     const fail = (failure: Failure) =>
       route.fulfill({ status: failure.status, json: { error: { code: failure.code, message: failure.message } } });
+    const answer = (result: { json?: unknown; status?: number } | Failure) => {
+      if ("code" in result) return fail(result);
+      return result.json === undefined ? route.fulfill({ status: result.status ?? 204 }) : route.fulfill({ status: result.status ?? 200, json: result.json });
+    };
 
-    if (path === "/api/session" && request.method() === "GET") {
+    if (path === "/api/session" && method === "GET") {
       this.sessionRequests += 1;
       if (this.sessionFailure) return fail(this.sessionFailure);
       return route.fulfill({ json: this.current });
     }
 
-    if (path === "/api/me" && request.method() === "PATCH") {
+    if (path === "/api/me" && method === "PATCH") {
       if (this.failSaves) return fail({ status: 500, code: "internal", message: "Sample failure" });
-      const parsed = preferencesPatchSchema.safeParse(request.postDataJSON());
+      const parsed = preferencesPatchSchema.safeParse(body);
       if (!parsed.success) return fail({ status: 400, code: "invalid_request", message: "Sample failure" });
       this.saved.push(parsed.data);
       this.current = { ...this.current, user: { ...this.current.user, ...parsed.data } };
       return route.fulfill({ json: this.current.user });
     }
 
-    // The apps shipped with Hearth (docs/platform.md): none here, where the build's sample apps are the subject.
-    if (path === "/api/catalog" && request.method() === "GET") return route.fulfill({ json: [] });
+    // The apps shipped with Hearth (docs/platform.md, "Built-in apps"), as this stand-in ships them.
+    if (path === "/api/catalog" && method === "GET") {
+      return route.fulfill({ json: catalogAppSchema.array().parse(this.catalog.map(catalogApp)) });
+    }
 
-    const forGroups = this.answerForGroups(path, request.method(), request.postDataJSON() as unknown);
+    const fromCatalog = /^\/api\/spaces\/([^/]+)\/catalog\/([^/]+)$/.exec(path);
+    if (fromCatalog && method === "POST") {
+      const [, spaceId = "", templateId = ""] = fromCatalog;
+      this.appChanges.push(`POST ${path} ${JSON.stringify(body ?? null)}`);
+      if (this.appFailure) return fail(this.appFailure);
+      return answer(this.addFromCatalog(spaceId, templateId, body));
+    }
+
+    const forGroups = this.answerForGroups(path, method, body);
     if (forGroups) {
       if ("status" in forGroups) return fail(forGroups);
       return forGroups.json === undefined ? route.fulfill({ status: 204 }) : route.fulfill({ status: forGroups.created ? 201 : 200, json: forGroups.json });
     }
 
-    const install = /^\/api\/spaces\/([^/]+)\/apps\/([^/]+)$/.exec(path);
-    if (install) {
-      const [, spaceId = "", appId = ""] = install;
-      const method = request.method();
-      const body: unknown = request.postDataJSON();
-      this.appChanges.push(`${method} ${path} ${JSON.stringify(body ?? null)}`);
-      if (this.appFailure) return fail(this.appFailure);
-      const space = this.current.spaces.find((candidate) => candidate.id === spaceId);
-      const listed = this.current.apps.find((candidate) => candidate.spaceId === spaceId && candidate.id === appId);
-      // The owners' list of a group follows: an app added there is in it, a removed one is marked so.
-      const owners = this.groups[spaceId];
-      if (method === "PUT") {
-        const parsed = addAppRequestSchema.safeParse(body);
-        if (!parsed.success) return fail({ status: 400, code: "invalid_request", message: "Sample failure" });
-        if (!space || !SAMPLE_APPS.some((id) => id === appId)) return fail({ status: 404, code: "not_found", message: "No such app" });
-        if (!space.canAddApps) return fail({ status: 403, code: "forbidden", message: "Sample failure" });
-        if (!listed) this.setSession({ ...this.current, apps: [...this.current.apps, sampleApp(appId as SampleAppId, spaceId)] });
-        const entry = owners?.apps.find((candidate) => candidate.id === appId);
-        if (owners && !entry) {
-          owners.apps.push({ id: appId, hasCode: true, removedAt: null, rowCount: 0, memberAccess: parsed.data.memberAccess ?? "none", members: {}, assistant: true });
-        }
-        // A removed app comes back with its data, and who can use it starts afresh, as on the server.
-        if (entry && entry.removedAt !== null) Object.assign(entry, { removedAt: null, memberAccess: parsed.data.memberAccess ?? "none", members: {}, assistant: true });
-        return route.fulfill({ status: 204 });
-      }
-      if (method === "DELETE" && listed) {
-        if (space?.role !== "owner") return fail({ status: 403, code: "forbidden", message: "Sample failure" });
-        this.setSession({ ...this.current, apps: this.current.apps.filter((candidate) => candidate !== listed) });
-        for (const entry of owners?.apps ?? []) if (entry.id === appId) entry.removedAt = "2026-11-10T08:00:00.000Z";
-        return route.fulfill({ status: 204 });
-      }
-      return fail({ status: 404, code: "not_found", message: "No such app" });
-    }
-
-    const forApp = /^\/api\/spaces\/([^/]+)\/apps\/([^/]+)\/(.+)$/.exec(path);
+    const forApp = /^\/api\/spaces\/([^/]+)\/apps\/([^/]+)(?:\/(.+))?$/.exec(path);
     if (forApp) {
-      this.appRequests.push(`${request.method()} ${path}`);
-      if (this.held) await this.held;
-      if (this.appFailure) return fail(this.appFailure);
       const [, spaceId = "", appId = "", rest = ""] = forApp;
       // As on the server: an app the session does not list is not there at all.
       const listed = this.current.apps.find((candidate) => candidate.spaceId === spaceId && candidate.id === appId);
-      if (listed && rest === "me" && request.method() === "PATCH") {
-        const patch = appPrefsPatchSchema.safeParse(request.postDataJSON());
-        if (!patch.success) return fail({ status: 400, code: "invalid_request", message: "Sample failure" });
-        this.appChanges.push(`PATCH ${path} ${JSON.stringify(patch.data)}`);
-        this.setSession({ ...this.current, apps: this.current.apps.map((candidate) => (candidate === listed ? { ...candidate, ...patch.data } : candidate)) });
-        return route.fulfill({ status: 204 });
+      if (rest === "frame" && method === "GET") {
+        if (!listed) return fail({ status: 404, code: "not_found", message: "No such app" });
+        return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: framePage(listed, url.searchParams) });
       }
-      if (listed && rest === "move" && request.method() === "POST") {
-        const move = this.moveApp(listed, request.postDataJSON() as unknown);
-        this.appChanges.push(`POST ${path} ${JSON.stringify(request.postDataJSON() ?? null)}`);
-        return move ? fail(move) : route.fulfill({ status: 204 });
-      }
-      // As on the server: the space's settings need edit access, the person's own only view.
-      const body: unknown = request.postDataJSON();
-      if (listed?.access === "view" && rest === "settings" && request.method() === "PATCH" && (body as { space?: unknown } | null)?.space) {
-        return fail({ status: 403, code: "forbidden", message: "Sample failure" });
-      }
-      // A run asked for needs edit access too, once the job is known to be there.
-      if (listed?.access === "view" && request.method() === "POST" && /^jobs\/[^/]+\/run$/.test(rest) && this.jobs[`${appId}/${rest.split("/")[1]}`]) {
-        return fail({ status: 403, code: "forbidden", message: "Sample failure" });
-      }
-      const answer = listed ? this.answerForApp(appId, rest, request.method(), body) : undefined;
-      if (answer === undefined) return fail({ status: 404, code: "not_found", message: "No such app or route" });
-      if ("code" in answer) return fail(answer);
-      return route.fulfill({ status: answer.status ?? 200, json: answer.json });
+      if (method !== "GET") this.appChanges.push(`${method} ${path} ${JSON.stringify(body ?? null)}`);
+      if (this.appFailure) return fail(this.appFailure);
+      const result = listed ? this.answerForApp(listed, rest, method, body) : undefined;
+      return result === undefined ? fail({ status: 404, code: "not_found", message: "No such app or route" }) : answer(result);
     }
 
     return fail({ status: 404, code: "not_found", message: "No such route" });
+  }
+
+  /**
+   * POST /api/spaces/:spaceId/catalog/:templateId, as the server answers it:
+   * the built-in app added to the space as an app of its own, for whoever may
+   * add apps there, or the one the space removed brought back with its data,
+   * for an owner. Who can use it starts afresh either way, and the owners'
+   * list of a group follows.
+   */
+  private addFromCatalog(spaceId: string, templateId: string, body: unknown): { json: unknown; status: number } | Failure {
+    const refuse = (status: number, code: ApiErrorCode): Failure => ({ status, code, message: "Sample failure" });
+    const parsed = addFromCatalogRequestSchema.safeParse(body);
+    if (!parsed.success) return refuse(400, "invalid_request");
+    const space = this.current.spaces.find((candidate) => candidate.id === spaceId);
+    const template = this.catalog.find((id) => id === templateId);
+    if (!space || !template) return refuse(404, "not_found");
+    if (!space.canAddApps) return refuse(403, "forbidden");
+    if (this.current.apps.some((candidate) => candidate.spaceId === spaceId && candidate.template === template)) return refuse(409, "conflict");
+    const owner = space.role === "owner";
+    const memberAccess = parsed.data.memberAccess ?? "none";
+    const owners = this.groups[spaceId];
+    const removed = owners?.apps.find((entry) => entry.template === template && entry.removedAt !== null);
+    if (removed) {
+      // Only an owner brings a removed app back: its data comes with it.
+      if (!owner) return refuse(409, "conflict");
+      Object.assign(removed, { removedAt: null, memberAccess, members: {}, assistant: true });
+      this.setSession({ ...this.current, apps: [...this.current.apps, builtInApp(template, spaceId, { id: removed.id })] });
+      return { status: 200, json: { appId: removed.id, restored: true } };
+    }
+    const appId = this.freeAppId(template);
+    // Someone who is not an owner keeps edit for themselves, as on the server.
+    const members = owner ? {} : { [this.current.user.id]: "edit" as const };
+    owners?.apps.push({ id: appId, template, hasCode: true, removedAt: null, rowCount: 0, memberAccess, members, assistant: true });
+    this.setSession({ ...this.current, apps: [...this.current.apps, builtInApp(template, spaceId, { id: appId })] });
+    return { status: 201, json: { appId, restored: false } };
+  }
+
+  /** An app ID that nothing the stand-in knows has: `m-` and the built-in app's, then `-2`, `-3` and so on. */
+  private freeAppId(template: BuiltInId): string {
+    const taken = new Set([
+      ...this.current.apps.map((candidate) => candidate.id),
+      ...Object.values(this.groups).flatMap((list) => list.apps.map((entry) => entry.id)),
+    ]);
+    for (let n = 1; ; n += 1) {
+      const id = n === 1 ? `m-${template}` : `m-${template}-${n}`;
+      if (!taken.has(id)) return id;
+    }
+  }
+
+  /** What the routes for one app the session lists answer, as the server would. Undefined: nothing at this address. */
+  private answerForApp(listed: AppSummary, rest: string, method: string, body: unknown): { json?: unknown; status?: number } | Failure | undefined {
+    const refuse = (status: number, code: ApiErrorCode): Failure => ({ status, code, message: "Sample failure" });
+    const space = this.current.spaces.find((candidate) => candidate.id === listed.spaceId);
+    // The owners' list of a group follows: a removed app is marked so.
+    const owners = this.groups[listed.spaceId];
+
+    if (rest === "" && method === "DELETE") {
+      if (space?.role !== "owner") return refuse(403, "forbidden");
+      this.setSession({ ...this.current, apps: this.current.apps.filter((candidate) => candidate !== listed) });
+      for (const entry of owners?.apps ?? []) if (entry.id === listed.id) entry.removedAt = "2026-11-10T08:00:00.000Z";
+      return {};
+    }
+    if (rest === "me" && method === "PATCH") {
+      const patch = appPrefsPatchSchema.safeParse(body);
+      if (!patch.success) return refuse(400, "invalid_request");
+      this.setSession({ ...this.current, apps: this.current.apps.map((candidate) => (candidate === listed ? { ...candidate, ...patch.data } : candidate)) });
+      return {};
+    }
+    if (rest === "move" && method === "POST") {
+      return this.moveApp(listed, body) ?? {};
+    }
+    if (rest === "settings" && method === "GET") return { json: this.settingsOf(listed) };
+    if (rest === "settings" && method === "PATCH") {
+      const patch = appSettingsPatchSchema.safeParse(body);
+      if (!patch.success) return refuse(400, "invalid_request");
+      // As on the server: only what the app declares, each in its scope; the space's need edit access, the person's own only view.
+      const declared = declaredSettings(listed);
+      for (const scope of ["space", "user"] as const) {
+        for (const name of Object.keys(patch.data[scope] ?? {})) if (declared[name]?.scope !== scope) return refuse(400, "invalid_request");
+      }
+      if (listed.access === "view" && Object.keys(patch.data.space ?? {}).length > 0) return refuse(403, "forbidden");
+      const saved = this.appSettings[listed.id] ?? { space: {}, user: {} };
+      this.appSettings[listed.id] = { space: { ...saved.space, ...patch.data.space }, user: { ...saved.user, ...patch.data.user } };
+      return { json: this.settingsOf(listed) };
+    }
+    return undefined;
+  }
+
+  /** An app's settings as GET .../settings answers them: every one it declares, saved or by default. */
+  private settingsOf(listed: AppSummary): AppSettings {
+    const saved = this.appSettings[listed.id] ?? { space: {}, user: {} };
+    const settings: AppSettings = { space: {}, user: {} };
+    for (const [name, setting] of Object.entries(declaredSettings(listed))) {
+      settings[setting.scope][name] = saved[setting.scope][name] ?? valueOf(setting.default);
+    }
+    return appSettingsSchema.parse(settings);
   }
 
   /**
@@ -535,7 +652,16 @@ export class FakeApi {
     return {
       apps: this.current.apps
         .filter((app) => app.spaceId === space.id)
-        .map((app) => ({ id: app.id, hasCode: true, removedAt: null, rowCount: 0, memberAccess: "none" as const, members: {}, assistant: true })),
+        .map((app) => ({
+          id: app.id,
+          hasCode: true,
+          removedAt: null,
+          rowCount: 0,
+          memberAccess: "none" as const,
+          members: {},
+          assistant: true,
+          ...(app.template === undefined ? {} : { template: app.template }),
+        })),
       members: space.members.map((member) => {
         const known = member.id === me.id ? me : this.people.find((person) => person.id === member.id);
         return { ...member, email: known?.email ?? `${member.id}@example.com`, canAddApps: false };
@@ -548,8 +674,8 @@ export class FakeApi {
    * Moves an app the session lists to another of the person's spaces, as
    * the server would: they must own the space it is in and may add apps to
    * the other, which must not have it. Access there starts afresh, and the
-   * owners' lists of both spaces follow. Answers the refusal, or nothing
-   * once the app is moved.
+   * owners' lists of both spaces follow; its settings go with it. Answers
+   * the refusal, or nothing once the app is moved.
    */
   private moveApp(listed: AppSummary, body: unknown): Failure | undefined {
     const refuse = (status: number, code: ApiErrorCode): Failure => ({ status, code, message: "Sample failure" });
@@ -577,72 +703,10 @@ export class FakeApi {
       members: to.role === "owner" ? {} : { [this.current.user.id]: "edit" },
       // What an assistant may do with it starts afresh too, as on the server.
       assistant: true,
+      ...(listed.template === undefined ? {} : { template: listed.template }),
     });
     // The mover can always use it where it went: as an owner, or by that exception.
     this.setSession({ ...this.current, apps: this.current.apps.map((app) => (app === listed ? { ...app, spaceId: to.id, access: "edit" } : app)) });
-    return undefined;
-  }
-
-  /** What the sample apps answer, checked against the shared contract. Undefined: nothing at this address. */
-  private answerForApp(appId: string, rest: string, method: string, body: unknown): { json: unknown; status?: number } | Failure | undefined {
-    // A job's status, and a run asked for, which the server answers with 202 and the status.
-    const job = /^jobs\/([^/]+)(\/run)?$/.exec(rest);
-    if (job) {
-      const key = `${appId}/${job[1]}`;
-      const status = this.jobs[key];
-      if (!status) return undefined;
-      if (!job[2] && method === "GET") return { json: jobStatusSchema.parse(status) };
-      if (job[2] && method === "POST") {
-        // During a run, asking changes nothing.
-        if (status.state === "idle") this.jobs[key] = { ...status, state: "requested" };
-        return { json: jobStatusSchema.parse(this.jobs[key]), status: 202 };
-      }
-      return undefined;
-    }
-    const settings = this.appSettings[appId];
-    if (rest === "settings" && method === "GET" && settings) return { json: appSettingsSchema.parse(settings) };
-    if (rest === "settings" && method === "PATCH" && settings) {
-      const patch = appSettingsPatchSchema.safeParse(body);
-      if (!patch.success) return { status: 400, code: "invalid_request", message: "Sample failure" };
-      this.appChanges.push(`PATCH ${appId}/settings ${JSON.stringify(patch.data)}`);
-      const updated = { space: { ...settings.space, ...patch.data.space }, user: { ...settings.user, ...patch.data.user } };
-      this.appSettings[appId] = updated;
-      return { json: appSettingsSchema.parse(updated) };
-    }
-    if ((appId !== "checklist" && appId !== "headlines") || method !== "POST") return undefined;
-
-    const envelope = appCallRequestSchema.safeParse(body);
-    if (!envelope.success) return { status: 400, code: "invalid_request", message: "Sample failure" };
-    const input = (envelope.data.input ?? {}) as { id?: string; name?: string; section?: string; done?: boolean };
-    const output = (value: unknown) => ({ json: appCallResponseSchema.parse({ output: value }) });
-
-    if (appId === "headlines") {
-      if (rest !== "q/latest") return undefined;
-      // Written by the job, in the name of whoever added the app, when its last run went well.
-      const at = this.jobs["headlines/refresh"]?.lastSucceededAt ?? "2026-11-10T08:00:00.000Z";
-      return output(
-        this.headlines.map((title, index) => ({ id: `headline-${index + 1}`, title, createdBy: "user-1", updatedBy: "user-1", createdAt: at, updatedAt: at })),
-      );
-    }
-
-    if (rest === "q/list") return output(this.items);
-    if (rest === "m/tick") {
-      const found = this.items.find((candidate) => candidate.id === input.id);
-      if (!found) return { status: 404, code: "not_found", message: "No such item" };
-      found.done = input.done === true;
-      return output(found);
-    }
-    if (rest === "m/add") {
-      const added = item(`item-${this.items.length + 1}-${Date.now()}`, String(input.name ?? "").trim(), false, input.section ?? "");
-      if (added.name === "") return { status: 400, code: "invalid_request", message: "Sample failure" };
-      this.items.push(added);
-      return output(added);
-    }
-    if (rest === "m/clearTicked") {
-      const before = this.items.length;
-      this.items = this.items.filter((candidate) => !candidate.done);
-      return output(before - this.items.length);
-    }
     return undefined;
   }
 }
@@ -654,12 +718,13 @@ export const KIM: KnownPerson = { id: "user-3", name: "Kim Example", email: "kim
 /**
  * The signed-in person as the server's owner, who owns the family: Lin is a
  * member, Kim a member who may add apps, and Pat is invited and has not
- * arrived. The family has the checklist, which every member may view and
- * Kim may change.
+ * arrived. The family has the checklist, added from the built-in apps,
+ * which every member may view and Kim may change.
  */
 export function ownAFamily(api: FakeApi, user: Partial<Session["user"]> = {}): void {
   const session = emptySession(user);
   const me = { id: session.user.id, name: session.user.name, email: session.user.email };
+  const checklist = builtInApp("checklist", FAMILY_SPACE);
   api.people = [LIN, KIM];
   api.setSession({
     ...session,
@@ -681,10 +746,12 @@ export function ownAFamily(api: FakeApi, user: Partial<Session["user"]> = {}): v
         ],
       },
     ],
-    apps: [sampleApp("checklist", FAMILY_SPACE)],
+    apps: [checklist],
   });
   api.groups[FAMILY_SPACE] = {
-    apps: [{ id: "checklist", hasCode: true, removedAt: null, rowCount: 3, memberAccess: "view", members: { [KIM.id]: "edit" }, assistant: true }],
+    apps: [
+      { id: checklist.id, template: "checklist", hasCode: true, removedAt: null, rowCount: 3, memberAccess: "view", members: { [KIM.id]: "edit" }, assistant: true },
+    ],
     members: [
       { ...me, role: "owner", canAddApps: false },
       { ...LIN, role: "member", canAddApps: false },

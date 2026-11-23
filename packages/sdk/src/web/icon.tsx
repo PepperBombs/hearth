@@ -2,9 +2,8 @@
  * Draws one of the icons the SDK lists (`APP_ICONS` in `@hearth/sdk`).
  *
  * The set is a short list of Lucide icons, so that the whole library is not
- * shipped and a mini-app needs no icon package of its own. To add an icon,
- * add its name to `APP_ICONS` and its Lucide icon here: a name without one
- * is a type error.
+ * shipped. To add an icon, add its name to `APP_ICONS` and its Lucide icon
+ * here: a name without one is a type error.
  */
 import {
   Bookmark,

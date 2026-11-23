@@ -15,6 +15,18 @@ export type Theme = z.infer<typeof themeSchema>;
 /** Text supplied in every supported language, such as an app's name. */
 export type Localized = Record<Locale, string>;
 
+/**
+ * A value that survives being sent as JSON. An object may leave a property
+ * undefined; it is then left out, as `JSON.stringify` does.
+ */
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly Json[]
+  | { readonly [key: string]: Json | undefined };
+
 /** A space owns data. Each person has one personal space; a group space is a family or team. */
 export const spaceKindSchema = z.enum(["personal", "group"]);
 export type SpaceKind = z.infer<typeof spaceKindSchema>;
@@ -91,9 +103,9 @@ export const spaceSchema = z.object({
 export type Space = z.infer<typeof spaceSchema>;
 
 /**
- * One mini-app as a person sees it in one space. Apps the person has no
- * access to are not listed at all, nor are apps that were removed from the
- * space or whose code the server does not hold.
+ * One app as a person sees it in one space. Apps the person has no access
+ * to are not listed at all, nor are apps that were removed from the space
+ * or that the server holds no app for.
  */
 export const appSummarySchema = z.object({
   id: z.string(),
@@ -113,18 +125,15 @@ export const appSummarySchema = z.object({
   pinned: z.boolean(),
   hasPage: z.boolean(),
   /**
-   * True for an app made in Hearth (docs/platform.md): its card is a page of
-   * its own, run in a sandbox, not a widget of the build.
+   * True for an app made in Hearth (docs/platform.md), which every app the
+   * server lists is: its card is a page of its own, run in a sandbox.
    */
   made: z.boolean().optional(),
   /** A made app's version in use: it changes with every change to the app, so its page is drawn afresh. */
   version: z.number().int().positive().optional(),
   /** The built-in app a made app was added from, when it was. */
   template: z.string().optional(),
-  /**
-   * A made app's settings, declared as an SDK manifest declares them, for
-   * the settings dialog; the build's apps have theirs in the build.
-   */
+  /** A made app's settings, declared as an SDK manifest declares them, for the settings dialog. */
   settings: z.record(z.string(), z.unknown()).optional(),
 });
 export type AppSummary = z.infer<typeof appSummarySchema>;
@@ -275,16 +284,18 @@ export const withdrawInvitationRequestSchema = z.strictObject({ email: z.string(
 export type WithdrawInvitationRequest = z.infer<typeof withdrawInvitationRequestSchema>;
 
 /**
- * PUT /api/spaces/:spaceId/apps/:appId: add an app to a space, or bring a
- * removed one back with its data. Owners, and members who may add apps; only
- * an owner may bring a removed app back. Answers 204 with no body.
+ * PUT /api/spaces/:spaceId/apps/:appId: bring an app the space removed back
+ * with its data. Owners, and members who may add apps; only an owner may
+ * bring a removed app back. Answers 204 with no body. An app made in Hearth
+ * is added to its space when it is made (POST
+ * /api/spaces/:spaceId/catalog/:templateId, or the chat) and is that
+ * space's alone: for any other space the answer is 404.
  *
  * An app that is already in the space is left as it is, and that is not an
  * error, unless `memberAccess` asks for something else than it has: that
  * answers 409 `conflict`, because access is changed through its own route.
- * 409 is also the answer for an app whose manifest does not allow this kind
- * of space, and for a member adding an app that the space has an entry for
- * which they cannot see.
+ * 409 is also the answer for a member adding an app that the space has an
+ * entry for which they cannot see.
  */
 export const addAppRequestSchema = z.strictObject({
   /**
@@ -299,8 +310,8 @@ export type AddAppRequest = z.infer<typeof addAppRequestSchema>;
 
 /**
  * DELETE /api/spaces/:spaceId/apps/:appId/data. Owners only, and only for an
- * app that was removed or whose code is gone; for one still in use the
- * answer is 409 `conflict`. `confirm` is the app's ID, typed by the person.
+ * app that was removed or that the server holds no app for; for one still
+ * in use the answer is 409 `conflict`. `confirm` is the app's ID, typed by the person.
  * Answers 204 with no body.
  *
  * DELETE /api/spaces/:spaceId/apps/:appId, which removes the app and keeps
@@ -316,10 +327,9 @@ export type DeleteAppDataRequest = z.infer<typeof deleteAppDataRequestSchema>;
  * The caller must own the space the app is in (403 `forbidden` for a member
  * who can use it, 404 for anyone it is hidden from), and own the space it
  * goes to or be allowed to add apps there (403; 404 when they are not in
- * that space or it does not exist). The app's manifest must allow the kind
- * of that space, and the space must never have had the app: one that has
- * it, or had it and kept its data, answers 409 `conflict`. Apps are not
- * merged.
+ * that space or it does not exist). The space must never have had the app:
+ * one that has it, or had it and kept its data, answers 409 `conflict`.
+ * Apps are not merged.
  *
  * The rows, the settings the space shares, and the own settings, switches
  * and pins of people who are in both spaces go with the app; those of
@@ -381,13 +391,16 @@ export type SpaceInvitation = z.infer<typeof spaceInvitationSchema>;
 
 /**
  * An app in a space as its owners see it. Unlike `AppSummary` this includes
- * apps that were removed and apps whose code is no longer on the server,
- * which is why it has an ID but no name: the web app takes the name from the
- * manifest it holds, and shows the ID when it holds none.
+ * apps that were removed and apps the server holds no app for, which is why
+ * it has an ID but no name.
  */
 export const installedAppSchema = z.object({
   id: z.string(),
-  /** False when the server holds no code for this ID, for example after its folder was deleted. */
+  /**
+   * False when the server holds no app of this ID: an install of one of the
+   * apps that releases before the built-in apps held, which could not move
+   * to its built-in app.
+   */
   hasCode: z.boolean(),
   /** When the app was removed from the space, or null while it is there. Its data is kept either way. */
   removedAt: z.string().nullable(),
@@ -452,78 +465,6 @@ export const appSettingsPatchSchema = z
   .strictObject({ space: settingValuesSchema, user: settingValuesSchema })
   .partial();
 export type AppSettingsPatch = z.infer<typeof appSettingsPatchSchema>;
-
-/**
- * POST /api/spaces/:spaceId/apps/:appId/q/:name (a query; needs view) and
- * .../m/:name (a mutation; needs edit). `input` is whatever the app's route
- * takes and is left out for a route that takes nothing; the app's own schema
- * checks it.
- */
-export const appCallRequestSchema = z.strictObject({ input: z.json().optional() });
-export type AppCallRequest = z.infer<typeof appCallRequestSchema>;
-
-/** The answer to a query or mutation. `output` is left out when the route returns nothing. */
-export const appCallResponseSchema = z.object({ output: z.json().optional() });
-export type AppCallResponse = z.infer<typeof appCallResponseSchema>;
-
-/* -------------------------------------------------------------------------
- * An app's jobs (docs/mini-app-contract.md, section C, "Routes")
- *
- * A job is something an app does by itself, every so often, once for each
- * space it is in. It is never called like a query or a mutation; these two
- * routes only say how its runs went and ask for one now. Both answer 404
- * `not_found` when the app is not there for the caller, has no server file,
- * or has no job of that name (a query's or a mutation's name included).
- * ---------------------------------------------------------------------- */
-
-/** Where a job stands: "idle", "requested" (a run was asked for and has not started) or "running" (a run holds it). */
-export const JOB_STATES = ["idle", "requested", "running"] as const;
-
-/**
- * GET /api/spaces/:spaceId/apps/:appId/jobs/:job: how the job's runs went
- * in this space, for anyone who can see the app. Also the answer of
- * POST .../jobs/:job/run, which asks for a run now: it needs edit access
- * (403 `forbidden` with view, after the 404s above), takes no body and
- * answers 202. A run asked for starts at once, or 5 minutes after the last
- * one started if that is later, never sooner; during a run, asking changes
- * nothing.
- *
- * Times are ISO strings. A job that has not run in this space yet answers
- * nulls, `nextRunAt` now and "idle".
- */
-export const jobStatusSchema = z.object({
-  /** When the last run started. */
-  lastStartedAt: z.string().nullable(),
-  /** When the last run that went well ended: the app's data is from then. */
-  lastSucceededAt: z.string().nullable(),
-  /** When the last run that went wrong ended. */
-  lastFailedAt: z.string().nullable(),
-  /** Why, in English, for owners and logs; never interface text. */
-  lastError: z.string().nullable(),
-  /** When it runs next, unless someone asks for a run sooner. */
-  nextRunAt: z.string(),
-  /** "running" while a run holds the job, "requested" while a run asked for has not started, else "idle". */
-  state: z.enum(JOB_STATES),
-});
-export type JobStatus = z.infer<typeof jobStatusSchema>;
-
-/**
- * What a job's status means to the people who see the app, as a widget's
- * `useJob` hands it on: when the app's data is from (the end of the last
- * run that went well), when the last run failed, if the last one to end
- * did, and whether a run is going on or was asked for. Why it failed stays
- * out: that message is English, for logs.
- */
-export function jobStateOf(status: JobStatus): { succeededAt: string | null; failedAt: string | null; running: boolean } {
-  const { lastSucceededAt, lastFailedAt } = status;
-  const failedLast =
-    lastFailedAt !== null && (lastSucceededAt === null || Date.parse(lastFailedAt) > Date.parse(lastSucceededAt));
-  return {
-    succeededAt: lastSucceededAt,
-    failedAt: failedLast ? lastFailedAt : null,
-    running: status.state === "running" || status.state === "requested",
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Each person's own model, and the chat with it (docs/platform.md)

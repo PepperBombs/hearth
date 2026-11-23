@@ -5,7 +5,7 @@
  */
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
-import { FAMILY_SPACE, jobThatRan, ownAFamily, sampleApp, sessionWithApps, sessionWithSampleApps, test } from "./fixtures.ts";
+import { FAMILY_SPACE, ownAFamily, sandbox, sessionWithApps, sessionWithBuiltInApps, test } from "./fixtures.ts";
 
 /** Animations are run to their end first, so a dialog is never caught half faded in. */
 const shot = (page: Page, path: string) => page.screenshot({ path, animations: "disabled" });
@@ -48,7 +48,7 @@ test.describe("screenshots", () => {
             await shot(page, file("switcher-typed"));
           });
 
-          test("with sample apps", async ({ page, api }) => {
+          test("with a few apps", async ({ page, api }) => {
             api.setSession(sessionWithApps({ theme, locale }));
             await page.goto("/");
             await page.getByRole("heading", { level: 1 }).waitFor();
@@ -62,13 +62,14 @@ test.describe("screenshots", () => {
             await shot(page, file("sample-switcher"));
           });
 
-          test("with the apps this build holds", async ({ page, api }) => {
-            api.setSession(sessionWithSampleApps({ theme, locale }));
+          test("with built-in apps", async ({ page, api }) => {
+            api.setSession(sessionWithBuiltInApps({ theme, locale }));
             await page.goto("/");
-            await page.getByTestId("widget-grid").getByRole("checkbox").first().waitFor();
+            await sandbox(page, "m-checklist").getByRole("heading").waitFor();
+            await sandbox(page, "m-feed").getByRole("heading").waitFor();
             await shot(page, file("widgets"));
-            await page.goto(`/apps/${FAMILY_SPACE}/checklist`);
-            await page.getByRole("main").getByRole("checkbox").first().waitFor();
+            await page.goto(`/apps/${FAMILY_SPACE}/m-checklist`);
+            await sandbox(page, "m-checklist").getByRole("heading").waitFor();
             await shot(page, file("app-page"));
             await page.getByRole("banner").getByRole("button", { name: /Checklist|清单/ }).click();
             await page.getByRole("dialog").getByRole("switch").waitFor();
@@ -87,25 +88,6 @@ test.describe("screenshots", () => {
             await page.getByRole("dialog").getByRole("button", { name: /^(Move|移动)$/ }).click();
             await page.getByRole("main").getByText(/Feed was moved here|动态已移到这里/).waitFor();
             await shot(page, file("apps-moved"));
-          });
-
-          test("an app with a job", async ({ page, api }) => {
-            const session = sessionWithSampleApps({ theme, locale });
-            api.setSession({ ...session, apps: [sampleApp("headlines", FAMILY_SPACE), ...session.apps] });
-            api.jobs["headlines/refresh"] = jobThatRan("2026-11-10T09:00:00.000Z");
-            await page.clock.install({ time: new Date("2026-11-10T09:12:30Z") });
-            await page.goto("/");
-            await page.getByTestId("widget-grid").getByRole("listitem").first().waitFor();
-            await shot(page, file("widget-job"));
-            api.jobs["headlines/refresh"] = {
-              ...jobThatRan("2026-11-10T13:05:00.000Z"),
-              lastStartedAt: "2026-11-10T14:05:00.000Z",
-              lastFailedAt: "2026-11-10T14:05:20.000Z",
-            };
-            await page.reload();
-            await page.getByTestId("widget-grid").getByRole("listitem").first().waitFor();
-            await page.getByText(/14:05/).first().waitFor();
-            await shot(page, file("widget-job-failed"));
           });
 
           test("a family in Settings", async ({ page, api }) => {

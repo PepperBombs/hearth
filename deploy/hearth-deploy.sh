@@ -11,19 +11,15 @@
 #
 # The copy that does the work:
 #
-#   1. fetches the main branch of every mini-apps repository (APPS_REPO
-#      names one clone, or several separated by colons), and of the
-#      framework repository unless that was fetched to find this copy;
-#   2. stops there, silently, if none has a new commit;
-#   3. otherwise builds a fresh release in a new folder named after the time:
-#      the framework, with the mini-apps of the same moment built in. The
-#      mini-apps are first linked to the SDK of the framework beside them,
-#      offline, and the build refuses them if they were written for another
-#      version of the SDK;
-#   4. starts that build on a spare port, against a copy of the database and
-#      with the mini-apps' jobs switched off (HEARTH_JOBS=off), and checks
-#      that it answers. A migration that fails on the real data fails here,
-#      before anything live is touched;
+#   1. fetches the main branch of the framework repository, unless that was
+#      fetched to find this copy;
+#   2. stops there, silently, if the commit the branch is at is the one
+#      deployed;
+#   3. otherwise builds a fresh release of that commit in a new folder named
+#      after the time;
+#   4. starts that build on a spare port, against a copy of the database, and
+#      checks that it answers. A migration that fails on the real data fails
+#      here, before anything live is touched;
 #   5. stops the service for a moment, copies the database as it then is,
 #      points the "current" link at the new release (one atomic rename) and
 #      starts the service, then checks the running service;
@@ -37,13 +33,16 @@
 # database has to go back too. Either way the reason is logged and the exit
 # status is not zero.
 #
-# Commits that failed before the switch are tried again after
-# RETRY_AFTER_MINUTES, except mini-apps written for another version of the SDK
-# than the framework holds: building the same commits again cannot change
-# that, so they wait for the next commit of either repository, which is built
-# at once. Commits that failed as the live service are not tried again by
-# themselves, because every try interrupts the site: they wait for a new
+# A commit that failed before the switch is tried again after
+# RETRY_AFTER_MINUTES. One that failed as the live service is not tried again
+# by itself, because every try interrupts the site: it waits for a new
 # commit, or for state/failed to be deleted.
+#
+# A release is the framework alone. Earlier releases also held the mini-apps
+# of the repositories that APPS_REPO named, built in; every app is made in
+# Hearth now, and kept in the database. A config file written for an earlier
+# release may still name APPS_REPO: it is read and ignored, and a run that
+# builds says so.
 #
 # Which copy does the work
 #
@@ -102,10 +101,9 @@
 # A deploy script that bash can parse is handed the run, whatever it then
 # does. If it fails as it runs, or does nothing, then for as long as its
 # commit is the newest nothing a run does happens: a pending restart is not
-# finished and newer mini-apps are not deployed either, at every run, and a
-# script that ends with status 0 says nothing of it. The way out is the next
-# commit whose deploy script works, which is handed the run at once, or
-# SELF_UPDATE=off.
+# finished, at every run, and a script that ends with status 0 says nothing
+# of it. The way out is the next commit whose deploy script works, which is
+# handed the run at once, or SELF_UPDATE=off.
 #
 # The newest commit's code runs as the deploy user in every build anyway
 # (pnpm build), so running that commit's deploy script as the same user
@@ -161,17 +159,17 @@
 #   - a release is a folder releases/<time>, named as is_release_name says,
 #     and a finished one holds the file RELEASE with the lines framework=,
 #     apps= and version=. Such a copy DELETES every folder with a name like
-#     that and no RELEASE, unless "current" points at it. With several
-#     mini-apps repositories apps= holds their commits joined by "+", in
-#     the order of APPS_REPO: one word still, which such a copy only
-#     compares;
+#     that and no RELEASE, unless "current" points at it. apps= is "none",
+#     as it always was for a release without mini-apps; in an earlier
+#     release it may be the commit of the mini-apps built in (of several,
+#     joined by "+"). One word, which such a copy only compares;
 #   - "current" is a link to releases/<time>;
 #   - while state/restart-pending exists (it holds the number of tries so
 #     far, or nothing), such a copy restarts SERVICE, up to three times,
 #     until LIVE_URL/api/health reports the version of current/RELEASE;
 #   - state/failed is one line, "<stage> <framework commit> <apps commit>",
-#     the stage being build, sdk or live, and the apps commit what apps=
-#     holds. Such a copy reads it, and writes
+#     the stage being build or live (an earlier version also wrote sdk),
+#     and the apps commit what apps= holds. Such a copy reads it, and writes
 #     "build ..." for the commits whose deploy script it could not start;
 #   - beside DATABASE, such a copy deletes hearth-deploy-trial-*.db (with
 #     -wal and -shm) and DATABASE.restoring;
@@ -181,20 +179,16 @@
 #
 # Layout under HEARTH_BASE (default /opt/hearth):
 #
-#   repos/hearth, repos/hearth-stones   clones; this script only fetches them
+#   repos/hearth                      the clone; this script only fetches it
 #   releases/20260101T120000Z/        one folder per release
 #       hearth/                       the framework at one commit, built
-#       hearth-stones/                the mini-apps at one commit, linked to
-#                                     hearth/packages/sdk and built into it
-#       hearth-stones-2/              the same for the second repository of
-#                                     APPS_REPO, if it names one, and so on
-#       RELEASE                       which commits, and when
+#       RELEASE                       which commit, and when
 #       release.env                   HEARTH_VERSION for the service
 #   current -> releases/...           the release the service runs
 #   logs/                             build output, one file per attempt
 #   state/                            notes this script leaves for itself
-#       failed                        the commits that failed, and at which stage
-#                                     (build, sdk or live)
+#       failed                        the commit that failed, and at which stage
+#                                     (build or live)
 #       restart-pending               "current" was switched; restart not confirmed
 #       deploy-script                 the deploy script of the newest framework
 #                                     commit, as the installed copy started it
@@ -233,6 +227,9 @@ umask 022
 # ---------------------------------------------------------------------------
 HEARTH_BASE=/opt/hearth
 FRAMEWORK_REPO=
+# No longer used: the repositories of mini-apps that earlier releases were
+# built with. Still read, since a config file may hold it; see
+# say_apps_repo_ignored.
 APPS_REPO=
 REMOTE=origin
 BRANCH=main
@@ -267,9 +264,7 @@ redact() {
 
 # State shared with die() and the exit handler.
 attempt_key=""      # "<framework commit> <apps commit>" once a build starts
-apps_repos=()       # the clones APPS_REPO names, set by check_settings
-attempt_stage=build # "sdk" when the mini-apps were written for another SDK
-#                     version; "live" once the running service has been touched
+attempt_stage=build # "live" once the running service has been touched
 new_release=""      # folder of the release being built
 activated=no        # yes once "current" points at the new release
 health_pid=""       # the trial server, while it runs
@@ -419,19 +414,9 @@ starter_setting() {
   die "$1${config_problem:+ Also: $config_problem}"
 }
 
-# The settings only the copy that does the work needs.
+# The settings only the copy that does the work needs. APPS_REPO is not
+# among them: it is ignored, whatever it holds.
 check_settings() {
-  # One clone of mini-apps, or several separated by colons, as in PATH.
-  local repo
-  apps_repos=()
-  [[ -z $APPS_REPO ]] || IFS=: read -r -a apps_repos <<<"$APPS_REPO"
-  for repo in "${apps_repos[@]}"; do
-    [[ $repo == /* ]] || die "APPS_REPO must be an absolute path, or several separated by colons, or empty."
-  done
-  # The build finds the mini-apps through HEARTH_APPS_DIR, a list of folders
-  # separated by colons: a colon here would silently build a release without them.
-  [[ -z $APPS_REPO || $HEARTH_BASE != *:* ]] ||
-    die "HEARTH_BASE must not contain a colon while APPS_REPO is set: the build is told where the mini-apps are in HEARTH_APPS_DIR, which separates folders with colons."
   number_between "$KEEP_RELEASES" 1 1000 || die "KEEP_RELEASES must be a number, at least 1."
   number_between "$HEALTH_PORT" 1 65535 || die "HEALTH_PORT must be a port number."
   number_between "$HEALTH_TIMEOUT" 1 3600 || die "HEALTH_TIMEOUT must be a number of seconds, at least 1."
@@ -459,6 +444,16 @@ current_release_name() {
 }
 
 is_release_name() { [[ $1 =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; }
+
+# APPS_REPO named the clones of mini-apps that earlier releases were built
+# with, and a config file written for one may still hold it. It is ignored,
+# whatever it holds, which a run says once if it builds a release, or if it
+# finds nothing new and HEARTH_DEPLOY_VERBOSE asks it to say so: not in the
+# quiet run of every minute.
+say_apps_repo_ignored() {
+  [[ -z $APPS_REPO ]] ||
+    log "NOTE: APPS_REPO in $config_file is ignored: a release holds no mini-apps from a repository any more, since every app is made in Hearth. The line can be deleted."
+}
 
 # try_fetch REPO LABEL: fetches the branch and leaves the commit it is at in
 # $fetched_commit. If it cannot, it returns 1 and leaves what to say about it
@@ -950,27 +945,19 @@ elif [[ $framework_fetch != "done" ]]; then
   try_fetch "$FRAMEWORK_REPO" "framework repository" || fetch_failed
   framework_commit=$fetched_commit
 fi
-# apps_commit is what RELEASE and state/failed hold: the one repository's
-# commit, or every repository's joined by "+". apps_short is the same for
-# reading, 12 characters of each.
-apps_commit=none apps_short=none apps_commits=()
-for repo in "${apps_repos[@]}"; do
-  label="mini-apps repository"
-  ((${#apps_repos[@]} == 1)) || label+=" $repo"
-  try_fetch "$repo" "$label" || fetch_failed
-  apps_commits+=("$fetched_commit")
-  if ((${#apps_commits[@]} == 1)); then
-    apps_commit=$fetched_commit apps_short=${fetched_commit:0:12}
-  else
-    apps_commit+=+$fetched_commit apps_short+=+${fetched_commit:0:12}
-  fi
-done
+# What RELEASE's apps= and the last word of state/failed hold: "none", since
+# a release holds no mini-apps. Installed copies of earlier versions read
+# both (see the top of this file), so the words stay.
+apps_commit=none
 
 deployed_framework=$(release_value "$HEARTH_BASE/current/RELEASE" framework)
 deployed_apps=$(release_value "$HEARTH_BASE/current/RELEASE" apps)
 if [[ $framework_commit == "$deployed_framework" && $apps_commit == "$deployed_apps" ]]; then
   [[ -z $pending_failure ]] || die_pending
-  [[ -z ${HEARTH_DEPLOY_VERBOSE:-} ]] || log "Nothing new: $BRANCH is already deployed."
+  if [[ -n ${HEARTH_DEPLOY_VERBOSE:-} ]]; then
+    log "Nothing new: $BRANCH is already deployed."
+    say_apps_repo_ignored
+  fi
   exit 0
 fi
 
@@ -979,6 +966,9 @@ failed_file=$state_dir/failed
 if [[ -e $failed_file ]]; then
   failed_stage="" failed_key=""
   read -r failed_stage failed_key <"$failed_file" || true
+  # "sdk" was written by an earlier version, for mini-apps written for
+  # another version of the SDK. Its key names their commit, never "none",
+  # so it holds back no commit now.
   if [[ $failed_stage != build && $failed_stage != sdk && $failed_stage != live ]]; then
     # Written by an earlier version of this script: the commits only.
     failed_key="$failed_stage $failed_key"
@@ -987,14 +977,12 @@ if [[ -e $failed_file ]]; then
   retry_note=""
   if [[ $failed_key == "$wanted" && $failed_stage == live ]]; then
     # Trying again would stop the running service again, for the same result.
-    retry_note="They built, but did not come up as the live service, so they are not tried again by themselves. Push a new commit, or delete $failed_file to try these once more."
-  elif [[ $failed_key == "$wanted" && $failed_stage == sdk ]]; then
-    retry_note="The mini-apps were written for another version of the SDK than the framework holds, which building them again cannot change. The next commit of either repository is built at once."
+    retry_note="It built, but did not come up as the live service, so it is not tried again by itself. Push a new commit, or delete $failed_file to try it once more."
   elif [[ $failed_key == "$wanted" && -z $(find "$failed_file" -mmin "+$RETRY_AFTER_MINUTES" 2>/dev/null) ]]; then
     retry_note="Trying again $RETRY_AFTER_MINUTES minutes after that attempt, or at once after a new commit, or after deleting $failed_file."
   fi
   if [[ -n $retry_note ]]; then
-    log "ERROR: the newest commits (framework ${framework_commit:0:12}, mini-apps $apps_short) failed to deploy earlier. $retry_note" >&2
+    log "ERROR: the newest commit (framework ${framework_commit:0:12}) failed to deploy earlier. $retry_note" >&2
     [[ -z $pending_failure ]] || die_pending
     exit 1
   fi
@@ -1007,7 +995,7 @@ version=$(git -C "$FRAMEWORK_REPO" rev-parse --short "$framework_commit")
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 previous_name=$current_name
 if [[ -n $pending_failure ]]; then
-  log "ERROR: $SERVICE did not come up on release $current_name: $pending_failure. Trying the newer commits instead." >&2
+  log "ERROR: $SERVICE did not come up on release $current_name: $pending_failure. Trying the newer commit instead." >&2
   previous_note="\"current\" still points at release $previous_name, which $SERVICE is not running. Check: systemctl status $SERVICE"
 elif [[ -n $previous_name ]]; then
   previous_note="Release $previous_name is still the one in use."
@@ -1020,7 +1008,7 @@ if [[ -n $script_problem ]]; then
   # Found before the hand-over, and said here so that it counts as a build
   # that failed: tried again after a while, not on every run.
   [[ -z $script_problem_lines ]] || printf '%s\n' "$script_problem_lines" | sed 's/^/    /' >&2
-  die "The newest commits (framework ${framework_commit:0:12}, mini-apps $apps_short) are not deployed: the deploy script of that framework commit cannot carry out the run, because $script_problem. $script_remedy; or deploy them with the installed copy of the script, which may be much older than they are: read \"When a deployment fails\" in docs/self-hosting.md before you set SELF_UPDATE=off in $config_file."
+  die "The newest commit (framework ${framework_commit:0:12}) is not deployed: the deploy script of that commit cannot carry out the run, because $script_problem. $script_remedy; or deploy it with the installed copy of the script, which may be much older than it is: read \"When a deployment fails\" in docs/self-hosting.md before you set SELF_UPDATE=off in $config_file."
 fi
 new_release=$HEARTH_BASE/releases/$stamp
 build_log=$HEARTH_BASE/logs/$stamp.log
@@ -1028,69 +1016,25 @@ build_log=$HEARTH_BASE/logs/$stamp.log
 mkdir -- "$new_release"
 : >"$build_log"
 
-log "New commits: framework ${framework_commit:0:12}, mini-apps $apps_short. Building release $stamp (version $version)."
+log "New commit: framework ${framework_commit:0:12}. Building release $stamp (version $version)."
 # The one line by which the journal shows that a run was handed over: the
 # hand-over itself writes nothing, and a build the installed copy does
 # itself has no such line.
 [[ -z $handed_over ]] ||
   log "This run is carried out by the deploy script of framework commit ${handed_over:0:12}."
+say_apps_repo_ignored
 
 export_commit "$FRAMEWORK_REPO" "$framework_commit" "$new_release/hearth" >>"$build_log" 2>&1 ||
   die "Could not copy the framework's files into the release."
-# The mini-apps lie beside the framework, as hearth-stones does beside hearth
-# on a developer's machine: they link the SDK as ../hearth/packages/sdk. The
-# first repository of APPS_REPO lies in hearth-stones whatever its clone is
-# called, the second in hearth-stones-2, and so on.
-apps_dirs=()
-for i in "${!apps_repos[@]}"; do
-  apps_dir=$new_release/hearth-stones
-  ((i == 0)) || apps_dir+=-$((i + 1))
-  ((${#apps_repos[@]} == 1)) ||
-    log "Mini-apps in ${apps_dir##*/}: ${apps_repos[i]} at ${apps_commits[i]:0:12}."
-  export_commit "${apps_repos[i]}" "${apps_commits[i]}" "$apps_dir" >>"$build_log" 2>&1 ||
-    die "Could not copy the mini-apps' files into the release (from ${apps_repos[i]})."
-  apps_dirs+=("$apps_dir")
-done
 
 log "Installing dependencies (pnpm install --frozen-lockfile)."
 (cd -- "$new_release/hearth" &&
   clean_env pnpm install --frozen-lockfile --store-dir "$HEARTH_BASE/pnpm-store") >>"$build_log" 2>&1 ||
   die "pnpm install failed."
 
-# The mini-apps install nothing but that link, so their install needs no
-# network, and --offline makes sure it uses none. A mini-apps repository
-# without a package.json holds no apps yet, and has nothing to install.
-# See docs/mini-app-contract.md, section A7, "SDK only".
-for apps_dir in "${apps_dirs[@]}"; do
-  [[ -f $apps_dir/package.json ]] || continue
-  log "Linking the mini-apps to the release's SDK (pnpm install --frozen-lockfile --offline)."
-  (cd -- "$apps_dir" &&
-    clean_env pnpm install --frozen-lockfile --offline --store-dir "$HEARTH_BASE/pnpm-store") >>"$build_log" 2>&1 ||
-    die "Could not link the mini-apps to the SDK (pnpm install --frozen-lockfile --offline in ${apps_dir##*/}). Their pnpm-lock.yaml must be up to date and hold nothing but the link to ../hearth/packages/sdk; see the lines below."
-done
-
-# Which mini-apps a release holds is decided now: pnpm build first runs
-# hearth-apps sync, which reads HEARTH_APPS_DIR, the folders separated by
-# colons. The running server reads no apps folder. Without APPS_REPO the
-# release holds no mini-apps.
-build_env=(HEARTH_VERSION="$version")
-((${#apps_dirs[@]} == 0)) || build_env+=(HEARTH_APPS_DIR="$(IFS=:; printf '%s' "${apps_dirs[*]}")")
 log "Building (pnpm build)."
-build_status=0
-(cd -- "$new_release/hearth" && clean_env "${build_env[@]}" pnpm build) >>"$build_log" 2>&1 ||
-  build_status=$?
-if ((build_status == 3)); then
-  # hearth-apps sync ends with status 3 for one thing only, and pnpm passes
-  # it on: mini-apps written for another version of the SDK than this one.
-  attempt_stage=sdk
-  die "The mini-apps (commit $apps_short) were written for another version of the SDK than the framework (commit ${framework_commit:0:12}) holds; the lines below name both. This is expected between merging a new SDK version into one repository and the matching change into the other. These commits are not built again: the next commit of either repository is built at once."
-fi
-((build_status == 0)) || die "pnpm build failed."
-
-# hearth-apps sync names what the build holds: "this build holds 2 mini-apps
-# (grocery, notes)." or "this build holds no mini-apps."
-holds=$(sed -n 's/^hearth-apps sync: this build holds //p' -- "$build_log" | tail -n 1)
-[[ -z $holds ]] || log "The build holds $holds"
+(cd -- "$new_release/hearth" && clean_env HEARTH_VERSION="$version" pnpm build) >>"$build_log" 2>&1 ||
+  die "pnpm build failed."
 
 server_dir=$new_release/hearth/packages/server
 [[ -f $server_dir/dist/main.js ]] || die "The build did not produce packages/server/dist/main.js."
@@ -1102,8 +1046,7 @@ server_dir=$new_release/hearth/packages/server
 # It runs with made-up settings, so it does not touch the secrets file, and
 # against a fresh copy of the database, so its migrations meet the real rows
 # without changing them. Sign-in stays on, so it would let nobody in even if
-# something could reach it. Its mini-apps' jobs are switched off
-# (HEARTH_JOBS=off), so a release on trial fetches nothing from outside.
+# something could reach it.
 log "Checking the new build on port $HEALTH_PORT."
 if port_in_use "$HEALTH_PORT"; then
   die "Port $HEALTH_PORT is already in use, so the new build cannot be checked there. Free it or change HEALTH_PORT."
@@ -1123,7 +1066,7 @@ fi
   HOST=127.0.0.1 PORT="$HEALTH_PORT" HEARTH_DB="$trial_database" \
   HEARTH_AUTH=cloudflare-access HEARTH_CF_TEAM_DOMAIN=health-check.example.com \
   HEARTH_CF_AUDIENCE=health-check HEARTH_OWNER_EMAIL=health-check@example.com \
-  HEARTH_JOBS=off HEARTH_VERSION="$version" node dist/main.js) >>"$build_log" 2>&1 9>&- &
+  HEARTH_VERSION="$version" node dist/main.js) >>"$build_log" 2>&1 9>&- &
 health_pid=$!
 if ! wait_healthy "http://127.0.0.1:$HEALTH_PORT" "$version" page "$health_pid"; then
   if [[ -n $trial_db ]]; then

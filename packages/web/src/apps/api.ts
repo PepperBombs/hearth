@@ -1,21 +1,17 @@
 /**
- * The calls the shell makes for a mini-app: one of its queries or mutations,
- * its settings, a job's status and a run asked for now, adding it to a
- * space, removing it or moving it to another, and the person's own switch
- * and pin. A mini-app's own code never builds an address; it names a route
- * or a job, and `<AppScope>` (./scope.tsx) knows the space and the app.
+ * The calls the shell makes about an app in a space, rather than inside it:
+ * its settings, removing it or moving it to another space, and the person's
+ * own switch and pin. Adding a built-in app is in ../made/api.ts, and what
+ * an app made in Hearth reads and writes goes through its page's bridge
+ * (../made/frame.tsx).
  *
  * Shapes are in @hearth/shared; answers are checked against them.
  */
 import {
-  appCallResponseSchema,
   appSettingsSchema,
-  jobStatusSchema,
-  type AddAppRequest,
   type AppPrefsPatch,
   type AppSettings,
   type AppSettingsPatch,
-  type JobStatus,
   type MoveAppRequest,
 } from "@hearth/shared";
 import { ApiRequestError, request } from "../session/api";
@@ -32,35 +28,6 @@ const JSON_HEADERS = { "Content-Type": "application/json" };
 
 async function readJson(response: Response): Promise<unknown> {
   return response.json().catch(() => null);
-}
-
-export type AppCall = Install & {
-  kind: "query" | "mutation";
-  /** The route's name in the app's `server.ts`. */
-  name: string;
-  /** What the route takes; undefined for a route that takes nothing. */
-  input: unknown;
-  signal?: AbortSignal;
-};
-
-/**
- * POST .../q/:name or .../m/:name. Resolves with what the route answered,
- * which is undefined for a mutation that returns nothing.
- */
-export async function callAppRoute(call: AppCall): Promise<unknown> {
-  const segment = call.kind === "query" ? "q" : "m";
-  const response = await request(address(call, `${segment}/${encodeURIComponent(call.name)}`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    // An undefined input is left out by JSON.stringify, which is what the server expects for "none".
-    body: JSON.stringify({ input: call.input }),
-    signal: call.signal,
-  });
-  const parsed = appCallResponseSchema.safeParse(await readJson(response));
-  if (!parsed.success) {
-    throw new ApiRequestError("invalid_response", response.status, "The app's answer did not match the expected shape.");
-  }
-  return parsed.data.output;
 }
 
 /** GET .../settings: the values the space shares and the person's own, defaults filled in. */
@@ -88,33 +55,6 @@ export async function saveAppSettings(install: Install, patch: AppSettingsPatch)
     throw new ApiRequestError("invalid_response", response.status, "The app's settings did not match the expected shape.");
   }
   return parsed.data;
-}
-
-async function readJobStatus(response: Response): Promise<JobStatus> {
-  const parsed = jobStatusSchema.safeParse(await readJson(response));
-  if (!parsed.success) {
-    throw new ApiRequestError("invalid_response", response.status, "The job's status did not match the expected shape.");
-  }
-  return parsed.data;
-}
-
-/** GET .../jobs/:job: how the job's runs went in this space. */
-export async function fetchJobStatus(install: Install, job: string, signal?: AbortSignal): Promise<JobStatus> {
-  return readJobStatus(await request(address(install, `jobs/${encodeURIComponent(job)}`), { signal }));
-}
-
-/**
- * POST .../jobs/:job/run: asks for a run now, which needs edit access.
- * Resolves with the job's status once the server has the request: the run
- * itself is still to come.
- */
-export async function requestJobRun(install: Install, job: string): Promise<JobStatus> {
-  return readJobStatus(await request(address(install, `jobs/${encodeURIComponent(job)}/run`), { method: "POST" }));
-}
-
-/** PUT /api/spaces/:spaceId/apps/:appId: adds an app to a space, or brings a removed one back. No body comes back. */
-export async function addAppToSpace(install: Install, body: AddAppRequest): Promise<void> {
-  await request(address(install), { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(body) });
 }
 
 /** DELETE /api/spaces/:spaceId/apps/:appId: removes an app from a space. Its data is kept. */

@@ -1,5 +1,5 @@
 /**
- * ctx.fetch's rules, its pace and its transports, without a network: the
+ * An app's fetch (`hearth.fetch`): its rules, its pace and its transports, without a network: the
  * rules in front of a transport written here, Node's transport in front of a
  * made-up fetch that answers with real Response objects, and the stand-in
  * file in a temporary folder. Time is a clock that moves only when told.
@@ -7,10 +7,10 @@
 import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FetchError } from "@hearth/sdk/server";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   ANSWER_TIME_LIMIT_MS,
+  FetchError,
   MAX_BODY_BYTES,
   MAX_REDIRECTS,
   PACE_MS,
@@ -44,7 +44,7 @@ function watch<T>(promise: Promise<T>) {
   return watched;
 }
 
-/** The FetchError a call to ctx.fetch rejects with. */
+/** The FetchError a fetch rejects with. */
 async function failure(promise: Promise<unknown>): Promise<FetchError> {
   try {
     await promise;
@@ -52,13 +52,13 @@ async function failure(promise: Promise<unknown>): Promise<FetchError> {
     if (error instanceof FetchError) return error;
     throw error;
   }
-  throw new Error("ctx.fetch gave an answer.");
+  throw new Error("The fetch gave an answer.");
 }
 
-/** ctx.fetch for one run, in front of `transport`, with what it sent recorded. */
+/** The fetch of one request of an app, in front of `transport`, with what it sent recorded. */
 function setUp(options: { transport?: Transport; hosts?: readonly string[]; paced?: boolean } = {}) {
   const fake = fakeClock();
-  const run = new AbortController();
+  const stop = new AbortController();
   const requests: TransportRequest[] = [];
   const answer: Transport = options.transport ?? (async () => new Response("ok"));
   const outbound: Outbound = {
@@ -69,7 +69,7 @@ function setUp(options: { transport?: Transport; hosts?: readonly string[]; pace
     pace: options.paced ? createPace(fake.clock) : null,
     clock: fake.clock,
   };
-  return { fetch: fetchFor(outbound, { hosts: options.hosts ?? HOSTS, signal: run.signal }), fake, run, requests };
+  return { fetch: fetchFor(outbound, { hosts: options.hosts ?? HOSTS, signal: stop.signal }), fake, stop, requests };
 }
 
 /**
@@ -92,7 +92,7 @@ function madeUpFetch(answer: (url: string) => Response | Promise<Response> | "ne
   return { fetchFunction, calls };
 }
 
-/** ctx.fetch through Node's transport and a made-up fetch. */
+/** The fetch through Node's transport and a made-up fetch. */
 function throughNode(answer: (url: string) => Response | Promise<Response> | "never", paced = false) {
   const { fetchFunction, calls } = madeUpFetch(answer);
   return { ...setUp({ transport: nodeTransport(fetchFunction), paced }), calls };
@@ -104,7 +104,7 @@ const bytes = (text: string) => new TextEncoder().encode(text);
  * The rules
  * ---------------------------------------------------------------------- */
 
-describe("ctx.fetch refuses, before sending anything,", () => {
+describe("hearth.fetch refuses, before sending anything,", () => {
   it.each([
     ["an http address", "http://api.github.com/search", "Only https addresses are fetched, not http ones: http://api.github.com/search"],
     ["an ftp address", "ftp://feeds.example.com/x", "not ftp ones"],
@@ -120,7 +120,7 @@ describe("ctx.fetch refuses, before sending anything,", () => {
     ["a user name", "https://someone@api.github.com/", "An address may not hold a user name or password"],
     ["a password", "https://someone:secret@api.github.com/", "An address may not hold a user name or password: https://api.github.com/"],
     ["an address that is not whole", "/search/repositories", 'and "/search/repositories" is not one'],
-    ["text that is no address", "api.github.com/search", "ctx.fetch takes a whole address"],
+    ["text that is no address", "api.github.com/search", "hearth.fetch takes a whole address"],
   ])("%s", async (_label, url, words) => {
     const { fetch, requests } = setUp();
     const error = await failure(fetch(url));
@@ -135,7 +135,7 @@ describe("ctx.fetch refuses, before sending anything,", () => {
     for (const url of [new URL(SEARCH), undefined, 42]) {
       expect(await failure(fetch(url as unknown as string))).toMatchObject({
         code: "refused",
-        message: expect.stringContaining("ctx.fetch takes its address as text"),
+        message: expect.stringContaining("hearth.fetch takes its address as text"),
       });
     }
     expect(requests).toEqual([]);
@@ -145,18 +145,18 @@ describe("ctx.fetch refuses, before sending anything,", () => {
     const { fetch, requests } = setUp({ hosts: [] });
     expect(await failure(fetch(SEARCH))).toMatchObject({
       code: "refused",
-      message: expect.stringContaining("This app's manifest lists no hosts in network, so its jobs fetch from none"),
+      message: expect.stringContaining("This app's manifest lists no hosts in network, so it fetches from none"),
     });
     expect(requests).toEqual([]);
   });
 
   it.each([
-    ["a method", { method: "POST" }, 'not "method": a job only sends GET requests'],
+    ["a method", { method: "POST" }, 'not "method": an app only sends GET requests'],
     ["a body", { headers: {}, body: "{}" }, 'not "body"'],
     ["a signal", { signal: new AbortController().signal }, 'not "signal"'],
-    ["null", null, "ctx.fetch takes { headers } as its second argument, or nothing."],
-    ["text", "accept: application/json", "ctx.fetch takes { headers }"],
-    ["a list", [], "ctx.fetch takes { headers }"],
+    ["null", null, "hearth.fetch takes { headers } as its second argument, or nothing."],
+    ["text", "accept: application/json", "hearth.fetch takes { headers }"],
+    ["a list", [], "hearth.fetch takes { headers }"],
     ["headers as a Headers object", { headers: new Headers({ accept: "text/html" }) }, "headers must be an object of names and values"],
     ["headers as a list of pairs", { headers: [["accept", "text/html"]] }, "headers must be an object of names and values"],
     ["headers as text", { headers: "accept: text/html" }, "headers must be an object of names and values"],
@@ -191,7 +191,7 @@ describe("ctx.fetch refuses, before sending anything,", () => {
     const { fetch, requests } = setUp();
     expect(await failure(fetch(SEARCH, { headers: { [name]: "anything" } }))).toMatchObject({
       code: "refused",
-      message: expect.stringContaining(`A job may not send the header ${name.toLowerCase()}.`),
+      message: expect.stringContaining(`An app may not send the header ${name.toLowerCase()}.`),
     });
     expect(requests).toEqual([]);
   });
@@ -214,8 +214,8 @@ describe("ctx.fetch refuses, before sending anything,", () => {
   });
 });
 
-describe("ctx.fetch sends", () => {
-  it("User-Agent: Hearth and the headers a job may add, in lower case, and nothing else", async () => {
+describe("hearth.fetch sends", () => {
+  it("User-Agent: Hearth and the headers an app may add, in lower case, and nothing else", async () => {
     const { fetch, requests, fake } = setUp();
     await fetch(`${SEARCH}?q=stars%3A%3E1#results`, {
       headers: {
@@ -241,7 +241,7 @@ describe("ctx.fetch sends", () => {
     expect(fake.pending()).toBe(0);
   });
 
-  it("User-Agent alone when the job adds no header", async () => {
+  it("User-Agent alone when the app adds no header", async () => {
     const { fetch, requests } = setUp();
     await fetch(SEARCH);
     await fetch(SEARCH, {});
@@ -279,7 +279,7 @@ describe("ctx.fetch sends", () => {
   });
 });
 
-describe("ctx.fetch's answer", () => {
+describe("hearth.fetch's answer", () => {
   it("is whole: its address, status, headers in lower case without set-cookie, text and json()", async () => {
     const { fetch } = throughNode(
       () =>
@@ -346,7 +346,7 @@ describe("ctx.fetch's answer", () => {
   });
 });
 
-describe("ctx.fetch follows redirects", () => {
+describe("hearth.fetch follows redirects", () => {
   it.each([301, 302, 303, 307, 308])("of status %i on the same host, dropping the redirect's own body", async (status) => {
     let dropped = false;
     const { fetch, calls } = throughNode((url) =>
@@ -435,7 +435,7 @@ describe("ctx.fetch follows redirects", () => {
   });
 });
 
-describe("ctx.fetch's limits", () => {
+describe("hearth.fetch's limits", () => {
   it("give up after 20 seconds without an answer, aborting the request", async () => {
     const { fetch, fake, calls } = throughNode(() => "never");
     const call = watch(fetch(SEARCH));
@@ -623,13 +623,13 @@ describe("ctx.fetch's limits", () => {
   });
 });
 
-describe("ctx.fetch once the run is over", () => {
+describe("hearth.fetch once its request is over", () => {
   it("rejects at once with stopped, and sends nothing", async () => {
-    const { fetch, run, requests } = setUp();
-    run.abort();
+    const { fetch, stop, requests } = setUp();
+    stop.abort();
     expect(await failure(fetch(SEARCH))).toMatchObject({
       code: "stopped",
-      message: "The run is over: ctx.fetch works only while its job runs.",
+      message: "The request is over, so nothing was fetched.",
     });
     // Even a request that breaks the rules: there is nothing to check it for.
     expect(await failure(fetch("http://example.com/"))).toMatchObject({ code: "stopped" });
@@ -637,13 +637,13 @@ describe("ctx.fetch once the run is over", () => {
   });
 
   it("gives up a request on its way, and aborts it", async () => {
-    const { fetch, run, calls, fake } = throughNode(() => "never");
+    const { fetch, stop, calls, fake } = throughNode(() => "never");
     const call = watch(fetch(SEARCH));
     await fake.advance(1000);
-    run.abort();
+    stop.abort();
     expect(await failure(call.promise)).toMatchObject({
       code: "stopped",
-      message: `The run is over, so ctx.fetch gave up on ${SEARCH}.`,
+      message: `The request is over, so hearth.fetch gave up on ${SEARCH}.`,
     });
     expect(calls[0]?.init.signal?.aborted).toBe(true);
     expect(fake.pending()).toBe(0);
@@ -651,7 +651,7 @@ describe("ctx.fetch once the run is over", () => {
 
   it("gives up reading a body, and stops its download", async () => {
     let stopped = false;
-    const { fetch, run, fake } = throughNode(
+    const { fetch, stop, fake } = throughNode(
       () =>
         new Response(
           new ReadableStream<Uint8Array>({
@@ -662,7 +662,7 @@ describe("ctx.fetch once the run is over", () => {
     );
     const call = watch(fetch(FEED));
     await fake.advance(1000);
-    run.abort();
+    stop.abort();
     expect(await failure(call.promise)).toMatchObject({ code: "stopped" });
     expect(stopped).toBe(true);
   });
@@ -673,8 +673,8 @@ describe("ctx.fetch once the run is over", () => {
  * ---------------------------------------------------------------------- */
 
 describe("the pace", () => {
-  /** Two runs, of any apps, behind one pace; what reached the transport, and when. */
-  function twoRuns(answer: (request: TransportRequest) => Promise<Response> = async () => new Response("ok")) {
+  /** Two requests, of any apps, behind one pace; what reached the transport, and when. */
+  function twoRequests(answer: (request: TransportRequest) => Promise<Response> = async () => new Response("ok")) {
     const fake = fakeClock();
     const starts: [string, number][] = [];
     const outbound: Outbound = {
@@ -696,8 +696,8 @@ describe("the pace", () => {
     };
   }
 
-  it("starts requests to one host 6.5 seconds apart, in the order asked, whichever run asks", async () => {
-    const { fake, starts, fetchFirst, fetchSecond } = twoRuns();
+  it("starts requests to one host 6.5 seconds apart, in the order asked, whichever app asks", async () => {
+    const { fake, starts, fetchFirst, fetchSecond } = twoRequests();
     const calls = [fetchFirst(`${SEARCH}?n=1`), fetchSecond(`${SEARCH}?n=2`), fetchFirst(`${SEARCH}?n=3`)].map(watch);
     await fake.advance(PACE_MS - 1);
     expect(starts).toEqual([[`${SEARCH}?n=1`, 0]]);
@@ -712,7 +712,7 @@ describe("the pace", () => {
   });
 
   it("holds up no request to another host", async () => {
-    const { fake, starts, fetchFirst, fetchSecond } = twoRuns();
+    const { fake, starts, fetchFirst, fetchSecond } = twoRequests();
     const calls = [fetchFirst(`${SEARCH}?n=1`), fetchSecond(FEED), fetchFirst(`${SEARCH}?n=2`)].map(watch);
     await fake.advance(PACE_MS);
     expect(starts).toEqual([
@@ -724,7 +724,7 @@ describe("the pace", () => {
   });
 
   it("paces the next request of a redirect too", async () => {
-    const { fake, starts, fetchFirst } = twoRuns(async (request) =>
+    const { fake, starts, fetchFirst } = twoRequests(async (request) =>
       request.url.endsWith("/old")
         ? new Response(null, { status: 301, headers: { location: "/new" } })
         : new Response("here"),
@@ -738,9 +738,9 @@ describe("the pace", () => {
     expect((await call.promise).text).toBe("here");
   });
 
-  it("counts the wait for a turn against the run, not against the 20 seconds of the answer", async () => {
+  it("counts the wait for a turn against the request, not against the 20 seconds of the answer", async () => {
     const twenty = ANSWER_TIME_LIMIT_MS;
-    const { fake, fetchFirst } = twoRuns((request) =>
+    const { fake, fetchFirst } = twoRequests((request) =>
       request.url.endsWith("n=2")
         ? new Promise((resolve) => fake.clock.after(twenty - 5_000, () => resolve(new Response("late, but whole"))))
         : Promise.resolve(new Response("at once")),
@@ -752,8 +752,8 @@ describe("the pace", () => {
     expect((await two.promise).text).toBe("late, but whole");
   });
 
-  it("lets a request whose run is over leave the line, holding up no one behind it", async () => {
-    const { fake, starts, first, fetchFirst, fetchSecond } = twoRuns();
+  it("lets a request that is over leave the line, holding up no one behind it", async () => {
+    const { fake, starts, first, fetchFirst, fetchSecond } = twoRequests();
     const one = watch(fetchFirst(`${SEARCH}?n=1`));
     const two = watch(fetchFirst(`${SEARCH}?n=2`));
     const three = watch(fetchSecond(`${SEARCH}?n=3`));
@@ -761,7 +761,7 @@ describe("the pace", () => {
     first.abort();
     expect(await failure(two.promise)).toMatchObject({
       code: "stopped",
-      message: `The run is over, so ctx.fetch gave up on ${SEARCH}.`,
+      message: `The request is over, so hearth.fetch gave up on ${SEARCH}.`,
     });
     await fake.advance(PACE_MS - 1000);
     expect(starts).toEqual([
@@ -793,7 +793,7 @@ describe("the stand-in file", () => {
     write(path, content);
     return path;
   }
-  /** ctx.fetch for a run of a server whose HEARTH_FETCH_STANDINS names `path`. */
+  /** The fetch of a request on a server whose HEARTH_FETCH_STANDINS names `path`. */
   function fetchFrom(path: string) {
     const fake = fakeClock();
     const outbound = outboundFor({ fetchStandIns: path }, fake.clock);

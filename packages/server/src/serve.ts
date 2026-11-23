@@ -1,37 +1,30 @@
 /**
- * The server as a process runs it: what main.ts starts, apart from the list
- * of mini-apps the build wrote, which main.ts alone imports.
+ * The server as a process runs it: what main.ts starts.
  *
- * `startServer` is the part a test can run: the scheduler of the mini-apps'
- * jobs when HEARTH_JOBS is "on" (none when "off"), their way out (the
+ * `startServer` is the part a test can run: the apps' way out (the
  * stand-in file HEARTH_FETCH_STANDINS names, or the network, paced), the
- * application with the scheduler's wake handed to its routes, listening,
- * and a stop that ends the run going on before the database is closed.
+ * built-in apps brought up to date and the installs of the apps of the
+ * releases before them moved to them, the application, listening, and a
+ * stop that closes the database once the server has stopped listening.
  *
- * `serveHearth` is the process around it: the settings and the apps are
- * checked before the database is opened, a rejection nothing handled is
- * logged instead of ending the process, and SIGTERM or SIGINT stop it.
- *
- * Design: docs/mini-app-contract.md, section C ("The scheduler",
- * "Switches").
+ * `serveHearth` is the process around it: the settings are checked before
+ * the database is opened, a rejection nothing handled is logged instead of
+ * ending the process, and SIGTERM or SIGINT stop it.
  */
 import type { AddressInfo } from "node:net";
 import { serve, type ServerType } from "@hono/node-server";
-import { FetchError } from "@hearth/sdk/server";
 import type { Hono } from "hono";
 import { createApp } from "./app";
 import { outboundFor, processClock, type Clock } from "./apps/fetch";
-import { withMadeApps } from "./made/apps";
+import { madeAppsRegistry } from "./made/apps";
 import { loadCatalog } from "./made/catalog";
 import { moveLegacyInstalls, updateBuiltInApps } from "./made/builtin";
-import { AppRegistryError, createRegistry, type BundledApp } from "./apps/registry";
-import { createScheduler, type Scheduler } from "./apps/scheduler";
 import type { Identify } from "./auth";
 import { ConfigError, isLoopbackHost, loadConfig, type Config } from "./config";
 import { migrate, openDatabase, type Db } from "./db/database";
 import type { Env } from "./http/env";
 
-/** The longest a stop waits for the run going on and the open connections: then the database is closed all the same. */
+/** The longest a stop waits for the open connections: then the database is closed all the same. */
 export const STOP_LIMIT_MS = 5_000;
 
 /** Where the server's lines go: the console, in a process. */
@@ -45,13 +38,11 @@ export type StartOptions = {
   readonly config: Config;
   /** Opened and migrated. `stop` closes it. */
   readonly db: Db;
-  /** The mini-apps this build holds. A bad one throws AppRegistryError before anything starts. */
-  readonly apps: readonly BundledApp[];
   readonly log: ServerLog;
   /**
-   * Times the scheduler's sleeps, each run's 5 minutes, each answer's 20
-   * seconds and the stop's limit: the process's own clock, unless a test
-   * gives one that moves when told.
+   * Times the pace of the apps' fetches, each answer's 20 seconds and the
+   * stop's limit: the process's own clock, unless a test gives one that
+   * moves when told.
    */
   readonly clock?: Clock;
   /** The login method; the configuration's unless a test gives another. */
@@ -63,62 +54,37 @@ export type RunningServer = {
   readonly app: Hono<Env>;
   /** The listening socket's server. Its "error" event says it could not listen. */
   readonly server: ServerType;
-  /** The scheduler of the mini-apps' jobs, or null when HEARTH_JOBS is "off": then no job runs. */
-  readonly scheduler: Scheduler | null;
-  /** Resolves once the server listens and the scheduler has started; rejects when it cannot listen. */
+  /** Resolves once the server listens; rejects when it cannot. */
   readonly listening: Promise<AddressInfo>;
   /**
-   * Stops for good. The scheduler first: no new run starts, and the run
-   * going on ends at once, recorded as stopped (its job due again at the
-   * next start), while the server stops listening and lets its open
-   * connections finish. Once both are done the database is closed; after
-   * STOP_LIMIT_MS it is closed whatever holds things up. Resolves when it
-   * is closed. A job's function that goes on all the same is not waited
-   * for: its ctx no longer works.
+   * Stops for good: the server stops listening and lets its open
+   * connections finish, then the database is closed; after STOP_LIMIT_MS it
+   * is closed whatever holds things up. Resolves when it is closed.
    */
   readonly stop: () => Promise<void>;
 };
 
-/**
- * Starts the server: its jobs' scheduler, unless HEARTH_JOBS is "off", the
- * application and the listening socket. The scheduler starts once the
- * server listens.
- */
+/** Starts the server: the built-in apps brought up to date, the application and the listening socket. */
 export function startServer(options: StartOptions): RunningServer {
-  const { config, db, apps, log } = options;
+  const { config, db, log } = options;
   const clock = options.clock ?? processClock;
-  const registry = createRegistry(apps);
 
-  // The mini-apps' jobs run in this process, one at a time, unless
-  // HEARTH_JOBS=off: the deploy's trial start and the end-to-end servers
-  // without stand-ins switch them off. Their way out is the stand-in file
-  // when HEARTH_FETCH_STANDINS names one, and the network, paced, otherwise.
-  // One way out for the whole server: the jobs' fetches and the made apps' pages' share its pace.
+  // The apps' way out, one for the whole server, so that one pace holds every request to a host:
+  // the stand-in file when HEARTH_FETCH_STANDINS names one, and the network, paced, otherwise.
   const outbound = outboundFor(config, clock);
-  const scheduler =
-    config.jobs === "on"
-      ? createScheduler({
-          db,
-          registry,
-          outbound,
-          clock,
-          now: () => new Date(),
-          random: Math.random,
-          log: (line) => log.error(line),
-        })
-      : null;
 
   // The apps shipped with Hearth (docs/platform.md, "Built-in apps"): their untouched copies brought
-  // up to date, and the build's apps of the same name moved to them, once, in place, data and all.
+  // up to date, and the installs of the apps of the same name that releases before them left moved
+  // to them, once, in place, data and all.
   const catalog = loadCatalog();
   const updates = updateBuiltInApps(db, catalog);
   for (const copy of updates.updated) log.info(`Updated the built-in app "${copy.template}" of space ${copy.spaceId} (${copy.appId}) to version ${copy.version}.`);
   for (const copy of updates.failed) log.error(`Could not update the built-in app "${copy.template}" of space ${copy.spaceId} (${copy.appId}): ${copy.reason}`);
-  const { moved, failed } = moveLegacyInstalls(db, withMadeApps(db, registry), catalog);
+  const { moved, failed } = moveLegacyInstalls(db, madeAppsRegistry(db), catalog);
   for (const install of moved) log.info(`Moved the app "${install.from}" of space ${install.spaceId} to the built-in app (${install.to}).`);
   for (const install of failed) log.error(`Could not move the app "${install.from}" of space ${install.spaceId}: ${install.reason}`);
 
-  const app = createApp({ config, db, apps, identify: options.identify, wakeJobs: scheduler?.wake, outbound, catalog });
+  const app = createApp({ config, db, identify: options.identify, outbound, catalog });
 
   let markListening: (info: AddressInfo) => void = () => {};
   let markFailed: (error: unknown) => void = () => {};
@@ -133,8 +99,7 @@ export function startServer(options: StartOptions): RunningServer {
   // listener's class can read. So an answer of Node's fetch is no instance of the global Response from
   // here on; apps/fetch.ts knows one by the platform's class instead (PlatformResponse there).
   const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info) => {
-    announce(config, info, scheduler, log);
-    scheduler?.start();
+    announce(config, info, log);
     markListening(info);
   });
   server.on("error", (error) => markFailed(error));
@@ -153,17 +118,16 @@ export function startServer(options: StartOptions): RunningServer {
       };
       // Whatever holds things up, such as a request whose body never ends, the database is closed in the end.
       cancelLimit = clock.after(STOP_LIMIT_MS, finish);
-      const closed = new Promise<void>((resolveClosed) => server.close(() => resolveClosed()));
-      void Promise.all([scheduler?.stop(), closed]).then(finish, finish);
+      server.close(() => finish());
     });
     return stopped;
   };
 
-  return { app, scheduler, server, listening, stop };
+  return { app, server, listening, stop };
 }
 
 /** The lines a server says once it listens: where, and what is switched off or stood in for. */
-function announce(config: Config, info: AddressInfo, scheduler: Scheduler | null, log: ServerLog): void {
+function announce(config: Config, info: AddressInfo, log: ServerLog): void {
   const host = info.family === "IPv6" ? `[${info.address}]` : info.address;
   log.info(`Hearth ${config.version} is listening on http://${host}:${info.port}`);
   if (config.auth.mode === "dev") {
@@ -175,24 +139,13 @@ function announce(config: Config, info: AddressInfo, scheduler: Scheduler | null
   }
   if (config.fetchStandIns !== null) {
     log.warn(
-      `Jobs reach no network (HEARTH_FETCH_STANDINS): every ctx.fetch is answered from the stand-ins in ${config.fetchStandIns}. This is for end-to-end tests only.`,
+      `Apps reach no network (HEARTH_FETCH_STANDINS): every fetch of an app is answered from the stand-ins in ${config.fetchStandIns}. This is for end-to-end tests only.`,
     );
-  }
-  if (scheduler === null) {
-    log.info("Jobs are switched off (HEARTH_JOBS=off): no mini-app's job runs, and none fetches anything.");
   }
 }
 
-/**
- * What the server logs of a rejected promise that nothing handled, on one
- * line. A job's function may leave one behind: it can make promises of its
- * own, such as one made of a `ctx.fetch` that it no longer waits for when its
- * run ends, and a run does not wait for what its function goes on doing.
- */
+/** What the server logs of a rejected promise that nothing handled, on one line. */
 export function unhandledRejectionLine(reason: unknown): string {
-  if (reason instanceof FetchError) {
-    return `A job left behind a request of ctx.fetch that nothing waited for (${reason.code}): ${oneLine(reason.message)}`;
-  }
   const what = reason instanceof Error ? (reason.stack ?? `${reason.name}: ${reason.message}`) : textOf(reason);
   return `A rejected promise was left that nothing handled; the server goes on: ${oneLine(what)}`;
 }
@@ -211,17 +164,17 @@ function oneLine(text: string): string {
 }
 
 /**
- * Runs the server as a process: reads its settings and checks the apps the
- * build holds before it opens the database (either problem ends the process
- * with status 1, which fails the deploy's trial start, and changes
- * nothing), applies the migrations, starts the server, and stops it on
- * SIGTERM or SIGINT, ending with status 0.
+ * Runs the server as a process: reads its settings before it opens the
+ * database (a problem ends the process with status 1, which fails the
+ * deploy's trial start, and changes nothing), applies the migrations,
+ * starts the server, and stops it on SIGTERM or SIGINT, ending with
+ * status 0.
  *
  * A rejected promise that nothing handled is logged on one line instead of
- * ending the process: a job may leave one behind, and the server serves
- * everyone, every other app's jobs included.
+ * ending the process: the server serves everyone, and one request's loose
+ * end should not stop it for all.
  */
-export function serveHearth(apps: readonly BundledApp[]): void {
+export function serveHearth(): void {
   process.on("unhandledRejection", (reason) => console.error(unhandledRejectionLine(reason)));
 
   let config: Config;
@@ -229,17 +182,6 @@ export function serveHearth(apps: readonly BundledApp[]): void {
     config = loadConfig();
   } catch (error) {
     if (error instanceof ConfigError) {
-      console.error(error.message);
-      process.exit(1);
-    }
-    throw error;
-  }
-
-  // Before the database is opened: a build with a bad app changes nothing.
-  try {
-    createRegistry(apps);
-  } catch (error) {
-    if (error instanceof AppRegistryError) {
       console.error(error.message);
       process.exit(1);
     }
@@ -254,7 +196,6 @@ export function serveHearth(apps: readonly BundledApp[]): void {
   const running = startServer({
     config,
     db,
-    apps,
     log: {
       info: (line) => console.log(line),
       warn: (line) => console.warn(line),

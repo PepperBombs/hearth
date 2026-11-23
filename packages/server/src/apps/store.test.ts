@@ -1,23 +1,34 @@
 /**
- * The store: what a mini-app's handler gets as `ctx.db`
- * (docs/mini-app-contract.md, sections A3 and A6). The first block is the
- * contract test that data never crosses from one space or one app to another.
+ * The store: what an app's rows are read and written through
+ * (docs/mini-app-contract.md, sections A3 and A6, and docs/platform.md).
+ * The first block is the contract test that data never crosses from one
+ * space or one app to another.
  */
-import { AppError, z, type Collection } from "@hearth/sdk/server";
 import { beforeEach, describe, expect, it } from "vitest";
-import checklistServer from "../../../fixture-apps/checklist/server";
+import { z } from "zod";
 import {
+  AppError,
   DEFAULT_LIST_LIMIT,
   MAX_LIST_LIMIT,
   readOnlyStore,
   StoredRowError,
   StoreUsageError,
   writableStore,
+  type Collection,
   type StoreScope,
 } from "./store";
 import { family, install } from "./test-world";
 
 type Fields = Record<string, unknown>;
+
+/** A checklist's one collection, with a rule, defaults and a transform, as the store takes any schema of an object. */
+const COLLECTIONS = {
+  items: z.object({
+    name: z.string().trim().min(1).max(80),
+    section: z.string().max(40).default(""),
+    done: z.boolean().default(false),
+  }),
+};
 
 const AT = new Date("2026-03-01T08:00:00.000Z");
 const LATER = new Date("2026-03-02T09:30:00.000Z");
@@ -36,13 +47,12 @@ const scopeOf = (spaceId: string, appId: string, userId: string, now = AT): Stor
   spaceId,
   appId,
   userId,
-  job: null,
   now,
 });
 
-/** The checklist's items in a space, as a mutation of that person would get them. */
+/** The checklist's items in a space, as that person, with edit access, would reach them. */
 function itemsIn(spaceId: string, userId: string, now = AT, appId = "checklist"): Collection<Fields> {
-  const store = writableStore(world.db, scopeOf(spaceId, appId, userId, now), checklistServer.collections);
+  const store = writableStore(world.db, scopeOf(spaceId, appId, userId, now), COLLECTIONS);
   return store.collections.items!;
 }
 
@@ -94,7 +104,7 @@ describe("isolation: a store reaches one app in one space and nothing else", () 
     [
       "another collection of the same app",
       writableStore(world.db, scopeOf(world.samsSpace, "checklist", world.sam.id), {
-        others: checklistServer.collections.items,
+        others: COLLECTIONS.items,
       }).collections.others!,
     ],
   ];
@@ -631,13 +641,13 @@ describe("a stored row that no longer fits its collection", () => {
   });
 });
 
-describe("a query's store", () => {
+describe("a store to read", () => {
   it("has the reading methods and no others", () => {
     const row = sams().insert({ name: "Milk" });
     const store = readOnlyStore(
       world.db,
       scopeOf(world.samsSpace, "checklist", world.sam.id),
-      checklistServer.collections,
+      COLLECTIONS,
     );
     expect(Object.keys(store.collections)).toEqual(["items"]);
     const items = store.collections.items!;
@@ -654,7 +664,7 @@ describe("a query's store", () => {
     const store = readOnlyStore(
       world.db,
       scopeOf(world.samsSpace, "checklist", world.sam.id),
-      checklistServer.collections,
+      COLLECTIONS,
     );
     const writable = sams();
     expect(() => {
@@ -672,7 +682,7 @@ describe("a closed store", () => {
     const store = writableStore(
       world.db,
       scopeOf(world.samsSpace, "checklist", world.sam.id),
-      checklistServer.collections,
+      COLLECTIONS,
     );
     const items = store.collections.items!;
     expect(items.count()).toBe(1);
@@ -690,61 +700,15 @@ describe("a closed store", () => {
     ]) {
       const error = thrownBy(run);
       expect(error).toBeInstanceOf(StoreUsageError);
-      expect((error as Error).message).toContain("after the handler returned");
+      expect((error as Error).message).toContain("the store was used after its work returned");
     }
     expect(everything()).toEqual(before);
   });
 
   it("does not close another request's store", () => {
-    const first = writableStore(world.db, scopeOf(world.samsSpace, "checklist", world.sam.id), checklistServer.collections);
-    const second = readOnlyStore(world.db, scopeOf(world.samsSpace, "checklist", world.sam.id), checklistServer.collections);
+    const first = writableStore(world.db, scopeOf(world.samsSpace, "checklist", world.sam.id), COLLECTIONS);
+    const second = readOnlyStore(world.db, scopeOf(world.samsSpace, "checklist", world.sam.id), COLLECTIONS);
     first.close();
     expect(second.collections.items!.count()).toBe(0);
-  });
-});
-
-describe("a job's store", () => {
-  /** Sam's own checklist as a job's work gets it, written in Kim's name. */
-  const jobScope = (): StoreScope => ({
-    spaceId: world.samsSpace,
-    appId: "checklist",
-    userId: world.kim.id,
-    job: "tidy",
-    now: LATER,
-  });
-  const jobWrites = () => writableStore(world.db, jobScope(), checklistServer.collections);
-  const jobReads = () => readOnlyStore(world.db, jobScope(), checklistServer.collections);
-
-  it("records the person it was given, and the time, on what it writes", () => {
-    const row = jobWrites().collections.items!.insert({ name: "Milk" });
-    expect(row).toMatchObject({ createdBy: world.kim.id, updatedBy: world.kim.id, createdAt: LATER.toISOString() });
-    const updated = jobWrites().collections.items!.update(sams().insert({ name: "Eggs" }).id, { done: true });
-    expect(updated).toMatchObject({ createdBy: world.sam.id, updatedBy: world.kim.id, updatedAt: LATER.toISOString() });
-  });
-
-  it("refuses list({ mine: true }), since a job is no one, in a work that writes and one that reads", () => {
-    sams().insert({ name: "Milk" });
-    for (const items of [jobWrites().collections.items!, jobReads().collections.items!]) {
-      const error = thrownBy(() => items.list({ mine: true }));
-      expect(error).toBeInstanceOf(StoreUsageError);
-      expect((error as Error).message).toBe(
-        'App "checklist", collection "items": list({ mine: true }) finds the rows of the person asking, and the job "tidy" runs for no one in the space. Leave mine out.',
-      );
-      // Everything else reads as for anyone.
-      expect(names(items.list())).toEqual(["Milk"]);
-      expect(names(items.list({ mine: false }))).toEqual(["Milk"]);
-    }
-  });
-
-  it("refuses everything once closed, saying that it was the job's work that kept it", () => {
-    const store = jobWrites();
-    const items = store.collections.items!;
-    store.close();
-    const error = thrownBy(() => items.insert({ name: "Milk" }));
-    expect(error).toBeInstanceOf(StoreUsageError);
-    expect((error as Error).message).toBe(
-      'App "checklist", collection "items": the db that ctx.read or ctx.write gave the job "tidy" was used after its work returned. Work cannot keep it for later, and cannot use it after an await.',
-    );
-    expect(everything()).toEqual([]);
   });
 });
