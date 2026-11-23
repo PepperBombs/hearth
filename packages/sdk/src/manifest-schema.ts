@@ -1,22 +1,20 @@
 /**
  * @hearth/sdk/manifest-schema: the run-time check of a manifest.
  *
- * TypeScript already checks a manifest written with `defineApp`, but only
- * where the author's editor and build run. The framework parses every manifest
- * with this schema as well, so a bad one is caught whoever wrote it and
- * however it was built. It also checks what the types cannot say: that no
- * text is empty, that a default fits its own setting, that both languages
- * of a string use the same {placeholders}, and that the hosts in `network`
- * are plain DNS names of the internet.
+ * The server parses an app's manifest with this schema before it keeps the
+ * app: for an app made in Hearth, the manifest worked out from its own
+ * (`checkMadeManifest` in packages/server/src/made/manifest.ts), so a bad
+ * one is caught whoever wrote it, a person or their model. It checks what
+ * the types cannot say: that no text is empty, that a default fits its own
+ * setting, that both languages of a string use the same {placeholders},
+ * and that the hosts in `network` are plain DNS names of the internet.
  *
  * `settingValueProblems` is the check of one setting's value, which the
- * schema applies to defaults and the server to what people save.
+ * schema applies to defaults, the server to what people save, and the web
+ * app's settings form to what people type.
  *
- * This is for the framework (the server, the `hearth-apps` checks). A
- * mini-app does not import it.
- *
- * Messages in here are English text for whoever builds or deploys an app.
- * They never reach the interface.
+ * Messages in here are English text for whoever writes an app: a person,
+ * or the model that reads them in the chat. They never reach the interface.
  */
 import { z } from "zod";
 import {
@@ -212,14 +210,14 @@ function hostProblem(host: string): string | null {
     return `"${host}" is not a host name. Write a lower-case DNS name such as api.github.com: no scheme, port, path, wildcard or IP address.`;
   }
   if (LOCAL_NAMES.some((name) => host === name || host.endsWith(`.${name}`))) {
-    return `"${host}" is a name of the local network. A job fetches from hosts on the internet only.`;
+    return `"${host}" is a name of the local network. An app fetches from hosts on the internet only.`;
   }
   return null;
 }
 
 /**
- * The hosts the app's jobs may fetch from: 1 to 10 lower-case DNS names,
- * none twice and none of the local network. A job's requests are later held
+ * The hosts the app may fetch from: 1 to 10 lower-case DNS names, none
+ * twice and none of the local network. The app's requests are later held
  * to exactly these names, so there is nothing else to write: no scheme,
  * port, path or wildcard.
  *
@@ -263,7 +261,7 @@ const messagesSchema = z.strictObject({ en: dictionary, zh: dictionary }).superR
 });
 
 /**
- * Accepts exactly what `defineApp` describes and nothing more: an unknown
+ * Accepts exactly what `Manifest` describes and nothing more: an unknown
  * property is an error, so a misspelt one is not silently ignored.
  */
 export const manifestSchema: z.ZodType<Manifest> = z.strictObject({

@@ -1,12 +1,20 @@
+import type { Page } from "@playwright/test";
 import {
   FAMILY_SPACE,
+  PERSONAL_SPACE,
   PHONE,
+  builtInApp,
   expect,
   expectNothingPastTheEdge,
+  sandbox,
   sessionWithApps,
-  sessionWithSampleApps,
+  sessionWithBuiltInApps,
   test,
 } from "./fixtures.ts";
+
+/** An app's card on the dashboard, by the name it shows. */
+const card = (page: Page, name: string) =>
+  page.getByTestId("widget-grid").locator("section", { has: page.getByRole("heading", { level: 2, name, exact: true }) });
 
 test.describe("shell on a desktop", () => {
   test("shows the sidebar, top bar and an empty dashboard", async ({ page, api }) => {
@@ -68,18 +76,79 @@ test.describe("shell on a desktop", () => {
     await expect(family.getByRole("link", { name: "Grocery" })).toHaveAttribute("aria-current", "page");
     // The app's own page is not the Apps page.
     await expect(sidebar.getByRole("link", { name: "Apps" })).not.toHaveAttribute("aria-current", "page");
+    // The app draws its whole page there, in its sandbox.
+    await expect(sandbox(page, "grocery").locator("body")).toHaveAttribute("data-view", "page");
   });
 
-  test("says that a space's apps are widgets only when none of them has a page", async ({ page, api }) => {
-    // The feed in the personal space has only a widget; the family's checklist has a page.
-    api.setSession(sessionWithSampleApps());
+  test("draws each app's page small in its card, in its sandbox, inside the shell's frame", async ({ page, api }) => {
+    api.setSession(sessionWithBuiltInApps());
     await page.goto("/");
-    const sidebar = page.getByRole("navigation", { name: "Main" });
-    const personal = sidebar.getByRole("region", { name: "Personal" });
-    await expect(personal.getByText("Widgets only, on the dashboard")).toBeVisible();
-    await expect(personal.getByText("No apps yet")).toHaveCount(0);
-    await expect(sidebar.getByRole("region", { name: "Family" }).getByRole("link")).toHaveText(["Checklist"]);
-    await expect(page.getByTestId("widget-grid").getByRole("heading", { level: 2 })).toHaveText(["Checklist", "Feed"]);
+    const checklist = card(page, "Checklist");
+    // The frame is the shell's: the icon and name, the space's tag, the settings and the link to the page.
+    await expect(checklist.getByText("Family", { exact: true })).toBeVisible();
+    await expect(checklist.getByRole("button", { name: "Settings of Checklist in Family" })).toBeVisible();
+    await expect(checklist.getByRole("link", { name: "Open Checklist in Family" })).toHaveAttribute("href", `/apps/${FAMILY_SPACE}/m-checklist`);
+    // Inside it, the app's own page, asked for as a card, in the person's language and theme.
+    const inside = sandbox(page, "m-checklist");
+    await expect(inside.getByRole("heading", { name: "Checklist" })).toBeVisible();
+    await expect(inside.locator("body")).toHaveAttribute("data-view", "card");
+    await expect(inside.locator("body")).toHaveAttribute("data-version", "1");
+    await expect(inside.locator("html")).toHaveAttribute("lang", "en");
+    await expect(inside.locator("html")).toHaveAttribute("data-theme", "light");
+    // The frame is sandboxed: the page in it has an origin of its own and reaches nothing of Hearth's.
+    const frame = checklist.locator("iframe");
+    await expect(frame).toHaveAttribute("sandbox", /^(?!.*allow-same-origin).*allow-scripts/);
+    await expect(frame).toHaveAttribute("src", new RegExp(`^/api/spaces/${FAMILY_SPACE}/apps/m-checklist/frame\\?`));
+    await expect(card(page, "Feed").getByRole("link", { name: "Open Feed", exact: true })).toHaveAttribute("href", `/apps/${PERSONAL_SPACE}/m-feed`);
+
+    // The link opens the app's whole page, in its sandbox too. The session was loaded once:
+    // moving between the dashboard and a page reloads nothing.
+    await checklist.getByRole("link", { name: "Open Checklist in Family" }).click();
+    await expect(page).toHaveURL(new RegExp(`/apps/${FAMILY_SPACE}/m-checklist$`));
+    await expect(page.getByRole("heading", { level: 1, name: "Checklist" })).toBeVisible();
+    await expect(sandbox(page, "m-checklist").locator("body")).toHaveAttribute("data-view", "page");
+    expect(api.sessionRequests).toBe(1);
+  });
+
+  test("a card takes the room its app asked for: two rows, or two columns", async ({ page, api }) => {
+    api.setSession(sessionWithBuiltInApps());
+    await page.goto("/");
+    const span = (name: string) =>
+      card(page, name).evaluate((el) => {
+        const style = getComputedStyle(el);
+        // A card without a span of its own takes one cell.
+        return [style.gridColumnEnd, style.gridRowEnd].map((end) => (end === "auto" ? "span 1" : end));
+      });
+    await expect(sandbox(page, "m-feed").getByRole("heading", { name: "Feed" })).toBeVisible();
+    expect(await span("Checklist")).toEqual(["span 1", "span 2"]);
+    expect(await span("Feed")).toEqual(["span 2", "span 1"]);
+    const tall = (await card(page, "Checklist").boundingBox())!;
+    const wide = (await card(page, "Feed").boundingBox())!;
+    // Both start on the first row, which is as tall as the taller of what they hold; the tall card
+    // goes on through the second row, which is at least 200px.
+    expect(Math.abs(tall.y - wide.y)).toBeLessThan(1);
+    expect(tall.height).toBeGreaterThan(wide.height + 200);
+    expect(wide.width).toBeGreaterThan(tall.width * 1.9);
+
+    // In a single column every card is one cell.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect.poll(() => span("Checklist")).toEqual(["span 1", "span 1"]);
+    await expect.poll(() => span("Feed")).toEqual(["span 1", "span 1"]);
+  });
+
+  test("a built-in app added to two spaces gets cards and links a screen reader can tell apart", async ({ page, api }) => {
+    const session = sessionWithBuiltInApps();
+    // The checklist in the personal space too: an app of its own, made from the same built-in app.
+    api.setSession({ ...session, apps: [...session.apps, builtInApp("checklist", PERSONAL_SPACE, { id: "m-checklist-2" })] });
+    await page.goto("/");
+    const grid = page.getByTestId("widget-grid");
+    await expect(grid.getByRole("region", { name: "Checklist", exact: true })).toBeVisible();
+    await expect(grid.getByRole("region", { name: "Checklist in Family", exact: true })).toBeVisible();
+    await expect(grid.getByRole("link", { name: "Open Checklist", exact: true })).toHaveAttribute("href", `/apps/${PERSONAL_SPACE}/m-checklist-2`);
+    await expect(grid.getByRole("link", { name: "Open Checklist in Family", exact: true })).toHaveAttribute(
+      "href",
+      `/apps/${FAMILY_SPACE}/m-checklist`,
+    );
   });
 
   test("lays widgets out in four columns, then two, then one", async ({ page, api }) => {
@@ -319,16 +388,23 @@ test.describe("shell on a phone", () => {
         await expectNothingPastTheEdge(page);
       }
 
-      // The same with the apps this build holds, whose own widgets and page are drawn.
-      api.setSession(sessionWithSampleApps({ locale, name: "A person with quite a long name indeed" }));
-      api.items[0]!.name = "A thing to do with a name long enough to need more than one line on a phone, in any language";
-      for (const path of ["/", `/apps/${FAMILY_SPACE}/checklist`]) {
+      // The same with built-in apps, once their pages are drawn in their sandboxes: tall and wide cards in one column.
+      api.setSession(sessionWithBuiltInApps({ locale, name: "A person with quite a long name indeed" }));
+      for (const path of ["/", `/apps/${FAMILY_SPACE}/m-checklist`]) {
         await page.goto(path);
         await page.getByRole("heading", { level: 1 }).waitFor();
-        await expect(page.getByRole("main").getByRole("checkbox").first()).toBeVisible();
+        await expect(sandbox(page, "m-checklist").getByRole("heading", { name: locale === "zh" ? "清单" : "Checklist" })).toBeVisible();
         await expectNothingPastTheEdge(page);
       }
     }
+  });
+
+  test("an app's page in a group names the group in the top bar", async ({ page, api }) => {
+    api.setSession(sessionWithBuiltInApps());
+    await page.goto(`/apps/${FAMILY_SPACE}/m-checklist`);
+    const bar = page.locator("header");
+    await expect(bar.getByRole("heading", { level: 1, name: "Checklist" })).toBeVisible();
+    await expect(bar.getByText("Family", { exact: true })).toBeVisible();
   });
 
   test("the edge check notices content that is too wide", async ({ page, api }) => {

@@ -1,29 +1,10 @@
 /** Helpers for tests. Not part of the running server. */
-import checklist from "../../fixture-apps/checklist/manifest";
-import checklistServer from "../../fixture-apps/checklist/server";
-import feed from "../../fixture-apps/feed/manifest";
-import headlines from "../../fixture-apps/headlines/manifest";
-import headlinesServer from "../../fixture-apps/headlines/server";
 import { createApp, type AppOptions } from "./app";
-import type { BundledApp } from "./apps/registry";
 import type { Identify } from "./auth";
 import type { Config } from "./config";
 import { migrate, openDatabase, type Db } from "./db/database";
 
 export const OWNER_EMAIL = "owner@example.com";
-
-/**
- * The framework's own sample apps (packages/fixture-apps), as a build hands
- * them over: what `hearth-apps sync` writes for that folder. `checklist`
- * keeps rows and has a page of its own; `feed` has no server file and no
- * page; `headlines` has a job, which fetches from the host its manifest
- * names, and no page.
- */
-export const FIXTURE_APPS: readonly BundledApp[] = [
-  { id: "checklist", manifest: checklist, hasPage: true, server: checklistServer },
-  { id: "feed", manifest: feed, hasPage: false },
-  { id: "headlines", manifest: headlines, hasPage: false, server: headlinesServer },
-];
 
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -40,8 +21,6 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     ownerEmail: OWNER_EMAIL,
     groupPolicy: "owner",
     version: "test",
-    // Tests run no job unless one asks; createApp starts no scheduler anyway.
-    jobs: "off",
     fetchStandIns: null,
     secret: null,
     modelStandIn: null,
@@ -64,13 +43,9 @@ export const identifyFromTestHeader: Identify = async (request) => {
 export type TestAppOptions = {
   config?: Config;
   db?: Db;
-  /** The mini-apps the server holds. Defaults to none; FIXTURE_APPS are the sample ones. */
-  apps?: readonly BundledApp[];
   /** "from-config" uses the real login method the configuration names. */
   identify?: Identify | "from-config";
   logError?: AppOptions["logError"];
-  /** What the routes call to wake the scheduler, which no test server has. */
-  wakeJobs?: AppOptions["wakeJobs"];
   /** What answers in place of a person's model (src/model/providers.ts). */
   modelFetch?: AppOptions["modelFetch"];
   /** The way out for a made app's fetch. Defaults to the configuration's, which no test may reach. */
@@ -85,11 +60,9 @@ export function testApp(options: TestAppOptions = {}) {
   const app = createApp({
     config: options.config ?? testConfig(),
     db,
-    apps: options.apps ?? [],
     identify:
       options.identify === "from-config" ? undefined : (options.identify ?? identifyFromTestHeader),
     logError: options.logError ?? ((error) => errors.push(error)),
-    wakeJobs: options.wakeJobs,
     ...(options.modelFetch ? { modelFetch: options.modelFetch } : {}),
     ...(options.outbound ? { outbound: options.outbound } : {}),
     ...(options.catalog ? { catalog: options.catalog } : {}),

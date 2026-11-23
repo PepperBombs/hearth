@@ -1,40 +1,24 @@
 /**
- * @hearth/sdk: what a mini-app's manifest is written with.
+ * @hearth/sdk: the rules an app's manifest keeps to.
  *
- * A mini-app is one folder. Its `manifest.ts` default-exports
- * `defineApp({ ... })`, which says what the app is called, how it looks on the
- * dashboard, which settings it has and which interface strings it uses, each
- * in English and Simplified Chinese.
+ * A manifest says what an app is called, how it looks on the dashboard,
+ * which hosts it may fetch from and which settings it has, each text in
+ * English and Simplified Chinese. Every app the server holds is described by
+ * one: an app made in Hearth keeps a manifest of its own shape in the
+ * database (packages/server/src/made/manifest.ts), from which the server
+ * works out this one (`asSdkManifest`) and checks it, so that its settings
+ * and hosts follow exactly these rules.
  *
- * This file holds types, a few lists of allowed names and one identity
- * function. It imports nothing, so a manifest costs a web bundle next to
- * nothing. The run-time check of a manifest is `manifestSchema` in
- * `@hearth/sdk/manifest-schema`, which the framework uses; mini-apps do not
- * import it.
- *
- * The design is docs/mini-app-contract.md, sections A1 and A2, and for the
- * hosts in `network` and the settings a job sees (`SpaceSettingsOf`)
- * section C.
+ * This file holds types and a few lists of allowed names. It imports
+ * nothing, so that the web app pays next to nothing for it. The run-time
+ * check of a manifest, and of one setting's value, is
+ * `@hearth/sdk/manifest-schema`.
  */
-
-/**
- * The SDK version a mini-apps repository declares it was written for (the
- * "handshake"). It is the `version` in this package's package.json; a unit
- * test fails when the two differ. While below 1.0, any breaking change to SDK
- * types, component props, token class names or the manifest schema raises the
- * minor version, and an addition (such as `network` in 0.1.1) the patch
- * version: a repository whose apps use the addition declares at least that
- * version, which an older SDK refuses.
- */
-export const SDK_VERSION: string = "0.1.1";
 
 /** Text in every supported language. Content typed by users is never one of these. */
 export type Localized = { en: string; zh: string };
 
-/** A language the interface is written in. */
-export type Locale = keyof Localized;
-
-/** What an app's ID, and therefore its folder name, must look like. */
+/** What an app's ID must look like. */
 export const APP_ID_PATTERN = /^[a-z][a-z0-9-]{1,30}$/;
 
 /**
@@ -114,133 +98,34 @@ export type Setting =
   | Field<readonly string[], { type: "multi-select"; options: Record<string, Localized> }>
   | Field<readonly string[], { type: "list"; maxItems?: number; maxLength?: number }>;
 
-/**
- * What an app says about itself.
- *
- * `S` is the settings and `M` the English interface strings; `defineApp`
- * infers both, so the plain `Manifest` (any settings, any strings) is what
- * framework code handles.
- */
-export type Manifest<S = Record<string, Setting>, M = Record<string, string>> = {
-  /** Equal to the folder name; matches APP_ID_PATTERN. */
+/** What an app says about itself. */
+export type Manifest = {
+  /** Matches APP_ID_PATTERN. */
   id: string;
   name: Localized;
   description: Localized;
   icon: AppIcon;
   color: AppColor;
-  /** Where the app may be added. Left out, it may be added to both kinds of space. */
+  /**
+   * The kinds of space the app is for: both when left out. An app made in
+   * Hearth leaves it out, since it lives in the one space it was made in.
+   */
   spaces?: readonly SpaceKind[];
   widget: { size: WidgetSize };
   /**
-   * The hosts the app's jobs may fetch from, as lower-case DNS names
-   * ("api.github.com"): one to ten, each written once, exactly as the
+   * The hosts the app may fetch from, through the server, as lower-case DNS
+   * names ("api.github.com"): one to ten, each written once, exactly as the
    * requests name it. Whoever adds the app is shown them. Left out, the app
    * fetches nothing. A name of the local network (`localhost`, or one ending
-   * in `.localhost`, `.local`, `.internal` or `.home.arpa`) is refused, and
-   * so are hosts in an app whose server file defines no job (`app.job` in
-   * `@hearth/sdk/server`), since only a job fetches.
+   * in `.localhost`, `.local`, `.internal` or `.home.arpa`) is refused.
    */
   network?: readonly string[];
-  /** Keyed by the name code reads the value under. */
-  settings?: S;
+  /** Keyed by the name the value is read under. */
+  settings?: Record<string, Setting>;
   /**
-   * The app's interface strings, with {placeholders}. English defines the
-   * keys; a key missing from `zh` is a type error.
+   * Interface strings with {placeholders}, by key: the same keys in both
+   * languages, and the same placeholders in both versions of a string. An
+   * app made in Hearth leaves them out: its page holds its own texts.
    */
-  messages?: { en: M; zh: { readonly [K in keyof M]: string } };
+  messages?: { en: Record<string, string>; zh: Record<string, string> };
 };
-
-/**
- * Declares a mini-app. It returns the manifest unchanged; it exists for the
- * types, which keep every setting, option and string exactly as written.
- *
- * ```ts
- * export default defineApp({
- *   id: "grocery",
- *   name: { en: "Grocery list", zh: "购物清单" },
- *   description: { en: "A shared shopping list.", zh: "共享购物清单。" },
- *   icon: "shopping-bag",
- *   color: "green",
- *   widget: { size: "tall" },
- * });
- * ```
- */
-export function defineApp<
-  const S extends Record<string, Setting> = Record<never, never>,
-  const M extends Record<string, string> = Record<never, never>,
->(manifest: Manifest<S, M>): Manifest<S, M> {
-  return manifest;
-}
-
-/**
- * The manifest behind `A`, which is a manifest or what an app's `server.ts`
- * exports (`defineServer(manifest, ...).routes(...)` in `@hearth/sdk/server`,
- * which carries its manifest). `SettingsOf` and the message types below
- * therefore take `typeof manifest` and `typeof server` alike.
- */
-type ManifestOf<A> = A extends { readonly manifest: infer M; readonly routes: unknown } ? M : A;
-
-type SettingValue<F> = F extends { type: "text" }
-  ? string
-  : F extends { type: "number" }
-    ? number
-    : F extends { type: "switch" }
-      ? boolean
-      : F extends { type: "select"; options: infer O }
-        ? Extract<keyof O, string>
-        : F extends { type: "multi-select"; options: infer O }
-          ? Extract<keyof O, string>[]
-          : F extends { type: "list" }
-            ? string[]
-            : never;
-
-/**
- * The settings values code receives, by name. A select gives the union of
- * its option keys and a multi-select an array of them.
- */
-export type SettingsOf<A> =
-  ManifestOf<A> extends { settings?: infer S } ? { -readonly [K in keyof S]: SettingValue<S[K]> } : never;
-
-/** The scope a setting declares: both, when it is not known exactly. */
-type ScopeOf<F> = F extends { scope: infer Scope } ? Scope : never;
-
-/**
- * The settings a job receives (`@hearth/sdk/server`): those of scope
- * "space", typed as in `SettingsOf`. A job runs for the app in a space and
- * for no one in it, so no person's own settings are among them. When the
- * manifest is not known exactly, any setting may be one of the space's.
- */
-export type SpaceSettingsOf<A> =
-  ManifestOf<A> extends { settings?: infer S }
-    ? { -readonly [K in keyof S as "space" extends ScopeOf<S[K]> ? K : never]: SettingValue<S[K]> }
-    : never;
-
-/** The English strings of `A`, which define its message keys. */
-type MessagesOf<A> = ManifestOf<A> extends { messages?: { en: infer M } } ? M : never;
-
-/** The keys of an app's interface strings. */
-export type MessageKey<A> = Extract<keyof MessagesOf<A>, string>;
-
-/** The names of the {placeholders} in a string, as a union. */
-type PlaceholderNames<Text extends string> = Text extends `${string}{${infer Name}}${infer Rest}`
-  ? Name | PlaceholderNames<Rest>
-  : never;
-
-/**
- * What `t` takes after the key. A string with placeholders requires a values
- * object naming each of them; a string without must not get one.
- *
- * This reads the English text as a constant. Strings kept in a sibling file
- * need `as const` there; without it only the keys are known, and the values
- * object is optional and unchecked.
- */
-export type PlaceholderArgs<A, K extends MessageKey<A>> = MessagesOf<A>[K] extends infer Text extends string
-  ? string extends Text
-    ? [values?: Record<string, string | number>]
-    : [PlaceholderNames<Text>] extends [never]
-      ? []
-      : [values: Record<PlaceholderNames<Text>, string | number>]
-  : never;
-
-/** The `t` function for one app: looks a string up in the reader's language and fills its placeholders. */
-export type Translate<A> = <K extends MessageKey<A>>(key: K, ...values: PlaceholderArgs<A, K>) => string;

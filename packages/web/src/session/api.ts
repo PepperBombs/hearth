@@ -1,8 +1,8 @@
 /**
  * How the web app talks to the server, and the two calls the shell makes for
  * itself. Shapes come from @hearth/shared, which is the contract with the
- * server; responses are checked against it before use. The calls made for a
- * mini-app are in ../apps/api.ts and go through `request` too.
+ * server; responses are checked against it before use. The calls made about
+ * apps are in ../apps/api.ts and ../made/api.ts, and go through `request` too.
  */
 import { apiErrorSchema, sessionSchema, type ApiErrorCode, type PreferencesPatch, type Session } from "@hearth/shared";
 

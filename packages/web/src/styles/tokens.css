@@ -3,8 +3,9 @@
  * Values are ported from the approved mockup, which is not kept in this
  * repository.
  *
- * These custom properties are the theming surface for the shell and, later,
- * for mini-apps. Components never use raw colours, only these.
+ * These custom properties are the theming surface of the shell and of the
+ * SDK's UI kit, which it is drawn with. Components never use raw colours,
+ * only these.
  */
 :root {
   color-scheme: light;

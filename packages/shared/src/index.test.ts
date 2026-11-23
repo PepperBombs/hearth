@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   API_ERROR_CODES,
   addAppRequestSchema,
@@ -7,17 +7,12 @@ import {
   apiErrorSchema,
   appAccessRequestSchema,
   assistantLevelRequestSchema,
-  appCallRequestSchema,
-  appCallResponseSchema,
   appPrefsPatchSchema,
   appSettingsPatchSchema,
   appSettingsSchema,
   appSummarySchema,
   createSpaceRequestSchema,
   deleteAppDataRequestSchema,
-  JOB_STATES,
-  jobStateOf,
-  jobStatusSchema,
   memberPatchSchema,
   moveAppRequestSchema,
   sessionSchema,
@@ -25,6 +20,7 @@ import {
   spacePatchSchema,
   spaceSchema,
   withdrawInvitationRequestSchema,
+  type Json,
   type Session,
 } from "./index";
 
@@ -153,7 +149,6 @@ describe("request bodies", () => {
       [assistantLevelRequestSchema, { level: "view" }],
       [appPrefsPatchSchema, { pinned: true }],
       [appSettingsPatchSchema, { user: { hideDone: true } }],
-      [appCallRequestSchema, { input: { id: "row-1" } }],
     ];
     for (const [schema, body] of cases) {
       expect(accepts(schema, body), JSON.stringify(body)).toBe(true);
@@ -244,15 +239,6 @@ describe("request bodies", () => {
     expect(accepts(appSettingsPatchSchema, { user: { filter: { nested: true } } })).toBe(false);
     expect(accepts(appSettingsPatchSchema, { user: { filter: [1, 2] } })).toBe(false);
   });
-
-  it("carry any JSON to and from an app's routes, or nothing", () => {
-    expect(appCallRequestSchema.parse({})).toEqual({});
-    expect(appCallResponseSchema.parse({})).toEqual({});
-    const rows = [{ id: "row-1", name: "Sample item", done: false, tags: ["a"], note: null }];
-    expect(appCallResponseSchema.parse({ output: rows })).toEqual({ output: rows });
-    expect(appCallRequestSchema.parse({ input: 3 })).toEqual({ input: 3 });
-    expect(accepts(appCallRequestSchema, { input: new Date(0) })).toBe(false);
-  });
 });
 
 describe("what the owners of a space see", () => {
@@ -281,77 +267,15 @@ describe("what the owners of a space see", () => {
   });
 });
 
-describe("a job's status", () => {
-  const status = {
-    lastStartedAt: "2026-03-01T13:05:00.000Z",
-    lastSucceededAt: "2026-03-01T13:05:21.000Z",
-    lastFailedAt: null,
-    lastError: null,
-    nextRunAt: "2026-03-01T14:05:00.000Z",
-    state: "idle",
-  };
-
-  it("says when the runs started, went well and went wrong, why, when the next is, and where the job stands", () => {
-    expect(jobStatusSchema.parse(status)).toEqual(status);
-    const failed = { ...status, lastFailedAt: "2026-03-01T14:05:09.000Z", lastError: "The feed answered 500." };
-    expect(jobStatusSchema.parse(failed)).toEqual(failed);
-  });
-
-  it("answers nulls for a job that has not run, and always when it runs next", () => {
-    const fresh = { lastStartedAt: null, lastSucceededAt: null, lastFailedAt: null, lastError: null, nextRunAt: status.nextRunAt, state: "idle" };
-    expect(accepts(jobStatusSchema, fresh)).toBe(true);
-    expect(accepts(jobStatusSchema, { ...fresh, nextRunAt: null })).toBe(false);
-    expect(accepts(jobStatusSchema, without(status, "lastError"))).toBe(false);
-  });
-
-  it("knows three states", () => {
-    expect(JOB_STATES).toEqual(["idle", "requested", "running"]);
-    for (const state of JOB_STATES) expect(accepts(jobStatusSchema, { ...status, state })).toBe(true);
-    expect(accepts(jobStatusSchema, { ...status, state: "failed" })).toBe(false);
-  });
-
-  it("drops what it does not name, as every answer does, so that an older web app survives a newer server", () => {
-    expect(jobStatusSchema.parse({ ...status, failures: 2 })).toEqual(status);
-  });
-});
-
-describe("what a job's status means to the people who see the app", () => {
-  const status = {
-    lastStartedAt: null,
-    lastSucceededAt: null,
-    lastFailedAt: null,
-    lastError: null,
-    nextRunAt: "2026-03-01T13:05:00.000Z",
-    state: "idle",
-  } as const;
-  const succeeded = "2026-03-01T13:05:21.000Z";
-  const failed = "2026-03-01T14:05:09.000Z";
-
-  it("is nothing before the first run", () => {
-    expect(jobStateOf(status)).toEqual({ succeededAt: null, failedAt: null, running: false });
-  });
-
-  it("gives when the data is from, and a failure only when the last run to end went wrong", () => {
-    expect(jobStateOf({ ...status, lastSucceededAt: succeeded })).toEqual({ succeededAt: succeeded, failedAt: null, running: false });
-    // Failed after the run that went well: the data is still from then.
-    expect(jobStateOf({ ...status, lastSucceededAt: succeeded, lastFailedAt: failed, lastError: "The feed answered 500." })).toEqual({
-      succeededAt: succeeded,
-      failedAt: failed,
-      running: false,
-    });
-    // A run went well after the one that failed: that failure is over.
-    expect(jobStateOf({ ...status, lastSucceededAt: failed, lastFailedAt: succeeded })).toEqual({
-      succeededAt: failed,
-      failedAt: null,
-      running: false,
-    });
-    // Failed before any run went well.
-    expect(jobStateOf({ ...status, lastFailedAt: failed })).toEqual({ succeededAt: null, failedAt: failed, running: false });
-  });
-
-  it("is running while a run holds the job and while one asked for has not started", () => {
-    expect(jobStateOf({ ...status, state: "running" }).running).toBe(true);
-    expect(jobStateOf({ ...status, state: "requested" }).running).toBe(true);
-    expect(jobStateOf({ ...status, state: "idle" }).running).toBe(false);
+describe("Json", () => {
+  it("holds what JSON holds, and nothing it would lose on the way", () => {
+    const row = { id: "row-1", name: "Sample item", done: false, tags: ["a"], note: null, count: 2 };
+    expectTypeOf(row).toExtend<Json>();
+    expectTypeOf<readonly string[]>().toExtend<Json>();
+    expectTypeOf<{ left: string | undefined }>().toExtend<Json>();
+    expectTypeOf<Date>().not.toExtend<Json>();
+    expectTypeOf<undefined>().not.toExtend<Json>();
+    expectTypeOf<() => void>().not.toExtend<Json>();
+    expect(JSON.parse(JSON.stringify(row))).toEqual(row);
   });
 });

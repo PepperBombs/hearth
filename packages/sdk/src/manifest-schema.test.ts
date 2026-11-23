@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { z } from "zod";
-import { APP_COLORS, APP_ICONS, defineApp, type Manifest, type Setting } from "./index";
+import { APP_COLORS, APP_ICONS, type Manifest, type Setting } from "./index";
 import { manifestSchema, settingValueProblems } from "./manifest-schema";
 
 /** A complete, valid manifest with one setting of every type. Each test changes one thing in a copy. */
@@ -80,8 +80,8 @@ describe("manifestSchema", () => {
     expect(problems({ id, name, description, icon, color, widget })).toEqual([]);
   });
 
-  it("accepts what defineApp returns", () => {
-    const app = defineApp({
+  it("accepts a manifest written to the Manifest type", () => {
+    const app: Manifest = {
       id: "feed",
       name: { en: "Feed", zh: "动态" },
       description: { en: "What is new.", zh: "最新内容。" },
@@ -98,7 +98,7 @@ describe("manifestSchema", () => {
           options: { "c++": { en: "C++", zh: "C++" }, go: { en: "Go", zh: "Go" } },
         },
       },
-    });
+    };
     expect(problems(app)).toEqual([]);
   });
 
@@ -276,9 +276,9 @@ describe("manifestSchema", () => {
         expect(withHosts([host]), host).toEqual(["network.0"]);
       }
       expect(sayOfHosts(["printer.local"])).toEqual([
-        '"printer.local" is a name of the local network. A job fetches from hosts on the internet only.',
+        '"printer.local" is a name of the local network. An app fetches from hosts on the internet only.',
       ]);
-      expect(sayOfHosts(["localhost"])).toEqual(['"localhost" is a name of the local network. A job fetches from hosts on the internet only.']);
+      expect(sayOfHosts(["localhost"])).toEqual(['"localhost" is a name of the local network. An app fetches from hosts on the internet only.']);
     });
 
     it("refuses a name twice, naming the second", () => {

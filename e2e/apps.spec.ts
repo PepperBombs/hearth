@@ -1,20 +1,22 @@
 /**
  * The Apps page and the settings dialog, against the stand-in server
- * (e2e/fixtures.ts): adding one of the apps this build holds to a space,
- * the person's own switch and pin, removing, moving an app to another
- * space, and the settings form drawn from an app's manifest, in both
- * languages and on a phone. The same is done against the real server in
- * e2e/real-server.spec.ts.
+ * (e2e/fixtures.ts): adding one of the built-in apps to a space or bringing
+ * back one it removed, the person's own switch and pin, removing, moving an
+ * app to another space, and the settings form drawn from what an app
+ * declares, in both languages and on a phone. The same is done against the
+ * real server, with the built-in apps Hearth ships, in e2e/real-server.spec.ts.
  */
 import {
   FAMILY_SPACE,
   PERSONAL_SPACE,
   PHONE,
+  builtInApp,
   emptySession,
   expect,
   expectNothingPastTheEdge,
   ownAFamily,
-  sampleApp,
+  sandbox,
+  sessionWithBuiltInApps,
   test,
 } from "./fixtures.ts";
 import type { Page } from "@playwright/test";
@@ -22,7 +24,7 @@ import type { Page } from "@playwright/test";
 const spaceCard = (page: Page, name: string) => page.getByRole("main").getByRole("region", { name });
 
 test.describe("the Apps page", () => {
-  test("adds an app to a group, asking who else may use it", async ({ page, api }) => {
+  test("adds a built-in app to a group, asking who else may use it", async ({ page, api }) => {
     const session = emptySession();
     api.setSession({
       ...session,
@@ -47,31 +49,48 @@ test.describe("the Apps page", () => {
     await spaceCard(page, "Family").getByRole("button", { name: "Add an app" }).click();
     const dialog = page.getByRole("dialog", { name: "Add an app to Family" });
     await expect(dialog.getByRole("radio", { name: /Checklist/ })).toBeChecked();
+    // An app that fetches from a host says which, under its description.
+    const feed = dialog.locator("label", { has: page.getByRole("radio", { name: /Feed/ }) });
+    await expect(feed.getByText("Fetches data from feeds.example.com on its own.")).toBeVisible();
     await expect(dialog.getByRole("radio", { name: "Only me for now" })).toBeChecked();
     await dialog.getByRole("radio", { name: "Everyone can view" }).check();
     await dialog.getByRole("button", { name: "Add", exact: true }).click();
     await expect(dialog).toBeHidden();
 
-    expect(api.appChanges).toEqual([`PUT /api/spaces/${FAMILY_SPACE}/apps/checklist {"memberAccess":"view"}`]);
+    // The built-in app is named, and the family gets an app of its own made from it.
+    expect(api.appChanges).toEqual([`POST /api/spaces/${FAMILY_SPACE}/catalog/checklist {"memberAccess":"view"}`]);
     await expect(spaceCard(page, "Family").getByRole("switch", { name: "Show Checklist in Family" })).toBeChecked();
-    // Now on the dashboard too, with its own widget: no rebuild, no reload.
+    // Now on the dashboard too, its page drawn in its card, in the sandbox: no rebuild, no reload.
     await page.getByRole("link", { name: "Dashboard" }).click();
-    await expect(page.getByTestId("widget-grid").getByRole("checkbox", { name: "Water the plants" })).toBeVisible();
+    await expect(sandbox(page, "m-checklist").getByRole("heading", { name: "Checklist" })).toBeVisible();
+    await expect(sandbox(page, "m-checklist").locator("body")).toHaveAttribute("data-view", "card");
   });
 
   test("says, before an app the family removed is added again, that its data comes back with it", async ({ page, api }) => {
     ownAFamily(api);
-    api.groups[FAMILY_SPACE]!.apps.push({ id: "feed", hasCode: true, removedAt: "2026-11-01T08:00:00.000Z", rowCount: 4, memberAccess: "view", members: {}, assistant: true });
+    api.groups[FAMILY_SPACE]!.apps.push({
+      id: "m-feed",
+      template: "feed",
+      hasCode: true,
+      removedAt: "2026-11-01T08:00:00.000Z",
+      rowCount: 4,
+      memberAccess: "view",
+      members: {},
+      assistant: true,
+    });
     await page.goto("/apps");
 
+    // The family has the checklist, so the feed is the one offered.
     await spaceCard(page, "Family").getByRole("button", { name: "Add an app" }).click();
     const dialog = page.getByRole("dialog", { name: "Add an app to Family" });
     await expect(dialog.getByRole("radio", { name: /Feed/ })).toBeChecked();
+    await expect(dialog.getByRole("radio", { name: /Checklist/ })).toHaveCount(0);
     await expect(dialog.getByText("Removed earlier: adding it again brings back its data, 4 saved entries.")).toBeVisible();
     await expect(dialog.getByRole("radio", { name: "Only me for now" })).toBeChecked();
     await dialog.getByRole("button", { name: "Bring back" }).click();
     await expect(dialog).toBeHidden();
-    expect(api.appChanges).toEqual([`PUT /api/spaces/${FAMILY_SPACE}/apps/feed {"memberAccess":"none"}`]);
+    expect(api.appChanges).toEqual([`POST /api/spaces/${FAMILY_SPACE}/catalog/feed {"memberAccess":"none"}`]);
+    await expect(spaceCard(page, "Family").getByRole("switch", { name: "Show Feed in Family" })).toBeChecked();
 
     // Back for the owners alone: the family's table in Settings says so.
     await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Settings" }).click();
@@ -80,7 +99,7 @@ test.describe("the Apps page", () => {
   });
 
   test("pins an app and switches one off, for this person alone", async ({ page, api }) => {
-    api.setSession({ ...emptySession(), apps: [sampleApp("feed", PERSONAL_SPACE), sampleApp("checklist", PERSONAL_SPACE)] });
+    api.setSession({ ...emptySession(), apps: [builtInApp("feed", PERSONAL_SPACE), builtInApp("checklist", PERSONAL_SPACE)] });
     await page.goto("/");
     const headings = page.getByTestId("widget-grid").getByRole("heading", { level: 2 });
     await expect(headings).toHaveText(["Feed", "Checklist"]);
@@ -95,16 +114,19 @@ test.describe("the Apps page", () => {
     await expect(personal.getByRole("switch", { name: "Show Feed" })).not.toBeChecked();
     await expect(personal.getByText("Switched off.", { exact: false })).toBeVisible();
     expect(api.appChanges).toEqual([
-      `PATCH /api/spaces/${PERSONAL_SPACE}/apps/checklist/me {"pinned":true}`,
-      `PATCH /api/spaces/${PERSONAL_SPACE}/apps/feed/me {"enabled":false}`,
+      `PATCH /api/spaces/${PERSONAL_SPACE}/apps/m-checklist/me {"pinned":true}`,
+      `PATCH /api/spaces/${PERSONAL_SPACE}/apps/m-feed/me {"enabled":false}`,
     ]);
 
+    // The dashboard draws the pinned app first, and no page at all of the one switched off.
     await page.getByRole("link", { name: "Dashboard" }).click();
     await expect(headings).toHaveText(["Checklist"]);
+    await expect(sandbox(page, "m-checklist").getByRole("heading", { name: "Checklist" })).toBeVisible();
+    await expect(page.locator('iframe[data-made-app="m-feed"]')).toHaveCount(0);
   });
 
   test("removes an app after asking, for an owner", async ({ page, api }) => {
-    api.setSession({ ...emptySession(), apps: [sampleApp("feed", PERSONAL_SPACE)] });
+    api.setSession({ ...emptySession(), apps: [builtInApp("feed", PERSONAL_SPACE)] });
     await page.goto("/apps");
     await spaceCard(page, "Personal").getByRole("button", { name: "Remove Feed" }).click();
     const dialog = page.getByRole("dialog", { name: "Remove Feed?" });
@@ -112,7 +134,7 @@ test.describe("the Apps page", () => {
     await dialog.getByRole("button", { name: "Remove" }).click();
     await expect(dialog).toBeHidden();
     await expect(spaceCard(page, "Personal").getByText("No personal apps yet.")).toBeVisible();
-    expect(api.appChanges).toEqual([`DELETE /api/spaces/${PERSONAL_SPACE}/apps/feed null`]);
+    expect(api.appChanges).toEqual([`DELETE /api/spaces/${PERSONAL_SPACE}/apps/m-feed null`]);
   });
 
   test("moves an app out of a group into the owner's own space and back, asking who may use it there", async ({ page, api }) => {
@@ -143,8 +165,8 @@ test.describe("the Apps page", () => {
     await expect(spaceCard(page, "Family").getByText("Checklist was moved here.")).toBeFocused();
 
     expect(api.appChanges).toEqual([
-      `POST /api/spaces/${FAMILY_SPACE}/apps/checklist/move {"toSpaceId":"${PERSONAL_SPACE}"}`,
-      `POST /api/spaces/${PERSONAL_SPACE}/apps/checklist/move {"toSpaceId":"${FAMILY_SPACE}","memberAccess":"view"}`,
+      `POST /api/spaces/${FAMILY_SPACE}/apps/m-checklist/move {"toSpaceId":"${PERSONAL_SPACE}"}`,
+      `POST /api/spaces/${PERSONAL_SPACE}/apps/m-checklist/move {"toSpaceId":"${FAMILY_SPACE}","memberAccess":"view"}`,
     ]);
     // The table of who can use what in Settings has it again, with what was chosen for everyone.
     await page.getByRole("link", { name: "Settings" }).click();
@@ -154,16 +176,9 @@ test.describe("the Apps page", () => {
 
   test("says when an app cannot be moved, and keeps the dialog open", async ({ page, api }) => {
     ownAFamily(api);
-    api.setSession({ ...api.session, apps: [sampleApp("checklist", FAMILY_SPACE), sampleApp("checklist", PERSONAL_SPACE)] });
-    // The personal space has the checklist, so it has nowhere to go; the family's could go to the personal space ...
-    await page.goto("/apps");
-    await expect(spaceCard(page, "Personal").getByRole("button", { name: /^Move/ })).toHaveCount(0);
-    await expect(spaceCard(page, "Family").getByRole("button", { name: /^Move/ })).toHaveCount(0);
-
-    // ... but not when the server holds one there from before that the session does not list.
-    api.setSession({ ...api.session, apps: [sampleApp("checklist", FAMILY_SPACE)] });
+    // The server turns the move down, as it does for a space that has the app, or had it and kept its data.
     api.appFailure = { status: 409, code: "conflict", message: "Sample failure" };
-    await page.reload();
+    await page.goto("/apps");
     await spaceCard(page, "Family").getByRole("button", { name: "Move Checklist in Family", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Move Checklist in Family to another space" });
     await dialog.getByRole("button", { name: "Move", exact: true }).click();
@@ -172,6 +187,7 @@ test.describe("the Apps page", () => {
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toBeHidden();
     await expect(spaceCard(page, "Family").getByRole("switch", { name: "Show Checklist in Family" })).toBeVisible();
+    expect(api.appChanges).toEqual([`POST /api/spaces/${FAMILY_SPACE}/apps/m-checklist/move {"toSpaceId":"${PERSONAL_SPACE}"}`]);
   });
 
   test("moves an app in Chinese", async ({ page, api }) => {
@@ -190,7 +206,7 @@ test.describe("the Apps page", () => {
 
     test("moves an app in a dialog that fits the screen, with choices large enough to tap", async ({ page, api }) => {
       ownAFamily(api);
-      api.setSession({ ...api.session, apps: [sampleApp("feed", PERSONAL_SPACE)] });
+      api.setSession({ ...api.session, apps: [builtInApp("feed", PERSONAL_SPACE)] });
       await page.goto("/apps");
       const move = spaceCard(page, "Personal").getByRole("button", { name: "Move Feed", exact: true });
       expect((await move.boundingBox())?.height).toBeGreaterThanOrEqual(44);
@@ -209,11 +225,11 @@ test.describe("the Apps page", () => {
       await dialog.getByRole("button", { name: "Move", exact: true }).tap();
       await expect(dialog).toBeHidden();
       await expect(spaceCard(page, "Family").getByText("Feed was moved here.")).toBeVisible();
-      expect(api.appChanges).toEqual([`POST /api/spaces/${PERSONAL_SPACE}/apps/feed/move {"toSpaceId":"${FAMILY_SPACE}","memberAccess":"edit"}`]);
+      expect(api.appChanges).toEqual([`POST /api/spaces/${PERSONAL_SPACE}/apps/m-feed/move {"toSpaceId":"${FAMILY_SPACE}","memberAccess":"edit"}`]);
     });
 
     test("fits the screen, with every control large enough to tap", async ({ page, api }) => {
-      api.setSession({ ...emptySession(), apps: [sampleApp("checklist", PERSONAL_SPACE), sampleApp("feed", PERSONAL_SPACE)] });
+      api.setSession({ ...emptySession(), apps: [builtInApp("checklist", PERSONAL_SPACE), builtInApp("feed", PERSONAL_SPACE)] });
       await page.goto("/apps");
       const personal = spaceCard(page, "Personal");
       await expect(personal.getByRole("switch", { name: "Show Checklist" })).toBeVisible();
@@ -228,22 +244,29 @@ test.describe("the Apps page", () => {
 
 test.describe("the settings dialog", () => {
   test("changes a setting in English and then in Chinese, sending only what changed", async ({ page, api }) => {
-    api.setSession({ ...emptySession(), apps: [sampleApp("checklist", PERSONAL_SPACE)] });
-    await page.goto(`/apps/${PERSONAL_SPACE}/checklist`);
-    await expect(page.getByRole("main").getByRole("checkbox", { name: "Return the library books" })).toBeVisible();
+    api.setSession({ ...emptySession(), apps: [builtInApp("checklist", PERSONAL_SPACE)] });
+    await page.goto(`/apps/${PERSONAL_SPACE}/m-checklist`);
+    // The app's whole page, in its sandbox.
+    const app = sandbox(page, "m-checklist");
+    await expect(app.getByRole("heading", { name: "Checklist" })).toBeVisible();
+    await expect(app.locator("body")).toHaveAttribute("data-view", "page");
 
     await page.getByRole("banner").getByRole("button", { name: "Settings of Checklist" }).click();
     let dialog = page.getByRole("dialog", { name: "Checklist settings" });
     await dialog.getByRole("switch", { name: "Hide ticked items" }).click();
     await dialog.getByRole("button", { name: "Save" }).click();
     await expect(dialog).toBeHidden();
-    // The page reads the new setting: ticked items are hidden.
-    await expect(page.getByRole("main").getByRole("checkbox", { name: "Return the library books" })).toBeHidden();
+    // The app's page, which reads its settings itself, is told to read them again.
+    await expect(app.locator("body")).toHaveAttribute("data-changes", "1");
 
+    // In Chinese the page is drawn again, in Chinese.
     await page.getByRole("button", { name: /Switch language/ }).click();
+    await expect(app.getByRole("heading", { name: "清单" })).toBeVisible();
     await page.getByRole("banner").getByRole("button", { name: "清单的设置" }).click();
     dialog = page.getByRole("dialog", { name: "清单设置" });
     await expect(dialog.getByRole("group", { name: "对这个空间" })).toBeVisible();
+    // The form starts from what was saved.
+    await expect(dialog.getByRole("switch", { name: "隐藏已勾选的事项" })).toBeChecked();
     const sections = dialog.getByRole("group", { name: "分组" });
     await sections.getByRole("textbox", { name: "分组的新条目" }).fill("花园");
     await sections.getByRole("button", { name: "添加" }).click();
@@ -251,13 +274,13 @@ test.describe("the settings dialog", () => {
     await expect(dialog).toBeHidden();
 
     expect(api.appChanges).toEqual([
-      'PATCH checklist/settings {"user":{"hideDone":true}}',
-      'PATCH checklist/settings {"space":{"sections":["花园"]}}',
+      `PATCH /api/spaces/${PERSONAL_SPACE}/apps/m-checklist/settings {"user":{"hideDone":true}}`,
+      `PATCH /api/spaces/${PERSONAL_SPACE}/apps/m-checklist/settings {"space":{"sections":["花园"]}}`,
     ]);
   });
 
   test("shows the space's settings to a viewer without letting them change them", async ({ page, api }) => {
-    api.setSession({ ...emptySession(), apps: [sampleApp("checklist", PERSONAL_SPACE, { access: "view" })] });
+    api.setSession({ ...emptySession(), apps: [builtInApp("checklist", PERSONAL_SPACE, { access: "view" })] });
     await page.goto("/");
     await page.getByRole("button", { name: "Settings of Checklist" }).click();
     const dialog = page.getByRole("dialog", { name: "Checklist settings" });
@@ -266,11 +289,34 @@ test.describe("the settings dialog", () => {
     await expect(dialog.getByRole("switch", { name: "Hide ticked items" })).toBeEnabled();
   });
 
+  test("an app that was taken away disappears: a not_found from its settings loads the session again", async ({ page, api }) => {
+    const session = sessionWithBuiltInApps();
+    api.setSession(session);
+    await page.goto("/");
+    const grid = page.getByTestId("widget-grid");
+    const checklist = grid.getByRole("region", { name: "Checklist in Family", exact: true });
+    await expect(checklist).toBeVisible();
+    expect(api.sessionRequests).toBe(1);
+
+    // An owner removes the checklist from the family space while this page is open.
+    api.setSession({ ...session, apps: session.apps.filter((app) => app.id !== "m-checklist") });
+    await checklist.getByRole("button", { name: "Settings of Checklist in Family" }).click();
+
+    // Its card goes, the dialog with it; the other app stays.
+    await expect(checklist).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(grid.getByRole("region", { name: "Feed", exact: true })).toBeVisible();
+    expect(api.sessionRequests).toBe(2);
+    // The app's page is gone with it.
+    await page.goto(`/apps/${FAMILY_SPACE}/m-checklist`);
+    await expect(page.getByRole("heading", { level: 1, name: "Page not found" })).toBeVisible();
+  });
+
   test.describe("on a phone", () => {
     test.use(PHONE);
 
     test("fits the screen and saves", async ({ page, api }) => {
-      api.setSession({ ...emptySession(), apps: [sampleApp("feed", PERSONAL_SPACE)] });
+      api.setSession({ ...emptySession(), apps: [builtInApp("feed", PERSONAL_SPACE)] });
       await page.goto("/");
       await page.getByRole("button", { name: "Settings of Feed" }).tap();
       const dialog = page.getByRole("dialog", { name: "Feed settings" });
@@ -279,7 +325,9 @@ test.describe("the settings dialog", () => {
       expect(box?.width).toBeLessThanOrEqual(390);
       await dialog.getByRole("button", { name: "Save" }).tap();
       await expect(dialog).toBeHidden();
-      await expect(page.getByText("Following 1 topics")).toBeVisible();
+      expect(api.appChanges).toEqual([`PATCH /api/spaces/${PERSONAL_SPACE}/apps/m-feed/settings {"user":{"topics":["sport"]}}`]);
+      // The app's card, which reads its settings itself, is told to read them again.
+      await expect(sandbox(page, "m-feed").locator("body")).toHaveAttribute("data-changes", "1");
     });
   });
 });

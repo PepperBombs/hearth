@@ -1,9 +1,9 @@
 /**
- * Two packages each list a few of the same names: @hearth/sdk is what a
- * mini-app's manifest is written with and imports no other Hearth package;
- * @hearth/shared is what the server sends the web app and does not depend on
- * the SDK. The web app is where both arrive, so this is where they are
- * compared.
+ * Two packages each list a few of the same names: @hearth/sdk holds the
+ * rules an app's manifest is checked against and imports no other Hearth
+ * package; @hearth/shared is what the server sends the web app and does not
+ * depend on the SDK. The web app is where both arrive, so this is where they
+ * are compared.
  */
 import { describe, expect, it } from "vitest";
 import { SPACE_KINDS, WIDGET_SIZES } from "@hearth/sdk";

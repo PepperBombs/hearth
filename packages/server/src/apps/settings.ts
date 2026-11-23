@@ -19,10 +19,9 @@
  * value and leaves the rest of the stored object alone. A release that is
  * rolled back, or a setting that returns, finds its values again.
  *
- * Four callers: a handler's `ctx.settings` (`settingsFor`, called from
- * calls.ts inside the call's transaction), a job's (`spaceSettingsFor`,
- * called from jobs.ts when a run is claimed) and the two settings routes
- * (`readAppSettings`, `changeAppSettings`). The SQL is in store.ts.
+ * Two callers, the two settings routes (`readAppSettings`,
+ * `changeAppSettings`): the settings dialog, and an app's page through the
+ * page around it (`hearth.settings()`). The SQL is in store.ts.
  *
  * Design: docs/mini-app-contract.md, sections A2, A6 and A8, and the
  * owner's decision 5.
@@ -34,14 +33,7 @@ import type { Db } from "../db/database";
 import { notFound, Refusal } from "../http/errors";
 import { resolveInstall, type AppRequest } from "./installs";
 import type { Registry } from "./registry";
-import {
-  readSettingsData,
-  readSpaceSettingsData,
-  writeSettingsData,
-  type SettingsData,
-  type SettingsOwner,
-  type SettingsScope,
-} from "./store";
+import { readSettingsData, writeSettingsData, type SettingsData, type SettingsScope } from "./store";
 
 const SCOPES = ["space", "user"] as const satisfies readonly SettingsScope[];
 
@@ -72,37 +64,6 @@ function fill(manifest: Manifest, saved: Record<SettingsScope, SettingsData>): A
     settings[setting.scope][name] = valueOf(name, setting, saved[setting.scope]);
   }
   return settings;
-}
-
-/**
- * An app's settings as its code reads them (`ctx.settings`): every setting
- * the manifest declares, by name, with the space's value or this person's
- * own, whichever the setting's scope says.
- *
- * The caller has checked that the person may use the app in this space, and
- * holds the transaction that check was made in.
- */
-export function settingsFor(db: Db, owner: SettingsOwner, manifest: Manifest): Record<string, SettingValue> {
-  const { space, user } = fill(manifest, readSettingsData(db, owner));
-  // A name is declared once, so it is in one of the two.
-  return { ...space, ...user };
-}
-
-/**
- * An app's settings as a job reads them (`ctx.settings` of a run): every
- * setting the manifest declares with scope "space", by name, with the
- * space's value. A job runs for no one, so nobody's own settings are read,
- * and those of scope "user" are not there at all.
- *
- * The caller holds the transaction that claimed the run, in which it found
- * the app in the space.
- */
-export function spaceSettingsFor(
-  db: Db,
-  install: { spaceId: string; appId: string },
-  manifest: Manifest,
-): Record<string, SettingValue> {
-  return fill(manifest, { space: readSpaceSettingsData(db, install), user: {} }).space;
 }
 
 /**

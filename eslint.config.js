@@ -13,7 +13,6 @@
 import js from "@eslint/js";
 import { defineConfig, globalIgnores } from "eslint/config";
 import globals from "globals";
-import { miniAppBoundary } from "./packages/sdk/tools/eslint-boundary.mjs";
 
 const SCRIPTS = ["**/*.{js,mjs,cjs}"];
 const TYPESCRIPT = ["**/*.{ts,tsx,mts,cts}"];
@@ -58,24 +57,6 @@ async function loadTypescriptEslint() {
 const tseslint = await loadTypescriptEslint();
 
 /* -------------------------------------------------------------------------
- * "A mini-app uses only the SDK" (AGENTS.md)
- *
- * The check itself belongs to the SDK (packages/sdk/tools/eslint-boundary.mjs),
- * because every repository of mini-apps needs it: hearth-stones gets it
- * through "@hearth/sdk/eslint". It says what a file of an app may import,
- * which globals it may not touch, and that no comment switches a rule off.
- *
- * In this repository it applies to every folder directly inside one of
- * MINI_APP_ROOTS: the framework's own sample apps, which tests run against
- * and `hearth-apps new` copies the template from.
- *
- * It is imported by path, not as "@hearth/sdk/eslint": that entry point is a
- * whole configuration and loads typescript-eslint, which this file must be
- * able to do without (see above).
- * ---------------------------------------------------------------------- */
-const MINI_APP_ROOTS = ["packages/fixture-apps"];
-
-/* -------------------------------------------------------------------------
  * Boundaries between the framework's own packages
  * ---------------------------------------------------------------------- */
 
@@ -98,7 +79,7 @@ const NOT_THE_WEB_APP = [
 
 const NOT_THE_FRAMEWORK = [
   "^@hearth/(server|web|shared)($|/)|/packages/(server|web|shared)/|^(\\.\\./)+(server|web|shared)/src/",
-  "The SDK is what mini-apps are written against, also in other repositories. It stands alone and imports no framework package.",
+  "The SDK holds the manifest rules and the UI kit, which the server and the web app both use. It stands alone and imports no other Hearth package.",
 ];
 
 export default defineConfig([
@@ -109,8 +90,6 @@ export default defineConfig([
     "**/coverage/",
     "playwright-report/",
     "test-results/",
-    // Written by `hearth-apps sync`; see packages/sdk/tools/sync.mjs.
-    "**/*.generated.{js,css}",
   ]),
 
   { name: "hearth/recommended", files: [...SCRIPTS, ...TYPESCRIPT], extends: [js.configs.recommended] },
@@ -151,9 +130,6 @@ export default defineConfig([
       "*.config.{js,ts}",
       "packages/*/*.config.{js,ts}",
       "packages/*/scripts/**",
-      "packages/sdk/bin/**",
-      "packages/sdk/tools/**",
-      "packages/sdk/eslint.js",
       "packages/server/**",
       "e2e/**",
     ],
@@ -190,6 +166,4 @@ export default defineConfig([
     files: ["packages/server/src/**"],
     rules: { "no-restricted-imports": forbidImports(NOT_THE_WEB_APP) },
   },
-
-  ...miniAppBoundary({ roots: MINI_APP_ROOTS, base: import.meta.dirname }),
 ]);

@@ -5,23 +5,22 @@
  * owners' table of who can use each app. The whole web app is drawn against
  * a stand-in for the server that keeps one small family.
  */
-import type { AppSummary, MemberAccess, Session, SpaceApps, SpaceRole } from "@hearth/shared";
+import type { AppSummary, Localized, MemberAccess, Session, SpaceApps, SpaceRole } from "@hearth/shared";
 import { QueryClient } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import checklistManifest from "../../../fixture-apps/checklist/manifest";
-import feedManifest from "../../../fixture-apps/feed/manifest";
 import { App } from "../app";
-import { BundledAppsProvider, type BundledApp } from "../apps/bundled";
 
 const PERSONAL = "space-personal";
 const FAMILY = "space-family";
-const Empty = () => null;
-const BUNDLED: readonly BundledApp[] = [
-  { id: "checklist", manifest: checklistManifest, hasPage: true, widget: () => Promise.resolve({ default: Empty }) },
-  { id: "feed", manifest: feedManifest, hasPage: false, widget: () => Promise.resolve({ default: Empty }) },
-];
+
+/** The names of the family's apps, all made in Hearth, which the session lists for whoever may use them. */
+const NAMES: Record<string, Localized> = {
+  checklist: { en: "Checklist", zh: "清单" },
+  feed: { en: "Feed", zh: "动态" },
+  journal: { en: "Journal", zh: "日记" },
+};
 
 type Person = { id: string; email: string; name: string };
 const SAM: Person = { id: "u1", email: "sam@example.com", name: "Sam Example" };
@@ -85,19 +84,21 @@ class FakeServer {
       for (const install of group.apps) {
         const level = role === "owner" ? "edit" : (install.members[me.id] ?? install.memberAccess);
         if (install.removedAt !== null || level === "none") continue;
-        const manifest = install.id === "checklist" ? checklistManifest : feedManifest;
+        const name = NAMES[install.id] ?? { en: install.id, zh: install.id };
         apps.push({
           id: install.id,
           spaceId: group.id,
-          name: manifest.name,
-          description: manifest.description,
-          icon: manifest.icon,
-          color: manifest.color,
-          widgetSize: manifest.widget.size,
+          name,
+          description: { en: `${name.en}, made in Hearth.`, zh: `${name.zh}，在 Hearth 里做的。` },
+          icon: "list-checks",
+          color: "teal",
+          widgetSize: "wide",
           access: level,
           enabled: true,
           pinned: false,
-          hasPage: install.id === "checklist",
+          hasPage: true,
+          made: true,
+          version: 1,
         });
       }
     }
@@ -227,9 +228,7 @@ function start(server: FakeServer) {
   vi.stubGlobal("fetch", server.fetch);
   render(
     <MemoryRouter initialEntries={["/settings"]}>
-      <BundledAppsProvider apps={BUNDLED}>
-        <App queryClient={new QueryClient()} />
-      </BundledAppsProvider>
+      <App queryClient={new QueryClient()} />
     </MemoryRouter>,
   );
 }

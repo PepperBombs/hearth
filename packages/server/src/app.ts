@@ -9,15 +9,13 @@ import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import { outboundFor, type Outbound } from "./apps/fetch";
 import { listAppsForUser } from "./apps/installs";
-import { requestGapFor } from "./apps/jobs";
-import { createRegistry, type BundledApp } from "./apps/registry";
 import { registerAppRoutes } from "./apps/routes";
 import { registerAssistantRoutes } from "./assistant/routes";
 import { identifyFromConfig, type Identify } from "./auth";
 import type { Config } from "./config";
 import type { Db } from "./db/database";
 import { listSpacesForUser, updatePreferences } from "./db/people";
-import { withMadeApps } from "./made/apps";
+import { madeAppsRegistry } from "./made/apps";
 import { loadCatalog, type Template } from "./made/catalog";
 import { registerMadeRoutes } from "./made/routes";
 import { registerModelRoutes } from "./model/routes";
@@ -33,30 +31,16 @@ import { resolveMember } from "./membership";
 export type AppOptions = {
   config: Config;
   db: Db;
-  /**
-   * The mini-apps this build holds. Each manifest is checked here, and a bad
-   * one throws AppRegistryError before anything is served.
-   */
-  apps: readonly BundledApp[];
   /** Defaults to the login method named by the configuration. */
   identify?: Identify;
   /** Receives unexpected errors. Defaults to the console. Nothing of them reaches the client. */
   logError?: (error: unknown) => void;
-  /**
-   * Called when a job may have fallen due at once: an app was added to a
-   * space or brought back, or someone asked for a run. startServer
-   * (src/serve.ts) gives the scheduler's `wake` (src/apps/scheduler.ts), so
-   * that the app's jobs run without waiting for the scheduler to look
-   * again. Left out when no job runs: with HEARTH_JOBS=off, and in tests,
-   * since createApp starts no scheduler.
-   */
-  wakeJobs?: () => void;
   /** For tests: the fetch every request to a person's model goes through (src/model/providers.ts). */
   modelFetch?: typeof fetch;
   /**
    * The server's way out for apps' fetches (src/apps/fetch.ts): startServer
-   * gives the scheduler's, so that one pace holds every request to a host.
-   * Defaults to one made from the configuration.
+   * gives the one its process keeps, so that one pace holds every request
+   * to a host. Defaults to one made from the configuration.
    */
   outbound?: Outbound;
   /** The apps shipped with Hearth (src/made/catalog.ts). Defaults to those of packages/server/catalog. */
@@ -65,14 +49,11 @@ export type AppOptions = {
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-/**
- * Builds the application without listening, so tests can call it directly.
- * Throws AppRegistryError when one of the given mini-apps is not valid.
- */
+/** Builds the application without listening, so tests can call it directly. */
 export function createApp(options: AppOptions): Hono<Env> {
   const { config, db } = options;
-  // The build's apps, and the apps made in Hearth, which live in the database (docs/platform.md).
-  const registry = withMadeApps(db, createRegistry(options.apps));
+  // The apps made in Hearth, which live in the database (docs/platform.md).
+  const registry = madeAppsRegistry(db);
   const identify = options.identify ?? identifyFromConfig(config.auth);
   const logError = options.logError ?? ((error: unknown) => console.error(error));
 
@@ -137,13 +118,7 @@ export function createApp(options: AppOptions): Hono<Env> {
 
   registerGroupRoutes(app, { db, config, requireMember });
   registerAssistantRoutes(app, { db, requireMember });
-  registerAppRoutes(app, {
-    db,
-    registry,
-    requireMember,
-    wakeJobs: options.wakeJobs ?? (() => {}),
-    requestGapMs: requestGapFor(config),
-  });
+  registerAppRoutes(app, { db, registry, requireMember });
   registerMadeRoutes(app, {
     db,
     registry,

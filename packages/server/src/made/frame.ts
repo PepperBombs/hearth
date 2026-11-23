@@ -46,9 +46,9 @@ export type FrameView = "card" | "page";
 
 /**
  * Who is looking, and the space the app is in with its members' names
- * (`hearth.user`, `hearth.space`), as the build's apps had them: a page
- * says who wrote a row from its `createdBy`. The people of the space see
- * each other's names in Hearth already.
+ * (`hearth.user`, `hearth.space`), as the apps of earlier releases had
+ * them: a page says who wrote a row from its `createdBy`. The people of the
+ * space see each other's names in Hearth already.
  */
 export type FramePeople = {
   user: { id: string; name: string };

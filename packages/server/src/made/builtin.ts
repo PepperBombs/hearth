@@ -1,25 +1,32 @@
 /**
  * What the server does with the built-in apps when it starts
  * (docs/platform.md, "Built-in apps"): it brings their untouched copies up
- * to date (`updateBuiltInApps`), and moves the build's own apps of the same
- * name to them (`moveLegacyInstalls`).
+ * to date (`updateBuiltInApps`), and moves the installs that releases before
+ * them left, of the apps of the same name, to them (`moveLegacyInstalls`).
  *
  * The move: every install of an app whose ID is a built-in app's (grocery,
- * ideas, trending)
- * becomes that built-in app, in place, its data, settings, access and
- * switches carried over (`adoptInstall`). Removed installs move too, so that
- * adding the app again brings their data back. Each install moves alone: one
- * that cannot, because a row does not fit, stays as it was and is reported,
- * and the others move all the same.
+ * ideas, trending) becomes that built-in app, in place, its data, settings,
+ * access and switches carried over (`adoptInstall`). Removed installs move
+ * too, so that adding the app again brings their data back. Each install
+ * moves alone: one that cannot, because a row does not fit, stays as it was
+ * and is reported, and the others move all the same.
  */
 import type { Registry } from "../apps/registry";
-import { forgetJobs } from "../apps/jobs";
 import type { Db } from "../db/database";
 import { adoptInstall, updateFromTemplate } from "./apps";
 import type { Template } from "./catalog";
 
 export type Moved = { spaceId: string; from: string; to: string };
 export type NotMoved = { spaceId: string; from: string; reason: string };
+
+/**
+ * Forgets the status of the jobs of one install: the apps of releases
+ * before the built-in apps ran jobs, which kept it in `app_jobs`, and a
+ * built-in app has none, since its page refreshes what the job fetched.
+ */
+function forgetJobs(db: Db, spaceId: string, appId: string): number {
+  return db.prepare("DELETE FROM app_jobs WHERE space_id = ? AND app_id = ?").run(spaceId, appId).changes;
+}
 
 export function moveLegacyInstalls(db: Db, registry: Registry, catalog: readonly Template[]): { moved: Moved[]; failed: NotMoved[] } {
   const moved: Moved[] = [];
@@ -58,10 +65,10 @@ export type NotUpdated = { spaceId: string; appId: string; template: string; rea
  * Brings every copy of a built-in app that nobody changed (its
  * `template_hash` is still one Hearth wrote) up to the built-in app as
  * Hearth ships it now, as a new version: so a fix to a built-in app reaches
- * every space that has it, as a change to the build's apps did. A copy that
- * a person or their model changed, or took back to an earlier version, is
- * theirs and stays as it is. One whose stored rows would not fit the new
- * fields stays as it is too, and is reported.
+ * every space that has it. A copy that a person or their model changed, or
+ * took back to an earlier version, is theirs and stays as it is. One whose
+ * stored rows would not fit the new fields stays as it is too, and is
+ * reported.
  */
 export function updateBuiltInApps(db: Db, catalog: readonly Template[]): { updated: Updated[]; failed: NotUpdated[] } {
   const updated: Updated[] = [];

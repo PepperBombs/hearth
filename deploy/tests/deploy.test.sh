@@ -8,9 +8,8 @@
 # The real script runs unchanged, as the installed copy. Around it stand small
 # substitutes:
 #
-#   git        a folder of "commits" instead of a repository, one for the
-#              framework and one for the mini-apps: "main" in it is the
-#              branch on the remote, and "fetched" what the last fetch
+#   git        a folder of "commits" instead of a repository: "main" in it is
+#              the branch on the remote, and "fetched" what the last fetch
 #              brought. Of a folder without commits it says what git says
 #              of one that is no repository. A fetch can be made to fail,
 #              in words of the test's if it likes, to leave a process behind
@@ -21,23 +20,16 @@
 #              starts. The last test uses the real git instead, on a
 #              repository it makes up.
 #   pnpm       it writes down which copy of the deploy script asked, and
-#              whether that copy holds the lock;
-#              in the framework, "install" links the SQLite library and the
-#              TypeScript parser the SDK's tools need, and "build" runs the
-#              real `hearth-apps sync` that each made-up commit carries, as
-#              the real build does first; the rest is already built in each
-#              made-up commit. In the mini-apps, "install" does what pnpm
-#              does with a lockfile that holds only a "link:" to the SDK.
+#              whether that copy holds the lock. "install" links the SQLite
+#              library, and "build" does nothing, since each made-up commit
+#              is built already; a made-up commit can make either fail.
 #   systemctl  starts and stops the made-up server as "the service"
 #   server     applies numbered migrations to a real SQLite file exactly as
 #              the real server does (each in its own transaction, refusing a
 #              database with a migration it does not know), then answers
 #              /api/health; each start writes down, beside it, whether it
-#              is the trial start or the service and what HEARTH_JOBS it got
-#
-# So the handshake between the mini-apps and the SDK is the real one: the
-# version a made-up mini-apps commit declares against the SDK version in a
-# made-up framework commit, and the link from one to the other in a release.
+#              is the trial start or the service, and for the trial start
+#              the name of everything in its environment
 #
 # Every made-up framework commit carries the deploy script under test, so no
 # run is handed over unless a test gives a commit another one. That other
@@ -54,7 +46,6 @@ here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
 script=$repo_root/deploy/hearth-deploy.sh
 sqlite_package=$repo_root/packages/server/node_modules/better-sqlite3
-sdk=$repo_root/packages/sdk
 
 for tool in node tar flock timeout; do
   command -v "$tool" >/dev/null 2>&1 || {
@@ -62,12 +53,10 @@ for tool in node tar flock timeout; do
     exit 1
   }
 done
-for package in "$sqlite_package" "$sdk/node_modules/typescript"; do
-  [[ -d $package ]] || {
-    echo "deploy tests: $package is missing. Run pnpm install first." >&2
-    exit 1
-  }
-done
+[[ -d $sqlite_package ]] || {
+  echo "deploy tests: $sqlite_package is missing. Run pnpm install first." >&2
+  exit 1
+}
 
 # The deploy script refuses to run as root. In a container that has only
 # root, run the whole test as an unprivileged user instead. Where that
@@ -99,9 +88,8 @@ fi
 
 BASE=$T/base
 FRAMEWORK=$T/framework
-STONES=$T/stones
 DATABASE=$T/data/hearth.db
-mkdir -p "$BASE" "$FRAMEWORK/commits" "$STONES/commits" "$T/bin" "$T/data"
+mkdir -p "$BASE" "$FRAMEWORK/commits" "$T/bin" "$T/data"
 : >"$T/systemctl.log"
 : >"$T/git.log"
 : >"$T/pnpm.log"
@@ -248,8 +236,9 @@ EOF
 
 cat >"$T/bin/pnpm" <<EOF
 #!/usr/bin/env bash
-# Called in a release's hearth or hearth-stones folder ("store prune"
-# elsewhere). Every call goes into pnpm.log with the folder it was made in.
+# Called in a release's hearth folder ("store prune" elsewhere). Every call
+# goes into pnpm.log with the folder it was made in, and with the
+# HEARTH_APPS_DIR it found in its environment, which no call may.
 folder=\${PWD##*/}
 printf '%s: %s%s\n' "\$folder" "\$*" "\${HEARTH_APPS_DIR+ HEARTH_APPS_DIR=\$HEARTH_APPS_DIR}" >>"$T/pnpm.log"
 # Which copy of the deploy script asked, and whether the lock is held while
@@ -259,38 +248,24 @@ base=\${PWD%/releases/*}
 mapfile -d '' -t asker </proc/\$PPID/cmdline
 printf '%s lock=%s\n' "\${asker[1]:-unknown}" \\
   "\$(flock -n "\$base/deploy.lock" true && echo free || echo held)" >>"$T/pnpm-by.log"
+# A made-up commit fails to install or to build when its server says so, as
+# a lockfile out of date or a type error would make it.
+behaviour=\$(cat packages/server/behaviour 2>/dev/null || true)
 case \$folder:\$1 in
   hearth:install)
-    mkdir -p packages/server/node_modules
-    ln -s "$sqlite_package" packages/server/node_modules/better-sqlite3
-    ln -s "$sdk/node_modules" packages/sdk/node_modules
-    ;;
-  hearth:build)
-    # What the real "pnpm build" does first: pnpm apps:sync.
-    exec node packages/sdk/bin/hearth-apps.mjs sync
-    ;;
-  hearth-stones*:install)
-    if [[ " \$* " == *" --frozen-lockfile "* && ! -f pnpm-lock.yaml ]]; then
-      echo 'ERR_PNPM_NO_LOCKFILE  Cannot install with "frozen-lockfile" because pnpm-lock.yaml is absent' >&2
+    if [[ \$behaviour == fails-install ]]; then
+      echo 'ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with "frozen-lockfile" because pnpm-lock.yaml is not up to date with package.json' >&2
       exit 1
     fi
-    # Each "link:" in package.json becomes a relative link in node_modules,
-    # as pnpm makes it. Anything else would have to come from the store,
-    # which is empty here.
-    exec node -e '
-      const fs = require("node:fs");
-      const path = require("node:path");
-      const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-      for (const [name, spec] of Object.entries({ ...pkg.dependencies, ...pkg.devDependencies })) {
-        if (!spec.startsWith("link:")) {
-          console.error("ERR_PNPM_NO_OFFLINE_TARBALL  " + name + " is not in the store.");
-          process.exit(1);
-        }
-        const at = path.join("node_modules", name);
-        fs.mkdirSync(path.dirname(at), { recursive: true });
-        fs.symlinkSync(path.relative(path.dirname(at), spec.slice("link:".length)), at);
-      }
-    '
+    mkdir -p packages/server/node_modules
+    ln -s "$sqlite_package" packages/server/node_modules/better-sqlite3
+    ;;
+  hearth:build)
+    # Each made-up commit is built already.
+    if [[ \$behaviour == fails-build ]]; then
+      echo "packages/server/src/main.ts(1,7): error TS2322: Type 'string' is not assignable to type 'number'." >&2
+      exit 1
+    fi
     ;;
 esac
 EOF
@@ -329,22 +304,18 @@ EOF
 chmod +x "$T/bin/git" "$T/bin/pnpm" "$T/bin/systemctl"
 export PATH="$T/bin:$PATH"
 
-# commit_files FOLDER MIGRATIONS_JSON [BEHAVIOUR [SDK_VERSION]]: the files of
-# a framework commit. Among them are the real hearth-apps command, as
-# packages/sdk has it, with SDK_VERSION (0.1.0 unless given) as the version
-# of its SDK, and the deploy script under test.
+# commit_files FOLDER MIGRATIONS_JSON [BEHAVIOUR]: the files of a framework
+# commit, built already, with the deploy script under test among them.
+# BEHAVIOUR is fails-install or fails-build for a commit that pnpm cannot
+# install or build, and fails-live for one whose server does not start as
+# the service.
 commit_files() {
   local dir=$1
-  mkdir -p "$dir/packages/server/dist" "$dir/packages/web/dist" "$dir/deploy" \
-    "$dir/packages/sdk/bin" "$dir/packages/sdk/tools"
+  mkdir -p "$dir/packages/server/dist" "$dir/packages/web/dist" "$dir/deploy"
   printf '%s\n' "$2" >"$dir/packages/server/migrations.json"
   printf '%s\n' "${3:-}" >"$dir/packages/server/behaviour"
   echo "<!doctype html><title>Hearth</title>" >"$dir/packages/web/dist/index.html"
   cp "$script" "$dir/deploy/hearth-deploy.sh"
-  cp "$sdk/bin/hearth-apps.mjs" "$dir/packages/sdk/bin/"
-  cp "$sdk"/tools/*.mjs "$dir/packages/sdk/tools/"
-  printf '{ "name": "@hearth/sdk", "version": "%s", "private": true, "type": "module" }\n' \
-    "${4:-0.1.0}" >"$dir/packages/sdk/package.json"
   cat >"$dir/packages/server/dist/main.js" <<'EOF'
 const fs = require("node:fs");
 const http = require("node:http");
@@ -354,10 +325,11 @@ const Database = require("better-sqlite3");
 const root = path.join(__dirname, "..");
 const migrations = JSON.parse(fs.readFileSync(path.join(root, "migrations.json"), "utf8"));
 const behaviour = fs.readFileSync(path.join(root, "behaviour"), "utf8").trim();
-// Whether the mini-apps' jobs would run: "trial off" for the deploy's trial start, "live unset" for the service.
+// Which start this is: the deploy's trial start, with the name of everything
+// in its environment, or the service.
 fs.appendFileSync(
   path.join(root, "started-with"),
-  `${process.env.FAKE_LIVE ? "live" : "trial"} ${process.env.HEARTH_JOBS ?? "unset"}\n`,
+  process.env.FAKE_LIVE ? "live\n" : `trial ${Object.keys(process.env).sort().join(" ")}\n`,
 );
 
 const db = new Database(process.env.HEARTH_DB);
@@ -400,8 +372,8 @@ process.on("SIGTERM", () => {
 EOF
 }
 
-# make_commit ID MIGRATIONS_JSON [BEHAVIOUR [SDK_VERSION]]: a "commit" of the
-# framework, which its branch on the remote is at from then on.
+# make_commit ID MIGRATIONS_JSON [BEHAVIOUR]: a "commit" of the framework,
+# which its branch on the remote is at from then on.
 make_commit() {
   commit_files "$FRAMEWORK/commits/$1" "${@:2}"
   printf '%s\n' "$1" >"$FRAMEWORK/main"
@@ -444,74 +416,12 @@ EOF
 # The deploy script of a made-up framework commit.
 script_of() { printf '%s\n' "$FRAMEWORK/commits/$1/deploy/hearth-deploy.sh"; }
 
-# make_apps_commit ID [SDK_RANGE [LOCKFILE [APP...]]]: a "commit" of the
-# mini-apps. Without SDK_RANGE it holds no apps and no package.json, as
-# hearth-stones did before its first app. With it, it has the package.json a
-# mini-apps repository has, declaring that range ("hearth.sdk") and linking
-# the SDK beside it, and the lockfile pnpm writes for that unless LOCKFILE is
-# "no-lockfile"; and one folder per APP, holding what sync asks of an app.
-make_apps_commit() {
-  local dir=$STONES/commits/$1 app
-  mkdir -p "$dir"
-  printf '# Mini-apps\n\nSample apps for the deploy tests.\n' >"$dir/README.md"
-  if [[ -n ${2:-} ]]; then
-    cat >"$dir/package.json" <<EOF
-{
-  "name": "sample-stones",
-  "private": true,
-  "type": "module",
-  "hearth": { "sdk": "$2" },
-  "devDependencies": { "@hearth/sdk": "link:../hearth/packages/sdk" }
-}
-EOF
-  fi
-  if [[ -n ${2:-} && ${3:-} != no-lockfile ]]; then
-    # As pnpm 10 writes it for that package.json.
-    cat >"$dir/pnpm-lock.yaml" <<'EOF'
-lockfileVersion: '9.0'
-
-settings:
-  autoInstallPeers: true
-  excludeLinksFromLockfile: false
-
-importers:
-
-  .:
-    devDependencies:
-      '@hearth/sdk':
-        specifier: link:../hearth/packages/sdk
-        version: link:../hearth/packages/sdk
-EOF
-  fi
-  for app in "${@:4}"; do
-    mkdir -p "$dir/$app"
-    cat >"$dir/$app/manifest.ts" <<EOF
-import { defineApp } from "@hearth/sdk";
-
-export default defineApp({
-  id: "$app",
-  name: { en: "Notes", zh: "笔记" },
-  description: { en: "Short notes.", zh: "简短的笔记。" },
-  icon: "notebook-text",
-  color: "amber",
-  widget: { size: "small" },
-});
-EOF
-    printf 'export default function Widget() {\n  return null;\n}\n' >"$dir/$app/widget.tsx"
-  done
-  printf '%s\n' "$1" >"$STONES/main"
-}
-
-# The mini-apps repository the deploy fetches; none until the tests of it.
-APPS=""
-
 # write_config HEALTH_TIMEOUT [LINE...]: the config file, with more lines at
 # its end if given.
 write_config() {
   cat >"$T/deploy.conf" <<EOF
 HEARTH_BASE=$BASE
 FRAMEWORK_REPO=$FRAMEWORK
-APPS_REPO=$APPS
 SERVICE=hearth.service
 LIVE_URL=http://127.0.0.1:$LIVE_PORT
 DATABASE=$DATABASE
@@ -556,7 +466,7 @@ deploy() {
 }
 
 # What the last run asked of pnpm, one call per line: "<folder>: <arguments>",
-# and HEARTH_APPS_DIR=... when that was set.
+# and HEARTH_APPS_DIR=... if that reached pnpm, as it must not.
 pnpm_calls() { tail -n "+$((pnpm_mark + 1))" -- "$T/pnpm.log"; }
 expect_pnpm_call() { grep -qxF -- "$1" <(pnpm_calls) || fail "pnpm was not called as: $1"; }
 expect_no_pnpm_call() { ! grep -qE -- "$1" <(pnpm_calls) || fail "pnpm was called: $(grep -E -- "$1" <(pnpm_calls))"; }
@@ -578,18 +488,17 @@ started_as() {
 }
 expect_started() { [[ $(started) == "$1" ]] || fail "newer deploy scripts were started as \"$(started)\", not as \"$1\""; }
 
-# not_deployed FRAMEWORK_COMMIT APPS_COMMIT REASON: what a run says of commits
-# that it does not build, because the framework commit's deploy script cannot
-# carry out the run.
+# not_deployed COMMIT REASON: what a run says of a commit that it does not
+# build, because the commit's deploy script cannot carry out the run.
 not_deployed() {
-  printf 'ERROR: The newest commits (framework %s, mini-apps %s) are not deployed: the deploy script of that framework commit cannot carry out the run, because %s.' \
-    "${1:0:12}" "${2:0:12}" "$3"
+  printf 'ERROR: The newest commit (framework %s) is not deployed: the deploy script of that commit cannot carry out the run, because %s.' \
+    "${1:0:12}" "$2"
 }
 
 # The other way out that such a run names, after what to do about the
 # script: SELF_UPDATE=off, and where to read first what that takes.
 with_the_installed_copy() {
-  printf 'or deploy them with the installed copy of the script, which may be much older than they are: read "When a deployment fails" in docs/self-hosting.md before you set SELF_UPDATE=off in %s.' "$config"
+  printf 'or deploy it with the installed copy of the script, which may be much older than it is: read "When a deployment fails" in docs/self-hosting.md before you set SELF_UPDATE=off in %s.' "$config"
 }
 
 fail() {
@@ -675,7 +584,6 @@ A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 C=cccccccccccccccccccccccccccccccccccccccc
 D=dddddddddddddddddddddddddddddddddddddddd
-E=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 F=ffffffffffffffffffffffffffffffffffffffff
 # For the tests of which copy of the deploy script does the work.
 G=a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1
@@ -702,15 +610,13 @@ AC=c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1
 AD=d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2
 AE=e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3
 AF=f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4
-# Commits of the mini-apps.
-NO_APPS=1111111111111111111111111111111111111111
-NO_LOCKFILE=2222222222222222222222222222222222222222
-FOR_SDK_1=3333333333333333333333333333333333333333
-FOR_SDK_2=4444444444444444444444444444444444444444
-# Of a second repository of mini-apps.
-MORE_1=5555555555555555555555555555555555555555
-MORE_2=6666666666666666666666666666666666666666
 AG=a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5
+# Commits that pnpm cannot install, and cannot build.
+NO_INSTALL=1111111111111111111111111111111111111111
+NO_BUILD=2222222222222222222222222222222222222222
+# A commit of mini-apps, in a clone that a config file for an earlier
+# release still names.
+OLD_APPS_COMMIT=3333333333333333333333333333333333333333
 
 USERS='{"id":1,"name":"users","sql":"CREATE TABLE users (name TEXT NOT NULL)"}'
 LISTS='{"id":2,"name":"lists","sql":"CREATE TABLE lists (title TEXT NOT NULL)"}'
@@ -721,7 +627,9 @@ write_config 5
 # ---------------------------------------------------------------------------
 start_test "the first release goes live"
 make_commit $A "[$USERS]"
-deploy
+# With two settings of the old app framework in the run's own environment,
+# which the next test shows reach neither the build nor the trial start.
+deploy HEARTH_APPS_DIR="$T/elsewhere" HEARTH_JOBS=off
 expect_status 0
 expect_output "There is no database at $DATABASE yet"
 expect_live aaaaaaa
@@ -732,11 +640,27 @@ sql "$DATABASE" "INSERT INTO users (name) VALUES ('Sam')"
 sql "$DATABASE" "INSERT INTO users (name) VALUES ('Sam')"
 end_test
 
-start_test "the trial start runs no job, and the service runs them"
-# The trial start, against a copy of the database, must fetch nothing; the
-# service gets no HEARTH_JOBS from the script, so its jobs run (the default).
+start_test "a release is the framework alone, built and tried with nothing but what the script gives"
+# No mini-apps are copied in, and the build is told of none: HEARTH_APPS_DIR
+# named them.
+contents=$(find "$BASE/releases/$release_a" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | tr '\n' ' ')
+[[ $contents == "RELEASE hearth release.env " ]] || fail "the release holds: $contents"
+[[ $(sed -n 's/^apps=//p' "$BASE/current/RELEASE") == none ]] || fail "RELEASE names mini-apps: $(sed -n 's/^apps=//p' "$BASE/current/RELEASE")"
+expect_pnpm_call "hearth: install --frozen-lockfile --store-dir $BASE/pnpm-store"
+expect_pnpm_call "hearth: build"
+# The trial start gets the made-up settings, and nothing of the run's own
+# environment, which every run of these tests gives HEARTH_DEPLOY_VERBOSE.
+# Nor does the script give it HEARTH_JOBS any more, which switched off the
+# jobs of mini-apps. The service gets what systemd gives it.
 started=$(<"$BASE/releases/$release_a/hearth/packages/server/started-with")
-[[ $started == $'trial off\nlive unset' ]] || fail "the made-up server was started as: ${started//$'\n'/, }"
+[[ $started == "trial "*$'\nlive' ]] || fail "the made-up server was started as: ${started//$'\n'/, }"
+trial=" ${started%%$'\n'*} "
+for name in HEARTH_AUTH HEARTH_CF_AUDIENCE HEARTH_CF_TEAM_DOMAIN HEARTH_DB HEARTH_OWNER_EMAIL HEARTH_VERSION HOST NODE_ENV PATH PORT; do
+  [[ $trial == *" $name "* ]] || fail "the trial start was not given $name:$trial"
+done
+for name in HEARTH_DEPLOY_VERBOSE HEARTH_JOBS HEARTH_APPS_DIR; do
+  [[ $trial != *" $name "* ]] || fail "the trial start was given $name:$trial"
+done
 end_test
 
 # ---------------------------------------------------------------------------
@@ -793,7 +717,7 @@ stops=$(count_of stop "$T/systemctl.log")
 releases=$(release_count)
 deploy
 expect_status 1
-expect_output "are not tried again by themselves"
+expect_output "is not tried again by itself"
 expect_live aaaaaaa
 [[ $(count_of restart "$T/systemctl.log") == "$restarts" ]] || fail "the live service was restarted"
 [[ $(count_of stop "$T/systemctl.log") == "$stops" ]] || fail "the live service was stopped"
@@ -825,7 +749,7 @@ start_test "a newer commit is deployed although the current release does not com
 make_commit $D "[$USERS,$LISTS]"
 deploy
 expect_status 0
-expect_output "Trying the newer commits instead."
+expect_output "Trying the newer commit instead."
 expect_live ddddddd
 release_d=$(current_release)
 [[ $release_d != "$release_a" ]] || fail "\"current\" did not move"
@@ -848,101 +772,58 @@ expect_live ddddddd
 end_test
 
 # ---------------------------------------------------------------------------
-# From here on the deploy fetches the mini-apps too, and builds them in.
-APPS=$STONES
-
-start_test "a base folder with a colon in its name is refused while there are mini-apps"
-# HEARTH_APPS_DIR separates folders with colons: the build would hold none.
-printf 'HEARTH_BASE=%s\nFRAMEWORK_REPO=%s\nAPPS_REPO=%s\n' "$T/odd:base" "$FRAMEWORK" "$STONES" >"$T/colon.conf"
-status=0
-bash "$script" "$T/colon.conf" >"$T/out.log" 2>&1 || status=$?
-expect_status 1
-expect_output "HEARTH_BASE must not contain a colon while APPS_REPO is set"
-[[ ! -e $T/odd:base ]] || fail "the base folder was made"
-end_test
-
-write_config 5
-
-start_test "mini-apps that hold no apps yet are copied in, with nothing to install"
-make_apps_commit $NO_APPS
-deploy
-expect_status 0
-expect_output "The build holds no mini-apps."
-expect_live ddddddd
-release_no_apps=$(current_release)
-[[ $release_no_apps != "$release_d" ]] || fail "\"current\" did not move"
-[[ $(sed -n 's/^apps=//p' "$BASE/current/RELEASE") == "$NO_APPS" ]] || fail "RELEASE does not name the mini-apps' commit"
-[[ -f $BASE/current/hearth-stones/README.md ]] || fail "the mini-apps were not copied into the release"
-expect_no_pnpm_call "^hearth-stones:"
-expect_pnpm_call "hearth: build HEARTH_APPS_DIR=$BASE/releases/$release_no_apps/hearth-stones"
-end_test
-
-start_test "mini-apps that cannot be linked to the SDK stop the deploy before the build"
-make_apps_commit $NO_LOCKFILE "^0.1.0" no-lockfile notes
+start_test "an install that fails stops the deploy before the build"
+make_commit $NO_INSTALL "[$USERS,$LISTS]" fails-install
+releases=$(release_count)
 deploy
 expect_status 1
-expect_output "Could not link the mini-apps to the SDK"
-expect_output "ERR_PNPM_NO_LOCKFILE"
-expect_output "Release $release_no_apps is still the one in use."
+expect_output "ERROR: pnpm install failed."
+# The last lines of what pnpm said.
+expect_output "ERR_PNPM_OUTDATED_LOCKFILE"
+expect_output "Release $release_d is still the one in use."
 expect_live ddddddd
-[[ $(current_release) == "$release_no_apps" ]] || fail "\"current\" moved"
+[[ $(current_release) == "$release_d" ]] || fail "\"current\" moved"
 expect_no_pnpm_call "^hearth: build"
-[[ $(<"$BASE/state/failed") == "build $D $NO_LOCKFILE" ]] || fail "the failure note is: $(<"$BASE/state/failed")"
+[[ $(release_count) == "$releases" ]] || fail "the release that failed was left behind"
+[[ $(failure_note) == "build $NO_INSTALL none" ]] || fail "the failure note is: $(failure_note)"
 end_test
 
-start_test "the mini-apps are linked offline to the SDK beside them and built in"
-make_commit $E "[$USERS,$LISTS]"
-make_apps_commit $FOR_SDK_1 "^0.1.0" "" notes
-deploy
-expect_status 0
-expect_output "The build holds 1 mini-app (notes)."
-expect_live eeeeeee
-release_e=$(current_release)
-expect_pnpm_call "hearth-stones: install --frozen-lockfile --offline --store-dir $BASE/pnpm-store"
-expect_pnpm_call "hearth: build HEARTH_APPS_DIR=$BASE/releases/$release_e/hearth-stones"
-[[ $(readlink -f "$BASE/current/hearth-stones/node_modules/@hearth/sdk") == "$(readlink -f "$BASE/current/hearth/packages/sdk")" ]] ||
-  fail "the mini-apps are not linked to the SDK of their own release"
-grep -qF 'id: "notes"' "$BASE/current/hearth/packages/server/src/apps/registry.generated.js" ||
-  fail "the server's list of apps does not hold the app"
-[[ ! -e $BASE/state/failed ]] || fail "the failure note was left behind"
-end_test
-
-start_test "a new SDK version that the mini-apps were not written for leaves the running release alone"
-make_commit $F "[$USERS,$LISTS]" "" 0.2.0
+start_test "a build that fails leaves the running release alone"
+# A new commit, built at once although the one before failed a moment ago.
+make_commit $NO_BUILD "[$USERS,$LISTS]" fails-build
 restarts=$(count_of restart "$T/systemctl.log")
 stops=$(count_of stop "$T/systemctl.log")
 releases=$(release_count)
 deploy
 expect_status 1
-expect_output "The mini-apps (commit ${FOR_SDK_1:0:12}) were written for another version of the SDK than the framework (commit ${F:0:12}) holds"
-# The lines of hearth-apps sync that name both versions.
-expect_output "were written for @hearth/sdk ^0.1.0"
-expect_output "holds @hearth/sdk 0.2.0"
-expect_output "Release $release_e is still the one in use."
-expect_live eeeeeee
-[[ $(current_release) == "$release_e" ]] || fail "\"current\" moved"
+expect_output "ERROR: pnpm build failed."
+# The last lines of what the build said.
+expect_output "error TS2322"
+expect_output "Release $release_d is still the one in use."
+expect_live ddddddd
+[[ $(current_release) == "$release_d" ]] || fail "\"current\" moved"
 [[ $(count_of restart "$T/systemctl.log") == "$restarts" ]] || fail "the live service was restarted"
 [[ $(count_of stop "$T/systemctl.log") == "$stops" ]] || fail "the live service was stopped"
 [[ $(release_count) == "$releases" ]] || fail "the release that failed was left behind"
-[[ $(<"$BASE/state/failed") == "sdk $F $FOR_SDK_1" ]] || fail "the failure note is: $(<"$BASE/state/failed")"
+[[ $(failure_note) == "build $NO_BUILD none" ]] || fail "the failure note is: $(failure_note)"
 end_test
 
-start_test "those commits are not built again, even after the waiting time"
+start_test "a build that failed is tried again after the waiting time"
 touch -d "20 minutes ago" "$BASE/state/failed"
 releases=$(release_count)
 deploy
 expect_status 1
-expect_output "which building them again cannot change"
-[[ -z $(pnpm_calls) ]] || fail "pnpm was run: $(pnpm_calls)"
-[[ $(release_count) == "$releases" ]] || fail "a release was built"
-expect_live eeeeeee
+expect_pnpm_call "hearth: build"
+expect_output "ERROR: pnpm build failed."
+[[ $(release_count) == "$releases" ]] || fail "the release that failed was left behind"
+[[ $(failure_note) == "build $NO_BUILD none" ]] || fail "the failure note is: $(failure_note)"
+expect_live ddddddd
 end_test
 
-start_test "the matching commit of the mini-apps is built at once"
-make_apps_commit $FOR_SDK_2 "^0.2.0" "" notes
+start_test "the next commit is built at once, and the failure note goes"
+make_commit $F "[$USERS,$LISTS]"
 deploy
 expect_status 0
-expect_output "The build holds 1 mini-app (notes)."
 expect_live fffffff
 release_f=$(current_release)
 [[ ! -e $BASE/state/failed ]] || fail "the failure note was left behind"
@@ -982,7 +863,6 @@ expect_started ""
 # the script under test.
 [[ -z $(find "$BASE/state" -name 'deploy-script*') ]] || fail "a deploy script was written under state/"
 [[ $(fetches_of "$FRAMEWORK") == 1 ]] || fail "the framework was fetched $(fetches_of "$FRAMEWORK") times"
-[[ $(fetches_of "$STONES") == 1 ]] || fail "the mini-apps were fetched $(fetches_of "$STONES") times"
 expect_live fffffff
 end_test
 
@@ -997,7 +877,6 @@ expect_order "hearth.service now runs release $release_f (version fffffff)." \
   "ERROR: Could not fetch main of the framework repository."
 expect_output "    fatal: unable to access 'https://example.com/hearth.git/': Could not resolve host: example.com"
 [[ $(fetches_of "$FRAMEWORK") == 1 ]] || fail "the framework was fetched $(fetches_of "$FRAMEWORK") times"
-[[ $(fetches_of "$STONES") == 0 ]] || fail "the mini-apps were fetched although the framework could not be"
 [[ ! -e $BASE/state/restart-pending ]] || fail "the restart note was left behind"
 expect_live fffffff
 end_test
@@ -1013,7 +892,7 @@ expect_output "ERROR: Could not fetch main of the framework repository."
 end_test
 
 start_test "a newer deploy script in the newest commit carries out the run, and deploys the commit that brought it"
-make_commit $G "[$USERS,$LISTS]" "" 0.2.0
+make_commit $G "[$USERS,$LISTS]"
 newer_script "$(script_of $G)" g
 deploy
 expect_status 0
@@ -1028,11 +907,10 @@ cmp -s "$BASE/state/deploy-script" "$(script_of $G)" || fail "state/deploy-scrip
 [[ ! -e $BASE/state/deploy-script.new ]] || fail "state/deploy-script.new was left behind"
 # The newer script did all of the work, under the lock, which it took again.
 [[ $(pnpm_askers) == "$BASE/state/deploy-script lock=held" ]] || fail "pnpm was asked by: $(pnpm_askers)"
-expect_pnpm_call "hearth: build HEARTH_APPS_DIR=$BASE/releases/$release_g/hearth-stones"
+expect_pnpm_call "hearth: build"
 [[ $(sed -n 's/^framework=//p' "$BASE/current/RELEASE") == "$G" ]] || fail "RELEASE does not name the commit"
 # The installed copy had fetched the framework, so the newer one did not.
 [[ $(fetches_of "$FRAMEWORK") == 1 ]] || fail "the framework was fetched $(fetches_of "$FRAMEWORK") times"
-[[ $(fetches_of "$STONES") == 1 ]] || fail "the mini-apps were fetched $(fetches_of "$STONES") times"
 [[ ! -e $BASE/state/failed ]] || fail "a failure note was written"
 end_test
 
@@ -1046,9 +924,11 @@ end_test
 
 start_test "what the starter told the copy it started reaches nothing that copy starts"
 # The newer script was told its commit and that the framework is fetched, in
-# its environment. It went on to ask git for the mini-apps: that call, like
-# every other so far, found neither there.
-[[ $(fetches_of "$STONES") == 1 ]] || fail "the copy that was handed the run fetched the mini-apps $(fetches_of "$STONES") times"
+# its environment. It went on to ask git for the commit the branch is at, in
+# both runs, and for the files of that commit, which the release it built
+# holds: those calls, like every other so far, found neither there.
+cmp -s "$BASE/releases/$release_g/hearth/deploy/hearth-deploy.sh" "$(script_of $G)" ||
+  fail "the release that the copy which was handed the run built does not hold the commit's files"
 [[ ! -s $T/git-told.log ]] || fail "git was started with HEARTH_DEPLOY_HANDED_OVER or HEARTH_DEPLOY_FETCHED in its environment: $(sort -u "$T/git-told.log" | tr '\n' ';')"
 end_test
 
@@ -1065,7 +945,7 @@ config=$T/deploy.conf
 end_test
 
 start_test "a copy that was started for the newest commit does not hand the run over again, and asks for no install"
-make_commit $H "[$USERS,$LISTS]" "" 0.2.0
+make_commit $H "[$USERS,$LISTS]"
 newer_script "$(script_of $H)" h
 # The script under test, started as if it were that commit's deploy script,
 # which is another one.
@@ -1085,7 +965,6 @@ run HEARTH_DEPLOY_HANDED_OVER=$H HEARTH_DEPLOY_FETCHED=$H
 expect_status 0
 expect_output "Nothing new: main is already deployed."
 [[ $(fetches_of "$FRAMEWORK") == 0 ]] || fail "the framework was fetched"
-[[ $(fetches_of "$STONES") == 1 ]] || fail "the mini-apps were fetched $(fetches_of "$STONES") times"
 # Told of another commit than its branch is at, it fetches: the branch moved
 # after the copy that started it had looked.
 run HEARTH_DEPLOY_HANDED_OVER=$H HEARTH_DEPLOY_FETCHED=$G
@@ -1095,7 +974,7 @@ end_test
 
 start_test "with SELF_UPDATE=off the installed copy does the work and asks to be installed again"
 write_config 5 SELF_UPDATE=off
-make_commit $I "[$USERS,$LISTS]" "" 0.2.0
+make_commit $I "[$USERS,$LISTS]"
 newer_script "$(script_of $I)" i
 deploy
 expect_status 0
@@ -1125,8 +1004,8 @@ run
 rm "$T/during-fetch"
 expect_status 0
 expect_output "hearth.service now runs release $release_i (version c3c3c3c)."
-[[ $(tr '\n' ' ' <"$T/at-fetch") == "done done " ]] ||
-  fail "the framework and the mini-apps were fetched while the restart was: $(tr '\n' ' ' <"$T/at-fetch")"
+[[ $(tr '\n' ' ' <"$T/at-fetch") == "done " ]] ||
+  fail "the framework was fetched while the restart was: $(tr '\n' ' ' <"$T/at-fetch")"
 expect_started ""
 expect_live c3c3c3c
 write_config 5
@@ -1134,14 +1013,14 @@ end_test
 
 # ---------------------------------------------------------------------------
 start_test "a commit whose deploy script cannot be parsed is not deployed"
-make_commit $J "[$USERS,$LISTS]" "" 0.2.0
+make_commit $J "[$USERS,$LISTS]"
 printf 'if\n' >>"$(script_of $J)"
 restarts=$(count_of restart "$T/systemctl.log")
 stops=$(count_of stop "$T/systemctl.log")
 releases=$(release_count)
 deploy
 expect_status 1
-expect_output "$(not_deployed $J $FOR_SDK_2 "bash cannot parse it") Push a commit that puts deploy/hearth-deploy.sh right; $(with_the_installed_copy)"
+expect_output "$(not_deployed $J "bash cannot parse it") Push a commit that puts deploy/hearth-deploy.sh right; $(with_the_installed_copy)"
 # What bash said, under the name the file has in the repository.
 expect_output "    deploy/hearth-deploy.sh: line "
 expect_output "Release $release_i is still the one in use."
@@ -1152,7 +1031,7 @@ expect_live c3c3c3c
 [[ $(count_of stop "$T/systemctl.log") == "$stops" ]] || fail "the live service was stopped"
 [[ $(release_count) == "$releases" ]] || fail "a release was built"
 [[ -z $(pnpm_calls) ]] || fail "pnpm was run: $(pnpm_calls)"
-[[ $(failure_note) == "build $J $FOR_SDK_2" ]] || fail "the failure note is: $(failure_note)"
+[[ $(failure_note) == "build $J none" ]] || fail "the failure note is: $(failure_note)"
 cmp -s "$BASE/state/deploy-script" "$(script_of $G)" || fail "the script that cannot be parsed was put under state/"
 [[ ! -e $BASE/state/deploy-script.new ]] || fail "state/deploy-script.new was left behind"
 end_test
@@ -1165,7 +1044,7 @@ expect_no_output "are not deployed"
 touch -d "20 minutes ago" "$BASE/state/failed"
 run
 expect_status 1
-expect_output "$(not_deployed $J $FOR_SDK_2 "bash cannot parse it")"
+expect_output "$(not_deployed $J "bash cannot parse it")"
 end_test
 
 start_test "a copy that cannot hand the run over still clears leftovers away and finishes a pending restart"
@@ -1179,10 +1058,10 @@ expect_status 1
 expect_order "Removing the unfinished release 20000101T000000Z left by an interrupted run." \
   "hearth.service now runs release $release_i (version c3c3c3c)."
 expect_order "hearth.service now runs release $release_i (version c3c3c3c)." \
-  "$(not_deployed $J $FOR_SDK_2 "bash cannot parse it")"
+  "$(not_deployed $J "bash cannot parse it")"
 [[ ! -e $BASE/releases/20000101T000000Z ]] || fail "the unfinished release was left behind"
 [[ ! -e $BASE/state/restart-pending ]] || fail "the restart note was left behind"
-[[ $(failure_note) == "build $J $FOR_SDK_2" ]] || fail "the failure note is: $(failure_note)"
+[[ $(failure_note) == "build $J none" ]] || fail "the failure note is: $(failure_note)"
 # It stopped on nothing before the build, so it had no need to say why it is
 # the copy that does the work.
 expect_no_output "NOTE: the deploy script of framework commit"
@@ -1191,37 +1070,37 @@ expect_live c3c3c3c
 end_test
 
 start_test "a commit without a deploy script is not deployed"
-make_commit $K "[$USERS,$LISTS]" "" 0.2.0
+make_commit $K "[$USERS,$LISTS]"
 rm "$(script_of $K)"
 releases=$(release_count)
 deploy
 expect_status 1
-expect_output "$(not_deployed $K $FOR_SDK_2 "that commit has no deploy/hearth-deploy.sh")"
+expect_output "$(not_deployed $K "that commit has no deploy/hearth-deploy.sh")"
 expect_output "Release $release_i is still the one in use."
 expect_live c3c3c3c
 [[ $(release_count) == "$releases" ]] || fail "a release was built"
-[[ $(failure_note) == "build $K $FOR_SDK_2" ]] || fail "the failure note is: $(failure_note)"
+[[ $(failure_note) == "build $K none" ]] || fail "the failure note is: $(failure_note)"
 end_test
 
 start_test "a commit whose deploy script is empty is not deployed"
 # bash parses an empty file, and running it does nothing, with status 0: a
 # run handed to it would end at once, every time, without a word.
-make_commit $U "[$USERS,$LISTS]" "" 0.2.0
+make_commit $U "[$USERS,$LISTS]"
 : >"$(script_of $U)"
 releases=$(release_count)
 deploy
 expect_status 1
-expect_output "$(not_deployed $U $FOR_SDK_2 "deploy/hearth-deploy.sh is empty in that commit") Push a commit that puts deploy/hearth-deploy.sh right; $(with_the_installed_copy)"
+expect_output "$(not_deployed $U "deploy/hearth-deploy.sh is empty in that commit") Push a commit that puts deploy/hearth-deploy.sh right; $(with_the_installed_copy)"
 expect_output "Release $release_i is still the one in use."
 expect_live c3c3c3c
 [[ $(release_count) == "$releases" ]] || fail "a release was built"
-[[ $(failure_note) == "build $U $FOR_SDK_2" ]] || fail "the failure note is: $(failure_note)"
+[[ $(failure_note) == "build $U none" ]] || fail "the failure note is: $(failure_note)"
 cmp -s "$BASE/state/deploy-script" "$(script_of $G)" || fail "the empty script was put under state/"
 [[ ! -e $BASE/state/deploy-script.new ]] || fail "state/deploy-script.new was left behind"
 end_test
 
 start_test "the next commit with a deploy script that works is handed the run and deployed"
-make_commit $L "[$USERS,$LISTS]" "" 0.2.0
+make_commit $L "[$USERS,$LISTS]"
 newer_script "$(script_of $L)" l
 deploy
 expect_status 0
@@ -1247,7 +1126,7 @@ end_test
 
 # ---------------------------------------------------------------------------
 start_test "a setting that the copy doing the work does not know stops it before it touches anything"
-make_commit $M "[$USERS,$LISTS]" "" 0.2.0
+make_commit $M "[$USERS,$LISTS]"
 newer_script "$(script_of $M)" m
 write_config 5 FUTURE_SETTING=yes
 # What an interrupted run leaves behind, and a note for the next one: a copy
@@ -1264,14 +1143,15 @@ expect_output "ERROR: $T/deploy.conf, line $(grep -n '^FUTURE_SETTING=' "$T/depl
 expect_output "Nothing was changed."
 [[ -d $BASE/releases/20000101T000000Z ]] || fail "the unfinished release was cleared away"
 [[ -e $BASE/state/restart-pending ]] || fail "the restart note was dealt with"
-[[ $(fetches_of "$STONES") == 0 ]] || fail "the mini-apps were fetched"
+# Fetched once, by the installed copy, to find the copy to hand the run to.
+[[ $(fetches_of "$FRAMEWORK") == 1 ]] || fail "the framework was fetched $(fetches_of "$FRAMEWORK") times"
 [[ $(release_count) == "$releases" ]] || fail "a release was built"
 [[ ! -e $BASE/state/failed ]] || fail "a failure note was written"
 expect_live f6f6f6f
 end_test
 
 start_test "a newer deploy script that knows the setting is handed the run by a copy that does not"
-make_commit $N "[$USERS,$LISTS]" "" 0.2.0
+make_commit $N "[$USERS,$LISTS]"
 newer_script "$(script_of $N)" n 's/^      HEARTH_BASE | /      FUTURE_SETTING | HEARTH_BASE | /'
 deploy
 expect_status 0
@@ -1436,7 +1316,7 @@ end_test
 start_test "when the fetch fails, the run is handed over by the commit fetched last, and a pending restart is finished once both copies have tried the fetch"
 # The remote has a commit that the server has not fetched, with a deploy
 # script of its own.
-make_commit $O "[$USERS,$LISTS]" "" 0.2.0
+make_commit $O "[$USERS,$LISTS]"
 newer_script "$(script_of $O)" o
 systemctl --no-ask-password stop hearth.service
 : >"$BASE/state/restart-pending"
@@ -1495,7 +1375,7 @@ start_test "the deploy script under state/ is replaced by a new file, never writ
 # A copy that an earlier run started may still be reading that file. A second
 # name for the file shows what such a copy goes on reading.
 ln "$BASE/state/deploy-script" "$T/started-earlier"
-make_commit $P "[$USERS,$LISTS]" "" 0.2.0
+make_commit $P "[$USERS,$LISTS]"
 newer_script "$(script_of $P)" p
 deploy
 expect_status 0
@@ -1508,7 +1388,7 @@ rm "$T/started-earlier"
 end_test
 
 start_test "a deploy script that could not be read whole is never started"
-make_commit $Q "[$USERS,$LISTS]" "" 0.2.0
+make_commit $Q "[$USERS,$LISTS]"
 newer_script "$(script_of $Q)" q
 # git gives the first five lines and fails. Those would run, and write their
 # line into started.log.
@@ -1518,7 +1398,7 @@ run
 rm "$T/show-cut-short"
 expect_status 1
 expect_started ""
-expect_output "$(not_deployed $Q $FOR_SDK_2 "it could not be copied from $FRAMEWORK to $BASE/state/deploy-script.new") Look at that clone, and at the space left on the disk; $(with_the_installed_copy)"
+expect_output "$(not_deployed $Q "it could not be copied from $FRAMEWORK to $BASE/state/deploy-script.new") Look at that clone, and at the space left on the disk; $(with_the_installed_copy)"
 cmp -s "$BASE/state/deploy-script" "$(script_of $P)" || fail "state/deploy-script was replaced"
 [[ ! -e $BASE/state/deploy-script.new ]] || fail "what could be read of it was left under state/"
 [[ $(release_count) == "$releases" ]] || fail "a release was built"
@@ -1530,7 +1410,7 @@ start_test "a copy whose file under state/ was replaced after it started still k
 # deploy script where this copy was started from. A copy that compared itself
 # with that file would take itself for the newer script, and deploy the newer
 # commit with the older one.
-make_commit $R "[$USERS,$LISTS]" "" 0.2.0
+make_commit $R "[$USERS,$LISTS]"
 newer_script "$(script_of $R)" r
 cat >"$T/during-fetch" <<EOF
 #!/usr/bin/env bash
@@ -1556,7 +1436,7 @@ start_test "a run started in a folder that the deploy user may not enter deploys
 # folder: find cannot go back to such a folder when it is done, and ends
 # with an error although it found everything. The installed copy is started
 # there, and so is the copy it hands the run to.
-make_commit $X "[$USERS,$LISTS]" "" 0.2.0
+make_commit $X "[$USERS,$LISTS]"
 newer_script "$(script_of $X)" x
 mkdir "$T/closed"
 run_in=("$BASH" -c 'cd -- "$1" && chmod 000 . && shift && exec "$@"' _ "$T/closed")
@@ -1608,7 +1488,7 @@ fi
 start_test "with SELF_UPDATE=off a copy started by a name relative to the caller's folder still knows its own file at the end"
 # The work is done from /, where that name leads nowhere. The commit carries
 # the script under test, so there is nothing to install and nothing to say.
-make_commit $Y "[$USERS,$LISTS]" "" 0.2.0
+make_commit $Y "[$USERS,$LISTS]"
 write_config 5 SELF_UPDATE=off
 installed=./${script##*/}
 run_in=("$BASH" -c 'cd -- "$1" && shift && exec "$@"' _ "${script%/*}")
@@ -1624,7 +1504,7 @@ end_test
 
 # ---------------------------------------------------------------------------
 start_test "with SELF_UPDATE=off the installed copy deploys a commit that has no deploy script"
-make_commit $S "[$USERS,$LISTS]" "" 0.2.0
+make_commit $S "[$USERS,$LISTS]"
 rm "$(script_of $S)"
 write_config 5 SELF_UPDATE=off
 deploy
@@ -1654,7 +1534,7 @@ write_config 5
 end_test
 
 start_test "it says so too when a value, a missing tool or the database stops it, with what bash said of a script it cannot parse"
-make_commit $W "[$USERS,$LISTS]" "" 0.2.0
+make_commit $W "[$USERS,$LISTS]"
 printf 'if\n' >>"$(script_of $W)"
 # A value that a later deploy script may well take.
 write_config 5 KEEP_RELEASES=0
@@ -1728,7 +1608,7 @@ end_test
 start_test "an error in a copy that was handed the run names that copy's file with the line"
 # The newest commit's deploy script parses, and fails as it does the work.
 # The line counts in state/deploy-script, not in the installed copy.
-make_commit $V "[$USERS,$LISTS]" "" 0.2.0
+make_commit $V "[$USERS,$LISTS]"
 newer_script "$(script_of $V)" v 's/^pending_failure=""$/false/'
 run
 expect_status 1
@@ -1742,7 +1622,7 @@ start_test "a config file named relative to the caller's folder is found by the 
 # A run by hand. The copy that is handed the run reads the starter's
 # arguments from the folder the starter was started in, so a starter must
 # not change folder before it hands the run over.
-make_commit $Z "[$USERS,$LISTS]" "" 0.2.0
+make_commit $Z "[$USERS,$LISTS]"
 newer_script "$(script_of $Z)" z
 config=deploy.conf
 run_in=("$BASH" -c 'cd -- "$1" && shift && exec "$@"' _ "$T")
@@ -1760,7 +1640,7 @@ end_test
 start_test "a link left at state/deploy-script.new is replaced, never written through"
 # Written through it, the newest commit's deploy script would land where the
 # link leads, outside state/, over what is there.
-make_commit $AB "[$USERS,$LISTS]" "" 0.2.0
+make_commit $AB "[$USERS,$LISTS]"
 newer_script "$(script_of $AB)" ab
 echo "not the deploy script's to write" >"$T/elsewhere"
 ln -s "$T/elsewhere" "$BASE/state/deploy-script.new"
@@ -1809,7 +1689,7 @@ end_test
 start_test "a deploy script that can be neither written under state/ nor cleared away there leaves the run to the copy that found out, as far as the build"
 # state/ is closed to writing, with a file of an earlier run still at the
 # name: the copy cannot remove it before it writes, nor afterwards.
-make_commit $AC "[$USERS,$LISTS]" "" 0.2.0
+make_commit $AC "[$USERS,$LISTS]"
 newer_script "$(script_of $AC)" ac
 echo "left by an earlier run" >"$BASE/state/deploy-script.new"
 state_mode=$(stat -c %a "$BASE/state")
@@ -1820,7 +1700,7 @@ chmod "$state_mode" "$BASE/state"
 expect_status 1
 expect_started ""
 expect_no_output "unexpected error"
-expect_output "$(not_deployed $AC $FOR_SDK_2 "it could not be copied from $FRAMEWORK to $BASE/state/deploy-script.new") Look at that clone, and at the space left on the disk; $(with_the_installed_copy)"
+expect_output "$(not_deployed $AC "it could not be copied from $FRAMEWORK to $BASE/state/deploy-script.new") Look at that clone, and at the space left on the disk; $(with_the_installed_copy)"
 expect_output "Release $(current_release) is still the one in use."
 [[ $(release_count) == "$releases" ]] || fail "a release was built"
 [[ $(<"$BASE/state/deploy-script.new") == "left by an earlier run" ]] || fail "the file that could not be removed was written over"
@@ -1840,7 +1720,7 @@ start_test "with SELF_UPDATE=off the installed copy asks for no install of a rel
 # differs, such a script would end every run from then on.
 write_config 5 SELF_UPDATE=off
 # One that bash cannot parse.
-make_commit $AD "[$USERS,$LISTS]" "" 0.2.0
+make_commit $AD "[$USERS,$LISTS]"
 printf 'if\n' >>"$(script_of $AD)"
 deploy
 expect_status 0
@@ -1849,7 +1729,7 @@ expect_started ""
 expect_output "$(do_not_install)"
 expect_no_output "Install the new one"
 # An empty one.
-make_commit $AE "[$USERS,$LISTS]" "" 0.2.0
+make_commit $AE "[$USERS,$LISTS]"
 : >"$(script_of $AE)"
 deploy
 expect_status 0
@@ -1858,7 +1738,7 @@ expect_output "$(do_not_install)"
 expect_no_output "Install the new one"
 # A link, here to a script that works: no regular file, which is what a
 # hand-over asks for.
-make_commit $AF "[$USERS,$LISTS]" "" 0.2.0
+make_commit $AF "[$USERS,$LISTS]"
 newer_script "$FRAMEWORK/commits/$AF/deploy/the-script.sh" af
 rm "$(script_of $AF)"
 ln -s the-script.sh "$(script_of $AF)"
@@ -1872,43 +1752,39 @@ write_config 5
 end_test
 
 # ---------------------------------------------------------------------------
-start_test "APPS_REPO may name several repositories of mini-apps: each is fetched, linked and built in, and a commit of any is deployed"
-MORE=$T/more-stones
-mkdir -p "$MORE/commits"
-STONES=$MORE make_apps_commit $MORE_1 "^0.2.0" "" recipes
-make_commit $AG "[$USERS,$LISTS]" "" 0.2.0
-first_apps=$(<"$STONES/main")
-APPS=$STONES:$MORE
-write_config 5
+start_test "a config file that still names APPS_REPO deploys all the same, with no mini-apps, and says once that the setting is ignored"
+# Written for an earlier release, which built in the mini-apps of the clones
+# that APPS_REPO named. One such clone is still on the server, with a commit
+# of its own; the line also names one that is gone, and one by a relative
+# path, which an earlier release refused. Whatever it holds, it is ignored.
+OLD_APPS=$T/old-stones
+mkdir -p "$OLD_APPS/commits/$OLD_APPS_COMMIT"
+printf '# Mini-apps\n' >"$OLD_APPS/commits/$OLD_APPS_COMMIT/README.md"
+printf '%s\n' "$OLD_APPS_COMMIT" >"$OLD_APPS/main"
+make_commit $AG "[$USERS,$LISTS]"
+write_config 5 "APPS_REPO=$OLD_APPS:$T/no-such-clone:repos/more-apps"
+ignored="NOTE: APPS_REPO in $T/deploy.conf is ignored: a release holds no mini-apps from a repository any more, since every app is made in Hearth. The line can be deleted."
 deploy
 expect_status 0
-expect_output "New commits: framework ${AG:0:12}, mini-apps ${first_apps:0:12}+${MORE_1:0:12}."
-expect_output "Mini-apps in hearth-stones-2: $MORE at ${MORE_1:0:12}."
-expect_output "The build holds 2 mini-apps (notes, recipes)."
 expect_live a5a5a5a
-release_two=$(current_release)
-[[ $(fetches_of "$STONES") == 1 && $(fetches_of "$MORE") == 1 ]] || fail "not every repository of mini-apps was fetched once"
-expect_pnpm_call "hearth-stones: install --frozen-lockfile --offline --store-dir $BASE/pnpm-store"
-expect_pnpm_call "hearth-stones-2: install --frozen-lockfile --offline --store-dir $BASE/pnpm-store"
-expect_pnpm_call "hearth: build HEARTH_APPS_DIR=$BASE/releases/$release_two/hearth-stones:$BASE/releases/$release_two/hearth-stones-2"
-[[ $(sed -n 's/^apps=//p' "$BASE/current/RELEASE") == "$first_apps+$MORE_1" ]] || fail "RELEASE does not name the commit of every repository: $(sed -n 's/^apps=//p' "$BASE/current/RELEASE")"
-# Nothing new in any of them: nothing is built.
+expect_output "$ignored"
+[[ $(grep -c -F APPS_REPO "$T/out.log") == 1 ]] || fail "the run named APPS_REPO $(grep -c -F APPS_REPO "$T/out.log") times"
+# Nothing of the clone is fetched, copied into the release, linked or built in.
+[[ $(fetches_of "$OLD_APPS") == 0 ]] || fail "the clone that APPS_REPO names was fetched"
+[[ ! -e $BASE/current/hearth-stones ]] || fail "mini-apps were copied into the release"
+expect_no_pnpm_call "^hearth-stones"
+expect_pnpm_call "hearth: build"
+[[ $(sed -n 's/^apps=//p' "$BASE/current/RELEASE") == none ]] || fail "RELEASE names mini-apps: $(sed -n 's/^apps=//p' "$BASE/current/RELEASE")"
+# A run that finds nothing new says nothing, and nothing of this either,
+run HEARTH_DEPLOY_VERBOSE=
+expect_status 0
+[[ ! -s $T/out.log ]] || fail "the run said: $(<"$T/out.log")"
+# unless it is asked to say that it found nothing new.
 run
 expect_status 0
 expect_output "Nothing new: main is already deployed."
-# A commit of the second repository alone is a new release.
-STONES=$MORE make_apps_commit $MORE_2 "^0.2.0" "" recipes films
-deploy
-expect_status 0
-expect_output "The build holds 3 mini-apps (notes, films, recipes)."
-[[ $(current_release) != "$release_two" ]] || fail "\"current\" did not move"
-[[ $(sed -n 's/^apps=//p' "$BASE/current/RELEASE") == "$first_apps+$MORE_2" ]] || fail "RELEASE does not name the second repository's new commit"
-# One that git cannot use is named, and nothing is built.
-rm -r "$MORE/commits"
-run
-expect_status 1
-expect_output "ERROR: git cannot use $MORE (the mini-apps repository $MORE)."
-APPS=$STONES
+expect_output "$ignored"
+[[ $(grep -c -F APPS_REPO "$T/out.log") == 1 ]] || fail "the run named APPS_REPO $(grep -c -F APPS_REPO "$T/out.log") times"
 write_config 5
 end_test
 
@@ -1975,14 +1851,14 @@ EOF
   run
   expect_status 1
   expect_started ""
-  expect_output "$(not_deployed "$real_commit" none "deploy/hearth-deploy.sh is not a regular file in that commit")"
+  expect_output "$(not_deployed "$real_commit" "deploy/hearth-deploy.sh is not a regular file in that commit")"
 
   rm "$REAL/work/deploy/hearth-deploy.sh"
   commit_real "The deploy script is gone"
   run
   expect_status 1
   expect_started ""
-  expect_output "$(not_deployed "$real_commit" none "that commit has no deploy/hearth-deploy.sh")"
+  expect_output "$(not_deployed "$real_commit" "that commit has no deploy/hearth-deploy.sh")"
   [[ $(sed -n 's/^framework=//p' "$REAL/base/current/RELEASE") == "$first_commit" ]] ||
     fail "\"current\" moved"
 

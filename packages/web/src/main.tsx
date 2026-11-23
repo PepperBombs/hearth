@@ -2,8 +2,6 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { App } from "./app";
-import { BundledAppsProvider } from "./apps/bundled";
-import { apps } from "./apps/registry.generated.js";
 import { registerServiceWorker } from "./sw/register";
 import "./styles/index.css";
 
@@ -13,9 +11,7 @@ if (!root) throw new Error("index.html has no #root element");
 createRoot(root).render(
   <StrictMode>
     <BrowserRouter>
-      <BundledAppsProvider apps={apps}>
-        <App />
-      </BundledAppsProvider>
+      <App />
     </BrowserRouter>
   </StrictMode>,
 );

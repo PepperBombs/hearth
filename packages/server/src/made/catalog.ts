@@ -3,8 +3,8 @@
  * folder of `packages/server/catalog`, holding the `manifest.json` and the
  * `page.html` of an app made in Hearth. Anyone who may add apps to a space
  * adds one from the Apps page, as a made app of its own, which can then be
- * changed to fit; every install of the build's app of the same name moves to
- * it when the server starts (legacy.ts).
+ * changed to fit; every install of the app of the same name that releases
+ * before them left moves to it when the server starts (builtin.ts).
  *
  * The server only reads them: they are written by hand, packaged with the
  * release, and checked at start-up like any made app, so that a broken one

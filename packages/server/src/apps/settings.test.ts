@@ -1,19 +1,22 @@
 /**
  * An app's settings in one space (docs/mini-app-contract.md, sections A2, A6
  * and A8, and the owner's decision 5), through the two routes
- * `GET` and `PATCH /api/spaces/:spaceId/apps/:appId/settings` and as a
- * handler reads them in `ctx.settings`.
+ * `GET` and `PATCH /api/spaces/:spaceId/apps/:appId/settings`, which the
+ * settings dialog and an app's page (`hearth.settings()`) both use. A later
+ * release of an app is a later version of it (`changeMadeApp`), and going
+ * back is `restoreMadeVersion`.
  */
-import { defineApp, type Manifest } from "@hearth/sdk";
-import { defineServer, z, type Json } from "@hearth/sdk/server";
-import { apiErrorSchema, appCallResponseSchema, appSettingsSchema, type ApiErrorCode, type AppSettings } from "@hearth/shared";
+import { apiErrorSchema, appSettingsSchema, type ApiErrorCode, type AppSettings } from "@hearth/shared";
 import { beforeEach, describe, expect, it } from "vitest";
+import { changeMadeApp, madeAppsRegistry, restoreMadeVersion } from "../made/apps";
+import { madeManifestSchema, type MadeManifest } from "../made/manifest";
 import { as, testApp } from "../testing";
-import type { BundledApp } from "./registry";
-import { spaceSettingsFor } from "./settings";
-import { APPS, family, grant, install, KIM, LIN, NOA, NOW, SAM } from "./test-world";
+import { family, grant, install, KIM, LIN, makeApp, NOA, NOW, SAM, unreadable } from "./test-world";
 
 const BASE = "http://hearth.example.com";
+const PLANNER = "m-planner000";
+const PLAIN = "m-plain00000";
+const CHECKLIST = "m-checklist0";
 
 let world: ReturnType<typeof family>;
 let app: ReturnType<typeof testApp>["app"];
@@ -21,15 +24,14 @@ let errors: unknown[];
 
 /* -------------------------------------------------------------------------
  * A sample app with one setting of every type, some shared by the space and
- * some each person's own. Its two routes answer with the settings they got.
+ * some each person's own.
  * ---------------------------------------------------------------------- */
-const plannerManifest = defineApp({
-  id: "planner",
+const plannerManifest: MadeManifest = madeManifestSchema.parse({
   name: { en: "Planner", zh: "计划" },
   description: { en: "Plans the week's meals.", zh: "安排一周的饭菜。" },
   icon: "utensils",
   color: "amber",
-  widget: { size: "wide" },
+  collections: { meals: { fields: { name: { type: "text", required: true } } } },
   settings: {
     title: { type: "text", scope: "space", default: "This week", maxLength: 20, label: { en: "Title", zh: "标题" } },
     servings: {
@@ -76,66 +78,42 @@ const plannerManifest = defineApp({
   },
 });
 
-const planner = defineServer(plannerManifest, { meals: z.object({ name: z.string() }) });
-
-const plannerServer = planner.routes({
-  settings: planner.query({ description: "Answers with the settings a query is given." }, (ctx) => ctx.settings),
-  settingsOfChange: planner.mutation(
-    { description: "Answers with the settings a mutation is given." },
-    (ctx) => ctx.settings,
-  ),
-  spoil: planner.query({ description: "Changes the lists in its settings and answers with them." }, (ctx): Json => {
-    ctx.settings.courses.push("Spoilt");
-    ctx.settings.diets.push("vegan");
-    return { courses: ctx.settings.courses, diets: ctx.settings.diets };
-  }),
-});
-
-const PLANNER: BundledApp = { id: "planner", manifest: plannerManifest, hasPage: false, server: plannerServer };
-
 /** An app that declares no settings at all. */
-const PLAIN: BundledApp = {
-  id: "plain",
-  manifest: defineApp({
-    id: "plain",
-    name: { en: "Plain", zh: "朴素" },
-    description: { en: "Has no settings.", zh: "没有设置。" },
-    icon: "box",
-    color: "blue",
-    widget: { size: "small" },
-  }),
-  hasPage: false,
-};
-
-const ALL_APPS: readonly BundledApp[] = [...APPS, PLANNER, PLAIN];
+const plainManifest: MadeManifest = madeManifestSchema.parse({
+  name: { en: "Plain", zh: "朴素" },
+  description: { en: "Has no settings.", zh: "没有设置。" },
+  icon: "box",
+  color: "blue",
+  size: "small",
+  collections: { notes: { fields: { text: { type: "text" } } } },
+});
 
 const DEFAULTS: AppSettings = {
   space: { title: "This week", servings: 4, courses: ["Main"], firstDay: "monday" },
   user: { compact: false, diets: [], nickname: "" },
 };
 
-/** A server over the same database holding the given apps: what a deploy with other code is. */
-function serverWith(apps: readonly BundledApp[]) {
-  return testApp({ db: world.db, apps });
-}
-
-/** The planner as a later release might declare it: the same app with other settings. */
-function release(change: (settings: Record<string, unknown>) => void) {
+/**
+ * The planner as a later version of it declares its settings, made by Sam,
+ * as a change in the chat would make it. Returns what takes the app back to
+ * the version before, as an undo does.
+ */
+function release(change: (settings: Record<string, unknown>) => void): () => void {
   const settings: Record<string, unknown> = structuredClone(plannerManifest.settings ?? {});
   change(settings);
-  const manifest = { ...plannerManifest, settings } as unknown as Manifest;
-  const built = defineServer(manifest, { meals: z.object({ name: z.string() }) });
-  const server = built.routes({
-    settings: built.query({ description: "Answers with the settings a query is given." }, (ctx) => ctx.settings as Json),
-  });
-  return serverWith([...APPS, { id: "planner", manifest, hasPage: false, server }]).app;
+  const registry = madeAppsRegistry(world.db);
+  const request = { userId: world.sam.id, spaceId: world.family, appId: PLANNER, by: "person" as const };
+  const { previous } = changeMadeApp(world.db, registry, { ...request, manifest: { ...plannerManifest, settings }, note: "A later version" });
+  return () => {
+    restoreMadeVersion(world.db, registry, { ...request, version: previous });
+  };
 }
 
 beforeEach(() => {
   world = family();
-  ({ app, errors } = serverWith(ALL_APPS));
+  ({ app, errors } = testApp({ db: world.db }));
   // The family's planner, which members may view; Sam owns the family.
-  install(world.db, world.family, "planner", world.sam.id, { memberAccess: "view" });
+  makeApp(world.db, world.family, PLANNER, world.sam.id, { manifest: plannerManifest, memberAccess: "view" });
 });
 
 function call(who: string | null, method: string, path: string, body?: unknown, on = app) {
@@ -148,10 +126,10 @@ function call(who: string | null, method: string, path: string, body?: unknown, 
   });
 }
 
-const read = (who: string | null, spaceId: string, appId = "planner", on = app) =>
-  call(who, "GET", `/api/spaces/${spaceId}/apps/${appId}/settings`, undefined, on);
-const save = (who: string | null, spaceId: string, patch: unknown, appId = "planner", on = app) =>
-  call(who, "PATCH", `/api/spaces/${spaceId}/apps/${appId}/settings`, patch, on);
+const read = (who: string | null, spaceId: string, appId = PLANNER) =>
+  call(who, "GET", `/api/spaces/${spaceId}/apps/${appId}/settings`);
+const save = (who: string | null, spaceId: string, patch: unknown, appId = PLANNER) =>
+  call(who, "PATCH", `/api/spaces/${spaceId}/apps/${appId}/settings`, patch);
 
 /** The answer of a settings route that worked. Strict, so that nothing but the two groups may be in it. */
 async function settingsIn(response: Response): Promise<AppSettings> {
@@ -160,21 +138,13 @@ async function settingsIn(response: Response): Promise<AppSettings> {
   return appSettingsSchema.strict().parse(await response.json());
 }
 
-const settingsOf = async (who: string, spaceId: string, appId = "planner", on = app) =>
-  settingsIn(await read(who, spaceId, appId, on));
+const settingsOf = async (who: string, spaceId: string, appId = PLANNER) => settingsIn(await read(who, spaceId, appId));
 
 async function expectError(response: Response, status: number, code: ApiErrorCode): Promise<string> {
   expect(response.status).toBe(status);
   const { error } = apiErrorSchema.parse(await response.json());
   expect(error.code).toBe(code);
   return error.message;
-}
-
-/** What a handler finds in `ctx.settings`. */
-async function inHandler(who: string, spaceId: string, route = "settings", kind: "q" | "m" = "q", on = app) {
-  const response = await call(who, "POST", `/api/spaces/${spaceId}/apps/planner/${kind}/${route}`, {}, on);
-  expect(response.status).toBe(200);
-  return appCallResponseSchema.parse(await response.json()).output;
 }
 
 type Stored = {
@@ -192,7 +162,7 @@ const stored = () =>
   world.db.prepare("SELECT * FROM app_settings ORDER BY space_id, app_id, user_id").all() as Stored[];
 
 /** What is stored for one app in one space: the space's values under "space", each person's under their ID. */
-function storedFor(spaceId: string, appId = "planner"): Record<string, unknown> {
+function storedFor(spaceId: string, appId = PLANNER): Record<string, unknown> {
   return Object.fromEntries(
     stored()
       .filter((row) => row.space_id === spaceId && row.app_id === appId)
@@ -200,8 +170,8 @@ function storedFor(spaceId: string, appId = "planner"): Record<string, unknown> 
   );
 }
 
-/** Puts a settings object straight into the database, as an earlier release might have left it. */
-function leave(spaceId: string, userId: string | null, data: unknown, appId = "planner"): void {
+/** Puts a settings object straight into the database, as an earlier version of the app might have left it. */
+function leave(spaceId: string, userId: string | null, data: unknown, appId = PLANNER): void {
   world.db
     .prepare(
       `INSERT INTO app_settings (space_id, app_id, user_id, data, created_by, updated_by, updated_at)
@@ -223,22 +193,14 @@ describe("reading an app's settings", () => {
   });
 
   it("answers with two empty groups for an app that has no settings", async () => {
-    install(world.db, world.samsSpace, "plain", world.sam.id);
-    expect(await settingsOf(SAM, world.samsSpace, "plain")).toEqual({ space: {}, user: {} });
+    makeApp(world.db, world.samsSpace, PLAIN, world.sam.id, { manifest: plainManifest });
+    expect(await settingsOf(SAM, world.samsSpace, PLAIN)).toEqual({ space: {}, user: {} });
   });
 
   it("is open to someone who may only view the app", async () => {
     expect(await settingsOf(LIN, world.family)).toEqual(DEFAULTS);
   });
 
-  it("does not hand out the manifest's own lists", async () => {
-    await settingsOf(SAM, world.family);
-    expect(plannerManifest.settings?.courses.default).toEqual(["Main"]);
-    expect(await inHandler(SAM, world.family, "spoil")).toEqual({ courses: ["Main", "Spoilt"], diets: ["vegan"] });
-    expect(await inHandler(SAM, world.family, "spoil")).toEqual({ courses: ["Main", "Spoilt"], diets: ["vegan"] });
-    expect(plannerManifest.settings?.courses.default).toEqual(["Main"]);
-    expect(await settingsOf(SAM, world.family)).toEqual(DEFAULTS);
-  });
 });
 
 describe("saving a setting the space shares", () => {
@@ -258,7 +220,7 @@ describe("saving a setting the space shares", () => {
     await settingsIn(await save(SAM, world.family, { space: { title: "Next week" } }));
     expect(storedFor(world.family)).toEqual({ space: { title: "Next week" } });
     const [row] = stored();
-    expect(row).toMatchObject({ space_id: world.family, app_id: "planner", user_id: null, created_by: world.sam.id });
+    expect(row).toMatchObject({ space_id: world.family, app_id: PLANNER, user_id: null, created_by: world.sam.id });
   });
 
   it("changes only the settings that are named", async () => {
@@ -279,18 +241,18 @@ describe("saving a setting the space shares", () => {
   it("keeps a value that equals the default, so that a later default does not change it", async () => {
     await settingsIn(await save(SAM, world.family, { space: { servings: 4 } }));
     expect(storedFor(world.family)).toEqual({ space: { servings: 4 } });
-    const later = release((settings) => {
+    release((settings) => {
       (settings.servings as { default: number }).default = 2;
       (settings.title as { default: string }).default = "Meals";
     });
-    const settings = await settingsOf(SAM, world.family, "planner", later);
+    const settings = await settingsOf(SAM, world.family);
     expect(settings.space.servings).toBe(4);
     // What nobody saved follows the manifest.
     expect(settings.space.title).toBe("Meals");
   });
 
   it("records who saved first, who saved last and when", async () => {
-    grant(world.db, world.family, "planner", world.lin.id, "edit", world.sam.id);
+    grant(world.db, world.family, PLANNER, world.lin.id, "edit", world.sam.id);
     await settingsIn(await save(SAM, world.family, { space: { title: "Sam's" } }));
     const first = stored()[0];
     expect(first).toMatchObject({ created_by: world.sam.id, updated_by: world.sam.id });
@@ -304,7 +266,7 @@ describe("saving a setting the space shares", () => {
   });
 
   it("is allowed to a member with edit access, not only to owners", async () => {
-    grant(world.db, world.family, "planner", world.kim.id, "edit", world.sam.id);
+    grant(world.db, world.family, PLANNER, world.kim.id, "edit", world.sam.id);
     const answer = await settingsIn(await save(KIM, world.family, { space: { firstDay: "saturday" } }));
     expect(answer.space.firstDay).toBe("saturday");
     expect((await settingsOf(SAM, world.family)).space.firstDay).toBe("saturday");
@@ -361,7 +323,8 @@ describe("saving a person's own setting", () => {
   });
 
   it("holds for one space: the same person has other values for the same app elsewhere", async () => {
-    install(world.db, world.samsSpace, "planner", world.sam.id);
+    // The planner's ID in Sam's own space too, as the tables allow.
+    install(world.db, world.samsSpace, PLANNER, world.sam.id);
     await settingsIn(await save(SAM, world.family, { space: { title: "Family" }, user: { nickname: "Dad" } }));
     expect(await settingsOf(SAM, world.samsSpace)).toEqual(DEFAULTS);
 
@@ -378,11 +341,11 @@ describe("saving a person's own setting", () => {
 
   it("holds for one app: a setting of the same name in another app is another setting", async () => {
     // The checklist has a `hideDone` of each person's own and a shared `sections`.
-    install(world.db, world.family, "checklist", world.sam.id, { memberAccess: "view" });
-    await settingsIn(await save(SAM, world.family, { space: { sections: ["Home"] }, user: { hideDone: true } }, "checklist"));
+    makeApp(world.db, world.family, CHECKLIST, world.sam.id, { memberAccess: "view" });
+    await settingsIn(await save(SAM, world.family, { space: { sections: ["Home"] }, user: { hideDone: true } }, CHECKLIST));
     expect(await settingsOf(SAM, world.family)).toEqual(DEFAULTS);
-    expect(await settingsOf(SAM, world.family, "checklist")).toEqual({ space: { sections: ["Home"] }, user: { hideDone: true } });
-    expect(await settingsOf(LIN, world.family, "checklist")).toEqual({ space: { sections: ["Home"] }, user: { hideDone: false } });
+    expect(await settingsOf(SAM, world.family, CHECKLIST)).toEqual({ space: { sections: ["Home"] }, user: { hideDone: true } });
+    expect(await settingsOf(LIN, world.family, CHECKLIST)).toEqual({ space: { sections: ["Home"] }, user: { hideDone: false } });
     // And the planner does not take the checklist's names.
     await expectError(await save(SAM, world.family, { user: { hideDone: true } }), 400, "invalid_request");
   });
@@ -463,10 +426,10 @@ describe("a request that does not fit the app's manifest", () => {
   });
 
   it("refuses every name for an app without settings", async () => {
-    install(world.db, world.samsSpace, "plain", world.sam.id);
-    await expectError(await save(SAM, world.samsSpace, { space: { title: "x" } }, "plain"), 400, "invalid_request");
-    await expectError(await save(SAM, world.samsSpace, { user: { title: "x" } }, "plain"), 400, "invalid_request");
-    expect(await settingsIn(await save(SAM, world.samsSpace, {}, "plain"))).toEqual({ space: {}, user: {} });
+    makeApp(world.db, world.samsSpace, PLAIN, world.sam.id, { manifest: plainManifest });
+    await expectError(await save(SAM, world.samsSpace, { space: { title: "x" } }, PLAIN), 400, "invalid_request");
+    await expectError(await save(SAM, world.samsSpace, { user: { title: "x" } }, PLAIN), 400, "invalid_request");
+    expect(await settingsIn(await save(SAM, world.samsSpace, {}, PLAIN))).toEqual({ space: {}, user: {} });
     expect(stored()).toEqual([]);
   });
 
@@ -481,11 +444,11 @@ describe("an app that is not there for the person", () => {
   const patch = { user: { compact: true } };
 
   /** Reading and saving both answer 404, with the same words as any unknown address, and nothing is stored. */
-  async function expectNothingThere(who: string, spaceId: string, appId = "planner", on = app) {
+  async function expectNothingThere(who: string, spaceId: string, appId = PLANNER) {
     const messages = [
-      await expectError(await read(who, spaceId, appId, on), 404, "not_found"),
-      await expectError(await save(who, spaceId, patch, appId, on), 404, "not_found"),
-      await expectError(await save(who, spaceId, { space: { title: "x" } }, appId, on), 404, "not_found"),
+      await expectError(await read(who, spaceId, appId), 404, "not_found"),
+      await expectError(await save(who, spaceId, patch, appId), 404, "not_found"),
+      await expectError(await save(who, spaceId, { space: { title: "x" } }, appId), 404, "not_found"),
     ];
     const unknown = await expectError(await call(who, "GET", "/api/nothing/here"), 404, "not_found");
     expect(new Set([...messages, unknown]).size).toBe(1);
@@ -498,27 +461,32 @@ describe("an app that is not there for the person", () => {
   });
 
   it("answers 404 to a member the app is hidden from", async () => {
-    grant(world.db, world.family, "planner", world.lin.id, "none", world.sam.id);
+    grant(world.db, world.family, PLANNER, world.lin.id, "none", world.sam.id);
     await expectNothingThere(LIN, world.family);
     // Kim still follows what every member gets.
     expect(await settingsOf(KIM, world.family)).toEqual(DEFAULTS);
   });
 
   it("answers 404 for an app the space does not have, or that does not exist", async () => {
+    makeApp(world.db, world.samsSpace, PLAIN, world.sam.id, { manifest: plainManifest });
     await expectNothingThere(SAM, world.samsSpace);
-    await expectNothingThere(SAM, world.family, "journal");
+    await expectNothingThere(SAM, world.family, PLAIN);
+    await expectNothingThere(SAM, world.family, "m-journal000");
     await expectNothingThere(SAM, world.family, "no-such-app");
     await expectNothingThere(SAM, "no-such-space");
   });
 
   it("answers 404 for an app that was removed from the space, to its owner too", async () => {
-    world.db.prepare("UPDATE space_apps SET removed_at = ? WHERE app_id = 'planner'").run(NOW);
+    world.db.prepare("UPDATE space_apps SET removed_at = ? WHERE app_id = ?").run(NOW, PLANNER);
     await expectNothingThere(SAM, world.family);
   });
 
-  it("answers 404 for an app whose code the server no longer holds", async () => {
-    const without = serverWith(APPS).app;
-    await expectNothingThere(SAM, world.family, "planner", without);
+  it("answers 404 for an app the server no longer holds", async () => {
+    unreadable(world.db, PLANNER);
+    await expectNothingThere(SAM, world.family);
+    // Nor for an install a release before the built-in apps left, which could not move.
+    install(world.db, world.family, "grocery", world.sam.id, { memberAccess: "edit" });
+    await expectNothingThere(SAM, world.family, "grocery");
   });
 
   it("answers 401 to a request with no sign-in", async () => {
@@ -529,7 +497,7 @@ describe("an app that is not there for the person", () => {
 
   it("answers 404 to other methods on the address", async () => {
     for (const method of ["PUT", "POST", "DELETE"]) {
-      await expectError(await call(SAM, method, `/api/spaces/${world.family}/apps/planner/settings`, {}), 404, "not_found");
+      await expectError(await call(SAM, method, `/api/spaces/${world.family}/apps/${PLANNER}/settings`, {}), 404, "not_found");
     }
   });
 });
@@ -538,27 +506,26 @@ describe("what was saved, read against the manifest as it is today", () => {
   it("drops values under names the manifest does not declare", async () => {
     leave(world.family, null, { title: "Kept", theme: "dark", toString: "x" });
     leave(world.family, world.sam.id, { nickname: "Sam", fontSize: 12 });
-    const expected = {
+    expect(await settingsOf(SAM, world.family)).toEqual({
       space: { ...DEFAULTS.space, title: "Kept" },
       user: { ...DEFAULTS.user, nickname: "Sam" },
-    };
-    expect(await settingsOf(SAM, world.family)).toEqual(expected);
-    expect(await inHandler(SAM, world.family)).toEqual({ ...expected.space, ...expected.user });
+    });
   });
 
-  it("drops a setting that a later release no longer has, and finds it again when it returns", async () => {
+  it("drops a setting that a later version no longer has, and finds it again when it returns", async () => {
     await settingsIn(await save(SAM, world.family, { space: { title: "Ours", servings: 6 } }));
-    const later = release((settings) => {
+    const back = release((settings) => {
       delete settings.servings;
     });
-    const answer = await settingsOf(SAM, world.family, "planner", later);
+    const answer = await settingsOf(SAM, world.family);
     expect(answer.space).toEqual({ title: "Ours", courses: ["Main"], firstDay: "monday" });
-    await expectError(await save(SAM, world.family, { space: { servings: 8 } }, "planner", later), 400, "invalid_request");
+    await expectError(await save(SAM, world.family, { space: { servings: 8 } }), 400, "invalid_request");
 
-    // Saving something else under the later release leaves the value where it is...
-    await settingsIn(await save(SAM, world.family, { space: { title: "Still ours" } }, "planner", later));
+    // Saving something else under the later version leaves the value where it is...
+    await settingsIn(await save(SAM, world.family, { space: { title: "Still ours" } }));
     expect(storedFor(world.family)).toEqual({ space: { title: "Still ours", servings: 6 } });
-    // ...so the release before it, put back, still has it.
+    // ...so the version before it, put back, still has it.
+    back();
     expect((await settingsOf(SAM, world.family)).space).toEqual({ ...DEFAULTS.space, title: "Still ours", servings: 6 });
   });
 
@@ -577,7 +544,6 @@ describe("what was saved, read against the manifest as it is today", () => {
     });
     leave(world.family, world.sam.id, { compact: "yes", nickname: 7, diets: "vegan" });
     expect(await settingsOf(SAM, world.family)).toEqual(DEFAULTS);
-    expect(await inHandler(SAM, world.family)).toEqual({ ...DEFAULTS.space, ...DEFAULTS.user });
     expect(errors).toEqual([]);
   });
 
@@ -593,23 +559,26 @@ describe("what was saved, read against the manifest as it is today", () => {
 
   it("falls back to the default when the option someone chose is gone", async () => {
     await settingsIn(await save(SAM, world.family, { space: { firstDay: "saturday" } }));
-    const later = release((settings) => {
+    const back = release((settings) => {
       delete (settings.firstDay as { options: Record<string, unknown> }).options.saturday;
     });
-    expect((await settingsOf(SAM, world.family, "planner", later)).space.firstDay).toBe("monday");
-    expect((await inHandler(SAM, world.family, "settings", "q", later)) as { firstDay: string }).toMatchObject({
-      firstDay: "monday",
-    });
+    expect((await settingsOf(SAM, world.family)).space.firstDay).toBe("monday");
+    expect((await settingsOf(LIN, world.family)).space.firstDay).toBe("monday");
+    // The stored choice is as it was, and counts again once the option is back.
+    expect(storedFor(world.family)).toEqual({ space: { firstDay: "saturday" } });
+    back();
+    expect((await settingsOf(SAM, world.family)).space.firstDay).toBe("saturday");
   });
 
   it("keeps what is left of a multi-select when one of its options is gone", async () => {
     await settingsIn(await save(SAM, world.family, { user: { diets: ["kosher", "halal", "vegan"] } }));
-    const later = release((settings) => {
+    const back = release((settings) => {
       delete (settings.diets as { options: Record<string, unknown> }).options.halal;
     });
-    expect((await settingsOf(SAM, world.family, "planner", later)).user.diets).toEqual(["kosher", "vegan"]);
+    expect((await settingsOf(SAM, world.family)).user.diets).toEqual(["kosher", "vegan"]);
     // The stored choice is as it was, for the day the option returns.
     expect(storedFor(world.family)).toEqual({ [world.sam.id]: { diets: ["kosher", "halal", "vegan"] } });
+    back();
     expect((await settingsOf(SAM, world.family)).user.diets).toEqual(["kosher", "halal", "vegan"]);
   });
 
@@ -630,74 +599,10 @@ describe("what was saved, read against the manifest as it is today", () => {
   });
 });
 
-describe("ctx.settings", () => {
-  const all = { ...DEFAULTS.space, ...DEFAULTS.user };
-
-  it("holds every declared setting by name, with its default while nothing is saved", async () => {
-    expect(await inHandler(SAM, world.family)).toEqual(all);
-  });
-
-  it("holds the space's values and the caller's own", async () => {
-    await settingsIn(await save(SAM, world.family, { space: { title: "Ours", servings: 6 }, user: { nickname: "Sam", compact: true } }));
-    await settingsIn(await save(LIN, world.family, { user: { nickname: "Lin", diets: ["vegan"] } }));
-
-    expect(await inHandler(SAM, world.family)).toEqual({ ...all, title: "Ours", servings: 6, nickname: "Sam", compact: true });
-    expect(await inHandler(LIN, world.family)).toEqual({ ...all, title: "Ours", servings: 6, nickname: "Lin", diets: ["vegan"] });
-    expect(await inHandler(KIM, world.family)).toEqual({ ...all, title: "Ours", servings: 6 });
-  });
-
-  it("is the same in a mutation", async () => {
-    await settingsIn(await save(SAM, world.family, { space: { firstDay: "sunday" }, user: { compact: true } }));
-    expect(await inHandler(SAM, world.family, "settingsOfChange", "m")).toEqual({ ...all, firstDay: "sunday", compact: true });
-  });
-
-  it("is the settings of this space only", async () => {
-    install(world.db, world.samsSpace, "planner", world.sam.id);
-    await settingsIn(await save(SAM, world.family, { space: { title: "Family" }, user: { nickname: "Dad" } }));
-    expect(await inHandler(SAM, world.samsSpace)).toEqual(all);
-    expect(await inHandler(SAM, world.family)).toEqual({ ...all, title: "Family", nickname: "Dad" });
-  });
-
-  it("gives a handler lists it may change without changing what is saved", async () => {
-    await settingsIn(await save(SAM, world.family, { space: { courses: ["Soup"] }, user: { diets: ["halal"] } }));
-    const spoilt = { courses: ["Soup", "Spoilt"], diets: ["halal", "vegan"] };
-    expect(await inHandler(SAM, world.family, "spoil")).toEqual(spoilt);
-    expect(await inHandler(SAM, world.family, "spoil")).toEqual(spoilt);
-    expect(await inHandler(SAM, world.family)).toEqual({ ...all, courses: ["Soup"], diets: ["halal"] });
-  });
-});
-
-describe("a job's settings (spaceSettingsFor)", () => {
-  const forJob = (spaceId = world.family) => spaceSettingsFor(world.db, { spaceId, appId: "planner" }, plannerManifest);
-
-  it("are the settings of the space alone, by name, with defaults where nothing was saved", async () => {
-    expect(forJob()).toEqual(DEFAULTS.space);
-    await settingsIn(await save(SAM, world.family, { space: { title: "Ours", servings: 6 }, user: { nickname: "Sam", compact: true } }));
-    await settingsIn(await save(LIN, world.family, { user: { nickname: "Lin" } }));
-    // Nobody's own: a job runs for no one, so the settings of each person are not there at all.
-    expect(forJob()).toEqual({ ...DEFAULTS.space, title: "Ours", servings: 6 });
-  });
-
-  it("are read against the manifest as the routes read them", () => {
-    leave(world.family, null, { title: "x".repeat(21), servings: 6, nickname: "Everyone", theme: "dark" });
-    leave(world.family, world.sam.id, { title: "Mine", firstDay: "sunday" });
-    expect(forJob()).toEqual({ ...DEFAULTS.space, servings: 6 });
-  });
-
-  it("are this space's only, and new lists each time", async () => {
-    install(world.db, world.samsSpace, "planner", world.sam.id);
-    await settingsIn(await save(SAM, world.family, { space: { courses: ["Soup"] } }));
-    expect(forJob(world.samsSpace)).toEqual(DEFAULTS.space);
-    const first = forJob();
-    (first.courses as string[]).push("Spoilt");
-    expect(forJob().courses).toEqual(["Soup"]);
-  });
-});
-
 describe("settings and the life of an app in a space", () => {
   const add = (who: string, spaceId: string, body: unknown = {}) =>
-    call(who, "PUT", `/api/spaces/${spaceId}/apps/planner`, body);
-  const remove = (who: string, spaceId: string) => call(who, "DELETE", `/api/spaces/${spaceId}/apps/planner`);
+    call(who, "PUT", `/api/spaces/${spaceId}/apps/${PLANNER}`, body);
+  const remove = (who: string, spaceId: string) => call(who, "DELETE", `/api/spaces/${spaceId}/apps/${PLANNER}`);
 
   it("come back with the app when it was removed and is added again", async () => {
     await settingsIn(await save(SAM, world.family, { space: { title: "Ours" }, user: { nickname: "Sam" } }));
@@ -713,21 +618,23 @@ describe("settings and the life of an app in a space", () => {
     expect((await settingsOf(LIN, world.family)).user.nickname).toBe("Lin");
   });
 
-  it("are gone for good once the app's data is deleted", async () => {
+  it("are gone for good once the app's data is deleted, with the app itself", async () => {
     await settingsIn(await save(SAM, world.family, { space: { title: "Ours" }, user: { nickname: "Sam" } }));
     await settingsIn(await save(LIN, world.family, { user: { nickname: "Lin" } }));
     expect((await remove(SAM, world.family)).status).toBe(204);
-    const gone = await call(SAM, "DELETE", `/api/spaces/${world.family}/apps/planner/data`, { confirm: "planner" });
+    const gone = await call(SAM, "DELETE", `/api/spaces/${world.family}/apps/${PLANNER}/data`, { confirm: PLANNER });
     expect(gone.status).toBe(204);
     expect(stored()).toEqual([]);
+    await expectError(await add(SAM, world.family, { memberAccess: "view" }), 404, "not_found");
 
-    expect((await add(SAM, world.family, { memberAccess: "view" })).status).toBe(204);
+    // An app made there again, even under the same ID, finds nothing of before.
+    makeApp(world.db, world.family, PLANNER, world.sam.id, { manifest: plannerManifest, memberAccess: "view" });
     expect(await settingsOf(SAM, world.family)).toEqual(DEFAULTS);
     expect(await settingsOf(LIN, world.family)).toEqual(DEFAULTS);
   });
 
   it("of a person go with the person when they leave the space; the space's stay", async () => {
-    grant(world.db, world.family, "planner", world.lin.id, "edit", world.sam.id);
+    grant(world.db, world.family, PLANNER, world.lin.id, "edit", world.sam.id);
     await settingsIn(await save(LIN, world.family, { space: { title: "Lin's title" }, user: { nickname: "Lin" } }));
     world.db.prepare("DELETE FROM space_members WHERE space_id = ? AND user_id = ?").run(world.family, world.lin.id);
     expect(storedFor(world.family)).toEqual({ space: { title: "Lin's title" } });

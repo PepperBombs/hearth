@@ -38,8 +38,7 @@ const session: Session = {
     { id: "w", kind: "group", name: "Work", role: "owner", canAddApps: true, assistant: "none", members: [me] },
   ],
   apps: [
-    // The personal space has a widget and nothing to open.
-    app("feed", "p", { hasPage: false }),
+    app("feed", "p"),
     app("grocery", "f"),
     // The book club's one app is switched off: for this person it has none.
     app("notes", "b", { enabled: false }),
@@ -92,13 +91,12 @@ describe("the sidebar", () => {
     expect(current(within(sidebar()).getByRole("link", { name: "Apps" }))).toBe(false);
   });
 
-  it("says a space has no apps only when it has none switched on, and says so of widgets that have no page", () => {
+  it("says a space has no apps only when it has none switched on", () => {
     renderShell();
     const section = (name: string) => within(sidebar()).getByRole("region", { name });
 
+    expect(within(section("Personal")).getByRole("link", { name: "Feed" })).toBeTruthy();
     expect(within(section("Personal")).queryByText("No apps yet")).toBeNull();
-    expect(within(section("Personal")).getByText("Widgets only, on the dashboard")).toBeTruthy();
-    expect(within(section("Personal")).queryByRole("link")).toBeNull();
 
     expect(within(section("Family")).getByRole("link", { name: "Grocery" })).toBeTruthy();
     expect(within(section("Family")).queryByText("No apps yet")).toBeNull();
@@ -113,6 +111,6 @@ describe("the sidebar", () => {
     renderShell({ ...session, user: { ...session.user, locale: "zh" } });
     const nav = screen.getByRole("navigation", { name: "主导航" });
     expect(within(nav).getByRole("link", { name: "应用" }).getAttribute("href")).toBe("/apps");
-    expect(within(within(nav).getByRole("region", { name: "个人" })).getByText("仅小组件，显示在仪表盘上")).toBeTruthy();
+    expect(within(within(nav).getByRole("region", { name: "Work" })).getByText("还没有应用")).toBeTruthy();
   });
 });

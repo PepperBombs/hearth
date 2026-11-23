@@ -9,11 +9,12 @@ handing each run over to the newest copy of itself (step 5) came later and
 has run there too, on its ordinary path: the one-time install, and one
 release that was handed to its own script and deployed by it. What it does
 when something is wrong (a commit whose script is broken, a fetch that
-fails, `SELF_UPDATE=off`) has run only in its tests. Scheduled jobs and
-what they fetch from outside also came later, and run there too: GitHub
-Trending's job runs on that server and reaches GitHub. How a real host's
-rate limits and slow or partial answers are handled has run only against
-stand-ins. Expect details to differ on yours, and correct them here.
+fails, `SELF_UPDATE=off`) has run only in its tests. Releases then also
+held mini-apps built in from a second repository, `hearth-stones`, and ran
+their scheduled jobs, GitHub Trending's reaching GitHub; both went in
+November 2026, when every app became one made in Hearth
+(`docs/platform.md`). Expect details to differ on yours, and correct them
+here.
 
 Everything personal (your domain, email address, secrets) stays on the server
 and never goes into a repository.
@@ -38,67 +39,30 @@ sudo chmod 700 /var/lib/hearth
 inside it. The service also creates its files there readable by that user
 only (`UMask=0077` in `hearth.service`).
 
-## 3. Check out the repositories side by side
+## 3. Check out the repository
 
 ```sh
 sudo -u hearth git clone https://github.com/YOUR-ORG/hearth.git /opt/hearth/repos/hearth
-sudo -u hearth git clone https://github.com/YOUR-ORG/hearth-stones.git /opt/hearth/repos/hearth-stones
 ```
 
-`hearth-data` is private and is only needed once notes exist; it will need a
-deploy key with write access.
+`hearth-data` is private and is only needed once notes exist; it will go
+beside this one, and will need a deploy key with write access.
 
-Which mini-apps a release holds is decided when the release is built: the
-deploy script copies `main` of `hearth-stones` (`APPS_REPO` in
-`deploy.conf`) into the release beside the framework, links it to that
-release's SDK with `pnpm install --offline` (its lockfile holds nothing but
-that link, so nothing is downloaded) and builds the two together. There is
-no setting for it in `hearth.env`: an older one may still have a
-`HEARTH_APPS_DIR` line, which the server ignores and you can delete. With
-`APPS_REPO` empty, releases hold no mini-apps: they disappear from the site,
-and their data stays in the database until they come back.
+A release is this repository alone. Every app is made in Hearth and kept
+in the database, the ones Hearth ships among them (`docs/platform.md`), so
+nothing else is checked out or built in.
 
-### Mini-apps from other repositories
-
-Mini-apps need not live in `hearth-stones`. Any repository shaped like it
-(`packages/sdk/README.md`, "A repository of mini-apps") can be built in
-beside it: a private one of your own, or one that somebody else wrote. Clone
-it next to the others and name it in `APPS_REPO`, after a colon:
-
-```sh
-sudo -u hearth git clone https://github.com/SOMEONE/more-apps.git /opt/hearth/repos/more-apps
-```
-
-```
-APPS_REPO=/opt/hearth/repos/hearth-stones:/opt/hearth/repos/more-apps
-```
-
-The next run builds a release that holds the apps of every repository named,
-and from then on a push to `main` of any of them is deployed like a push to
-`hearth-stones`. The apps are added to a space on the Apps page like any
-other. Take a repository out of the line and the next release is built
-without its apps; their data stays in the database, as above.
-
-- **Name only repositories you trust.** A mini-app's code runs inside the
-  Hearth server and can do whatever the service can: the checks of the build
-  catch mistakes, not ill will. And the deploy follows `main`, so whoever
-  may push there changes what your server runs within a minute. For a
-  repository that is not yours, clone a fork of your own, and merge its
-  author's changes into the fork once you have read them.
-- **No two apps may have the same ID**, which is the name of an app's
-  folder, in all the repositories together: the build stops, and the release
-  that runs stays.
-- **Every repository must fit the framework's SDK** (`hearth.sdk` in its
-  `package.json`). One that lags behind holds every release back ("When a
-  deployment fails", below): update it, or take it out of `APPS_REPO` until
-  it is.
-- A private repository needs a deploy key that lets the `hearth` user read
-  it. Every clone is fetched from the same `REMOTE` and `BRANCH`.
-- In a release, the first repository of the line lies in the folder
-  `hearth-stones`, the second in `hearth-stones-2`, and so on: those are the
-  names an error of the build uses. With `SELF_UPDATE=off`, install the
-  deploy script again (step 5) before naming a second repository: a copy
-  from before this takes the whole line for one clone.
+A server set up before November 2026 built every release with the
+mini-apps of `hearth-stones` and of any other repository that `APPS_REPO`
+in `deploy.conf` named. The deploy now ignores that line, says so once
+when it builds a release, and fetches none of those clones: delete the
+line, then the clones it named. In `hearth.env`, `HEARTH_APPS_DIR` and
+`HEARTH_JOBS` lines are read no more either, and can go. If installs of
+the grocery list, Ideas or GitHub Trending of those releases are still
+left, the server moves each to the built-in app of the same name when it
+starts, with its data, settings and access, and its log says so. The apps
+of any other repository disappear from the site, and their data stays in
+the database.
 
 ## 4. Write the settings
 
@@ -112,11 +76,9 @@ Edit `/etc/hearth/hearth.env`: your email address as owner, and the two
 Cloudflare values from step 6. Leave `HEARTH_AUTH=cloudflare-access` as it
 is: `dev` signs nobody in and is for a developer's own machine only.
 
-The mini-apps' jobs run in the server (GitHub Trending's hourly searches of
-`api.github.com`), and they are what connects to outside hosts; see "What
-the server connects to" below. `HEARTH_JOBS=off` in
-`hearth.env` stops every job, and with it every such connection: the apps
-show what their last runs left.
+A built-in app may fetch from hosts outside, through the server, while
+someone has it open (GitHub Trending searches `api.github.com`); see "What
+the server connects to" below.
 
 Set `HEARTH_SECRET` in `hearth.env` (`openssl rand -base64 32`): it seals
 the key each person gives for their own model (docs/platform.md), and
@@ -124,9 +86,9 @@ without it the chat cannot keep one. Keep it safe and keep it the same: a
 new secret makes every saved key unreadable. Never set
 `HEARTH_MODEL_STANDIN` on a server; Hearth refuses it outside dev mode.
 
-Never set `HEARTH_FETCH_STANDINS` on a server: it answers every job from a
-file of made-up answers, for end-to-end tests, and the server refuses it
-unless sign-in is switched off.
+Never set `HEARTH_FETCH_STANDINS` on a server: it answers every app's
+fetch from a file of made-up answers, for end-to-end tests, and the server
+refuses it unless sign-in is switched off.
 
 `/etc/hearth/deploy.conf` works as it is for the layout in this guide. If you
 move the database (`HEARTH_DB` in `hearth.env`), give `DATABASE` in
@@ -213,11 +175,8 @@ the old copy stops on one:
 sudo install -m 755 /usr/local/bin/hearth-deploy.old /usr/local/bin/hearth-deploy
 ```
 
-Until the new copy is installed, a copy from before mini-apps were built in
-keeps building every release without them, and a copy from before jobs
-existed starts the trial of a new release with its jobs on, so that for the
-seconds the trial lasts they run against the copy of the database and may
-fetch from outside.
+Until the new copy is installed, the old one does every run itself, by
+what it knew on the day it was installed.
 
 `SELF_UPDATE=off` in `/etc/hearth/deploy.conf` switches the hand-over off.
 The installed copy then does all the work itself, as it used to, and the
@@ -259,8 +218,8 @@ Two things to know before you write that line:
   the release that is running is the one that holds it. The running
   release's script is the last one that worked, with one exception. A
   script whose fault shows only after it has deployed its own commit (when
-  it finds nothing new, tidies up, finishes a restart, or when only the
-  mini-apps change) is the script of the running release itself. Then take
+  it finds nothing new, tidies up or finishes a restart) is the script of
+  the running release itself. Then take
   the script of the release before it: `sudo ls /opt/hearth/releases` lists
   the releases that are kept, oldest first, and each holds
   `hearth/deploy/hearth-deploy.sh`.
@@ -312,11 +271,9 @@ journalctl -u hearth-deploy.service -n 50
 sudo systemctl enable --now hearth-deploy.timer
 ```
 
-The first run builds a release, with the mini-apps of `hearth-stones` in it,
-tries it on a spare port, points `/opt/hearth/current` at it and starts the
-service. The journal names the mini-apps the release holds ("The build holds
-..."). After that, every push to `main` of either repository is picked up
-within about a minute.
+The first run builds a release, tries it on a spare port, points
+`/opt/hearth/current` at it and starts the service. After that, every push
+to `main` is picked up within about a minute.
 
 ### When a deployment fails
 
@@ -326,36 +283,18 @@ build output is in `/opt/hearth/logs`.
 - **The build or the trial start fails.** The running release is untouched.
   The trial start runs against a copy of the database (`DATABASE` in
   `/etc/hearth/deploy.conf`), so a migration that fails on your real data
-  fails here. The same commits are tried again after `RETRY_AFTER_MINUTES`.
-- **The mini-apps were written for another version of the SDK.** The build
-  stops at once, and the lines after the error name the version each side
-  has. The running release is untouched. This is expected between merging a
-  new SDK version into `hearth` and the matching change into
-  `hearth-stones` (in either order): the same commits are not built again,
-  and the next commit of either repository is built at once. To deploy a
-  framework fix before the two match, empty `APPS_REPO` in `deploy.conf`
-  for a while, or take out of it the one repository that lags, at the cost
-  described in step 3.
-- **The mini-apps cannot be linked to the SDK.** `pnpm install --offline`
-  failed in the release's copy of a mini-apps repository (the error names
-  the folder: `hearth-stones` is the first of `APPS_REPO`), for example
-  because its
-  `pnpm-lock.yaml` is out of date or names a package the server does not
-  already have: it must hold nothing but the link to the SDK. Fix it there.
-  The running release is untouched, and the same commits are tried again
-  after `RETRY_AFTER_MINUTES`.
+  fails here. The same commit is tried again after `RETRY_AFTER_MINUTES`.
 - **A commit's deploy script is missing or broken.** Each commit is
   deployed by its own `deploy/hearth-deploy.sh` (step 5). If the newest
   framework commit has none, or it is empty, or bash cannot parse it, the
   installed copy does the run itself as far as the build: it still clears
   away what an interrupted run left and finishes a restart that is pending.
-  Then the journal says that the newest commits "are not deployed: the
-  deploy script of that framework commit cannot carry out the run", and
-  why. The running release is untouched. Push a commit that puts the script
+  Then the journal says that the newest commit is not deployed, since its
+  deploy script "cannot carry out the run", and why. The running release is untouched. Push a commit that puts the script
   right: the run is handed to it and it is deployed at once. Or set
   `SELF_UPDATE=off` in `/etc/hearth/deploy.conf` to deploy with the
   installed copy, after installing the script of the running release in its
-  place (step 5): the same commits are tried again after
+  place (step 5): the same commit is tried again after
   `RETRY_AFTER_MINUTES`, or at once when you delete
   `/opt/hearth/state/failed`. The release that is then deployed holds the
   broken script, so do not install the script of that release; the journal
@@ -375,8 +314,8 @@ build output is in `/opt/hearth/logs`.
   install the script of the running release first.
 - **A commit's deploy script can be parsed but does not work.** Every run
   is handed to it, so while that commit is the newest, nothing a run does
-  happens: nothing is deployed, newer mini-apps included, and a restart
-  that is pending is not finished. If the script fails, its own error is in
+  happens: nothing is deployed, and a restart that is pending is not
+  finished. If the script fails, its own error is in
   the journal at every run, with the file it counts lines in
   (`/opt/hearth/state/deploy-script`). If it ends without an error, the
   journal says nothing at all, and the only sign is that pushes are no
@@ -395,9 +334,9 @@ build output is in `/opt/hearth/logs`.
   `current` at the previous release and starts it. The database has to go
   back because an older build refuses a database that a newer build has
   migrated. What the failed release left is kept beside the database as
-  `hearth-deploy-failed-<release>.db`. These commits are not tried again by
-  themselves, because every try interrupts the site: push a fix, or delete
-  `/opt/hearth/state/failed` to try the same commits once more.
+  `hearth-deploy-failed-<release>.db`. That commit is not tried again by
+  itself, because every try interrupts the site: push a fix, or delete
+  `/opt/hearth/state/failed` to try the same commit once more.
 - **The previous release does not come back either.** `current` points at
   it and the note `/opt/hearth/state/restart-pending` stays. Later runs
   restart the service up to three times, and keep fetching: a newer commit on
@@ -442,25 +381,25 @@ request to it. It makes these connections itself:
 
 - **Cloudflare Access**, for the public keys that sign each request's
   identity (`https://your-team.cloudflareaccess.com/cdn-cgi/access/certs`).
-- **The hosts the mini-apps name**, from their jobs alone. Each app lists in
-  its manifest the hosts its jobs fetch from, and the Apps page names them
-  when someone adds the app ("Fetches data from api.github.com on its
-  own."). GitHub Trending, in `hearth-stones`, uses `api.github.com`: once
-  an hour in each space it is in, three searches, and three more for each
-  language the space follows. Every request is
-  a GET over https that says it is from Hearth (`User-Agent: Hearth`) and
-  carries nothing of anyone's: no cookie, no sign-in. Requests to one host
-  start at least 6.5 seconds apart across the whole server, which keeps
-  every space's apps together within GitHub's limit of 10 searches a minute
-  for an address without a token. `HEARTH_JOBS=off` in `hearth.env` stops
-  them all; the deploy's trial start always runs with it, so a release on
-  trial fetches nothing.
+- **The hosts the built-in apps name**, when an app's page asks the server
+  to fetch from one (`hearth.fetch`). A built-in app lists in its manifest
+  the hosts it fetches from, and the Apps page names them when someone adds
+  it ("Fetches data from api.github.com on its own."); an app a person's
+  model makes names none. GitHub Trending uses `api.github.com`: when
+  someone who may edit it opens it and its lists are more than an hour old,
+  or presses "Refresh now", three searches, and three more for each
+  language the space follows. Every request is a GET over https that says
+  it is from Hearth (`User-Agent: Hearth`) and carries nothing of anyone's:
+  no cookie, no sign-in. Requests to one host start at least 6.5 seconds
+  apart across the whole server, which keeps every space's apps together
+  within GitHub's limit of 10 searches a minute for an address without a
+  token. Nothing is fetched without a page open in someone's browser, so a
+  release on trial fetches nothing.
 - **Each person's own model**, when they use the chat (docs/platform.md):
   the address they gave in Settings, which must be https on a public name,
   with their own key. What it is sent is the conversation, a description of
   the apps made in that space, and the rows the model asks to read there.
 
 `cloudflared` connects to Cloudflare to carry the tunnel. The deploy script
-fetches the repositories from their remotes (GitHub) and, for each release
-it builds, installs the framework's packages from the npm registry; the
-mini-apps' install is offline.
+fetches the framework from its remote (GitHub) and, for each release it
+builds, installs its packages from the npm registry.

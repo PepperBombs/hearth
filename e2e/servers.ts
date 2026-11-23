@@ -1,7 +1,6 @@
 /**
- * The addresses the end-to-end tests use. Shared by playwright.config.ts
- * and playwright.mini-apps.config.ts, which start the servers, and by the
- * tests that need a second address.
+ * The addresses the end-to-end tests use. Shared by playwright.config.ts,
+ * which starts the servers, and by the tests that need a second address.
  */
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,21 +37,13 @@ export const SHARED_DB_DIR = join(tmpdir(), `hearth-e2e-${base}`);
 export const SHARED_DB = join(SHARED_DB_DIR, "hearth.db");
 
 /**
- * The stand-in answers for every `ctx.fetch` of the owner's and the
- * member's copies, which run their apps' jobs (HEARTH_FETCH_STANDINS): one
- * file for both, beside their database, so that it goes when the owner's
- * copy starts. Until a test writes it with `writeStandIns`, every request a
- * job makes fails as the network would.
+ * The stand-in answers for every fetch an app makes through the server
+ * (`hearth.fetch`, HEARTH_FETCH_STANDINS), in every copy: one file, beside
+ * the owner's and the member's database, so that it goes when the owner's
+ * copy starts. Until a test writes it with `writeStandIns`, every such
+ * fetch fails as the network would, so no app reaches the hosts it names.
  */
 export const STAND_INS = join(SHARED_DB_DIR, "stand-ins.json");
-
-/**
- * The mini-apps both builds hold: the framework's own sample apps. A plain
- * `pnpm build` holds none; the end-to-end tests build with these so that the
- * whole path is tried, from an app's folder to a server that answers for it
- * and a web app that carries its widget.
- */
-export const APPS_DIR = "packages/fixture-apps";
 
 /** Shown as the build version by every copy. */
 export const SERVER_VERSION = "e2e";
@@ -65,12 +56,11 @@ export const WITH_REAL_SERVER = process.env.HEARTH_E2E_SERVER !== "0";
  * web app, with sign-in switched off: every request it answers is from
  * `devUser`. The server's owner is always OWNER_EMAIL.
  *
- * No app it holds fetches anything from outside. Given `standIns`, the path
- * of a file of stand-in answers, it runs its apps' jobs and the file answers
- * every request they make (HEARTH_FETCH_STANDINS, which only a server in dev
- * mode accepts); without one its jobs are switched off (HEARTH_JOBS=off).
+ * No app it holds reaches the network: the file of stand-in answers,
+ * STAND_INS, answers every fetch (HEARTH_FETCH_STANDINS, which only a
+ * server in dev mode accepts).
  */
-export function realServerCommand(port: number, devUser: string, database = ":memory:", standIns: string | null = null): string {
+export function realServerCommand(port: number, devUser: string, database = ":memory:"): string {
   return [
     "HOST=127.0.0.1",
     `PORT=${port}`,
@@ -80,54 +70,21 @@ export function realServerCommand(port: number, devUser: string, database = ":me
     `HEARTH_DB=${JSON.stringify(database)}`,
     `HEARTH_VERSION=${SERVER_VERSION}`,
     "HEARTH_WEB_DIST=packages/web/dist",
-    ...(standIns === null ? ["HEARTH_JOBS=off"] : ["HEARTH_JOBS=on", `HEARTH_FETCH_STANDINS=${JSON.stringify(standIns)}`]),
+    `HEARTH_FETCH_STANDINS=${JSON.stringify(STAND_INS)}`,
     "node packages/server/dist/main.js",
   ].join(" ");
 }
 
 /**
- * Writes a file of stand-in answers whole: into a file of its own first,
- * then renamed into place, so that a server, which reads it again at every
- * request, never reads half of it. Each entry answers the requests to its
- * `url` (and `query`), with a `status`, `headers` and `body`, or fails them
- * with `error` ("network" or "timeout"); see packages/server/README.md.
+ * Writes STAND_INS whole: into a file of its own first, then renamed into
+ * place, so that a server, which reads it again at every request, never
+ * reads half of it. Each entry answers the requests to its `url` (and
+ * `query`), with a `status`, `headers` and `body`, or fails them with
+ * `error` ("network" or "timeout"); see packages/server/README.md.
  */
-export function writeStandIns(path: string, standIns: readonly unknown[]): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const next = `${path}.${process.pid}.${Date.now()}.tmp`;
+export function writeStandIns(standIns: readonly unknown[]): void {
+  mkdirSync(dirname(STAND_INS), { recursive: true });
+  const next = `${STAND_INS}.${process.pid}.${Date.now()}.tmp`;
   writeFileSync(next, `${JSON.stringify(standIns, null, 2)}\n`);
-  renameSync(next, path);
+  renameSync(next, STAND_INS);
 }
-
-/**
- * The end-to-end tests of mini-apps from another repository
- * (playwright.mini-apps.config.ts, `pnpm e2e:mini-apps`): Hearth built with
- * those apps, and two copies of its server, the owner's and Lin's, over a
- * database file of their own. Their ports follow the ones above, so the two
- * runs never meet; HEARTH_E2E_MINI_APPS_PORT moves them.
- */
-const miniAppsBase = Number(process.env.HEARTH_E2E_MINI_APPS_PORT ?? base + 10);
-export const MINI_APPS_OWNER_PORT = miniAppsBase;
-export const MINI_APPS_OWNER_URL = `http://127.0.0.1:${MINI_APPS_OWNER_PORT}`;
-export const MINI_APPS_MEMBER_PORT = miniAppsBase + 1;
-export const MINI_APPS_MEMBER_URL = `http://127.0.0.1:${MINI_APPS_MEMBER_PORT}`;
-export const MINI_APPS_SHARED_DB_DIR = join(tmpdir(), `hearth-e2e-mini-apps-${miniAppsBase}`);
-export const MINI_APPS_SHARED_DB = join(MINI_APPS_SHARED_DB_DIR, "hearth.db");
-
-/**
- * The stand-in answers for every `ctx.fetch` of those two copies, which
- * run their apps' jobs, as STAND_INS is for `pnpm e2e`: one file for both,
- * beside their database, so that it goes when the owner's copy starts.
- * Until a test writes it with `writeStandIns`, every request a job makes
- * fails as the network would, so no job of a mini-app reaches the host its
- * manifest names (GitHub Trending's `api.github.com` among them).
- */
-export const MINI_APPS_STAND_INS = join(MINI_APPS_SHARED_DB_DIR, "stand-ins.json");
-
-/**
- * The folders of mini-apps those tests build in: HEARTH_APPS_DIR, read as
- * `hearth-apps sync` reads it (several separated like PATH, a relative one
- * from the root of this checkout), or else `hearth-stones` beside this
- * checkout, as the server and CI have it.
- */
-export const MINI_APPS_DIRS = process.env.HEARTH_APPS_DIR || "../hearth-stones";

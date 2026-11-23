@@ -5,7 +5,6 @@
  * something; the rest is glue.
  */
 import { describe, expect, it } from "vitest";
-import { createRegistry } from "../apps/registry";
 import { family, grant, LIN, NOA, SAM } from "../apps/test-world";
 import { migrate, openDatabase, type Db } from "../db/database";
 import { MIGRATIONS } from "../db/migrations";
@@ -13,7 +12,7 @@ import { createUserWithPersonalSpace } from "../db/people";
 import { CONTENT_SECURITY_POLICY } from "../http/security";
 import { as, testApp } from "../testing";
 import { processClock, standInResponse, type Outbound, type TransportRequest } from "../apps/fetch";
-import { changeMadeApp, createMadeApp, restoreMadeVersion, withMadeApps } from "./apps";
+import { changeMadeApp, createMadeApp, madeAppsRegistry, restoreMadeVersion } from "./apps";
 import { loadCatalog, templateHash } from "./catalog";
 import { SANDBOX_CONTENT_SECURITY_POLICY } from "./frame";
 import { moveLegacyInstalls, updateBuiltInApps } from "./builtin";
@@ -37,13 +36,13 @@ const HTML = "<!doctype html><html><head><title>Ledger</title></head><body><scri
 
 function world() {
   const people = family();
-  const { app } = testApp({ db: people.db });
-  const registry = withMadeApps(people.db, createRegistry([]));
+  const { app, errors } = testApp({ db: people.db });
+  const registry = madeAppsRegistry(people.db);
   const make = (userId: string, spaceId: string) =>
     createMadeApp(people.db, registry, { userId, spaceId, manifest: MANIFEST, html: HTML }).appId;
   const call = (email: string, path: string, init: RequestInit = {}) =>
     app.request(path, { ...init, headers: as(email, init.body ? { "Content-Type": "application/json" } : {}) });
-  return { ...people, make, call };
+  return { ...people, make, call, errors };
 }
 
 const madeRows = (db: Db) => (db.prepare("SELECT count(*) AS n FROM made_apps").get() as { n: number }).n;
@@ -99,6 +98,30 @@ describe("an app made in Hearth", () => {
 
     expect((await call(SAM, `${rows}/${row.id}`, { method: "DELETE" })).status).toBe(204);
     expect(((await (await call(SAM, rows)).json()) as { rows: unknown[] }).rows).toEqual([]);
+  });
+
+  it("answers the store's refusals with their own status, unlogged, and a row that no longer fits with 500, logged", async () => {
+    const { db, sam, samsSpace, make, call, errors } = world();
+    const appId = make(sam.id, samsSpace);
+    const rows = `/api/spaces/${samsSpace}/apps/${appId}/rows/expenses`;
+    const missing = await call(SAM, `${rows}/no-such-row`, { method: "PATCH", body: JSON.stringify({ data: { amount: 1 } }) });
+    expect(missing.status).toBe(404);
+    expect(((await missing.json()) as { error: { code: string } }).error.code).toBe("not_found");
+    const unfit = await call(SAM, rows, { method: "POST", body: JSON.stringify({ data: { item: "Taxi" } }) });
+    expect(unfit.status).toBe(400);
+    expect(errors).toEqual([]);
+
+    // A row behind the store's back that the app's fields refuse: the server's fault, said without the row's content.
+    const added = await call(SAM, rows, { method: "POST", body: JSON.stringify({ data: { item: "Lunch", amount: 35 } }) });
+    const { row } = (await added.json()) as { row: { id: string } };
+    db.prepare("UPDATE app_rows SET data = ? WHERE id = ?").run(JSON.stringify({ item: "Lunch", amount: "a secret" }), row.id);
+    const broken = await call(SAM, rows);
+    expect(broken.status).toBe(500);
+    const answer = (await broken.json()) as { error: { code: string; message: string } };
+    expect(answer.error.code).toBe("internal");
+    expect(answer.error.message).not.toContain("a secret");
+    expect(errors).toEqual([expect.objectContaining({ name: "StoredRowError", appId, collection: "expenses", rowId: row.id })]);
+    expect(String((errors[0] as Error).message)).not.toContain("a secret");
   });
 
   it("is out of reach of everyone outside its space, page and rows alike, and of members it is not shared with", async () => {
@@ -164,7 +187,7 @@ describe("changing an app made in Hearth", () => {
   function changing() {
     const people = world();
     const appId = people.make(people.sam.id, people.samsSpace);
-    const registry = withMadeApps(people.db, createRegistry([]));
+    const registry = madeAppsRegistry(people.db);
     const as = (userId: string, spaceId = people.samsSpace) => ({ userId, spaceId, appId, by: "person" as const });
     const rows = `/api/spaces/${people.samsSpace}/apps/${appId}/rows/expenses`;
     const add = (data: Record<string, unknown>) =>
@@ -220,7 +243,7 @@ describe("changing an app made in Hearth", () => {
 
   it("is changed only by those who may add apps to its space, with edit access to it", () => {
     const { db, sam, lin, kim } = world();
-    const registry = withMadeApps(db, createRegistry([]));
+    const registry = madeAppsRegistry(db);
     const appId = createMadeApp(db, registry, { userId: sam.id, spaceId: "family", manifest: MANIFEST, html: HTML }).appId;
     grant(db, "family", appId, lin.id, "edit", sam.id);
     grant(db, "family", appId, kim.id, "edit", sam.id);
@@ -271,7 +294,7 @@ describe("what the platform offers a made app's page", () => {
     };
     const people = family();
     const { app } = testApp({ db: people.db, outbound });
-    const registry = withMadeApps(people.db, createRegistry([]));
+    const registry = madeAppsRegistry(people.db);
     // A copy of a built-in app: only those name hosts to fetch from.
     const template = { id: "feed", hash: "a release" };
     const appId = createMadeApp(people.db, registry, { userId: people.sam.id, spaceId: "family", manifest: FEED, html: HTML, template }).appId;
@@ -326,7 +349,7 @@ describe("what the platform offers a made app's page", () => {
 
   it("names hosts only as a built-in app ships them: an app a model makes names none, and a change keeps them", () => {
     const { db, sam, appId } = feed();
-    const registry = withMadeApps(db, createRegistry([]));
+    const registry = madeAppsRegistry(db);
     expect(() => createMadeApp(db, registry, { userId: sam.id, spaceId: "family", manifest: FEED, html: HTML })).toThrow(/fetches from no host of its own/);
     const change = (manifest: typeof FEED) => changeMadeApp(db, registry, { userId: sam.id, spaceId: "family", appId, by: "person", manifest, note: "x" });
     expect(() => change(madeManifestSchema.parse({ ...FEED, network: ["news.example.com"] }))).toThrow(/Keep "network" exactly/);
@@ -358,7 +381,7 @@ describe("the built-in apps", () => {
   const catalog = loadCatalog();
   const AT = "2026-01-05T00:00:00.000Z";
 
-  /** The family's grocery list as the build's app kept it: a row, settings, Lin's access and pin, its job. */
+  /** The family's grocery list as the app of a release before the built-in apps kept it: a row, settings, Lin's access and pin, its job. */
   function withOldGrocery() {
     const people = world();
     const { db, sam, lin } = people;
@@ -381,9 +404,9 @@ describe("the built-in apps", () => {
     for (const template of catalog) expect(template.manifest.name, template.id).toEqual({ en: expect.any(String), zh: expect.any(String) });
   });
 
-  it("take each install of the build's app of the same name, in place, its rows, settings, access and pins kept", async () => {
+  it("take each install of the earlier releases' app of the same name, in place, its rows, settings, access and pins kept", async () => {
     const { db, call } = withOldGrocery();
-    const registry = withMadeApps(db, createRegistry([]));
+    const registry = madeAppsRegistry(db);
     const { moved, failed } = moveLegacyInstalls(db, registry, catalog);
     expect(failed).toEqual([]);
     expect(moved).toEqual([{ spaceId: "family", from: "grocery", to: expect.stringMatching(/^m-[a-z0-9]{10}$/) }]);
@@ -408,7 +431,7 @@ describe("the built-in apps", () => {
     db.prepare("INSERT INTO space_apps (space_id, app_id, created_by, created_at) VALUES ('family', 'ideas', ?, ?)").run(sam.id, AT);
     db.prepare("INSERT INTO app_rows (id, space_id, app_id, collection, data, created_by, updated_by, created_at, updated_at) VALUES ('r-many', 'family', 'ideas', 'ideas', ?, ?, ?, ?, ?)")
       .run(JSON.stringify({ text: tags.map((tag) => `#${tag}`).join(" "), pinned: false, archived: false, tags }), sam.id, sam.id, AT, AT);
-    const { moved, failed } = moveLegacyInstalls(db, withMadeApps(db, createRegistry([])), catalog);
+    const { moved, failed } = moveLegacyInstalls(db, madeAppsRegistry(db), catalog);
     expect(failed).toEqual([]);
     expect(moved).toEqual([{ spaceId: "family", from: "ideas", to: expect.stringMatching(/^m-/) }]);
     const row = db.prepare("SELECT data FROM app_rows WHERE id = 'r-many'").get() as { data: string };
@@ -418,7 +441,7 @@ describe("the built-in apps", () => {
   it("leave an install that holds a row the built-in app would not take as it was, and say why", () => {
     const { db } = withOldGrocery();
     db.prepare("UPDATE app_rows SET data = ? WHERE id = 'r-milk'").run(JSON.stringify({ name: "Milk", aisle: "Dairy", done: false, note: "2%" }));
-    const { moved, failed } = moveLegacyInstalls(db, withMadeApps(db, createRegistry([])), catalog);
+    const { moved, failed } = moveLegacyInstalls(db, madeAppsRegistry(db), catalog);
     expect(moved).toEqual([]);
     expect(failed).toEqual([{ spaceId: "family", from: "grocery", reason: expect.stringMatching(/1 row\(s\) of "grocery" do not fit .*note/) }]);
     expect(db.prepare("SELECT app_id AS appId FROM space_apps").all()).toEqual([{ appId: "grocery" }]);
@@ -429,7 +452,7 @@ describe("the built-in apps", () => {
 
   it("keep each untouched copy up to date with what Hearth ships, as a version, and leave a changed copy alone", async () => {
     const { db, sam, samsSpace, call } = world();
-    const registry = withMadeApps(db, createRegistry([]));
+    const registry = madeAppsRegistry(db);
     const add = async (spaceId: string) =>
       ((await (await call(SAM, `/api/spaces/${spaceId}/catalog/ideas`, { method: "POST", body: "{}" })).json()) as { appId: string }).appId;
     const mine = await add(samsSpace);

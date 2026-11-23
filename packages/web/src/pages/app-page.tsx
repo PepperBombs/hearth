@@ -1,6 +1,5 @@
 import { Tag } from "@hearth/sdk/web";
 import { useParams } from "react-router";
-import { AppView } from "../apps/app-view";
 import { AppSettingsButton } from "../apps/manage";
 import { MadeAppFrame } from "../made/frame";
 import { Page } from "../components/shell/page";
@@ -13,9 +12,9 @@ import { NotFound } from "./not-found";
 /**
  * An app's own page, at /apps/:spaceId/:appId. The shell draws the top bar,
  * with the app's name and, for an app in a group, the group's as a tag, on
- * phones too, so that the same app in two spaces is never two pages that
- * look alike, and the button for the app's settings; the app's `page.tsx`
- * is everything inside the panel below it.
+ * phones too, so that apps of the same name in two spaces are never two
+ * pages that look alike, and the button for the app's settings; the app's
+ * own page, whole, in its sandbox, is everything inside the panel below it.
  *
  * Whatever follows the app's ID in the address is left to the app, for the
  * day an app has several pages. An app the session does not list, because
@@ -36,8 +35,8 @@ export function AppPage() {
       actions={<AppSettingsButton app={app} />}
     >
       <Card className="min-h-[200px] max-w-[760px]" data-app-page={app.id}>
-        {/* An app made in Hearth draws its whole page here, in the sandbox, as tall as it is. */}
-        {app.made ? <MadeAppFrame app={app} view="page" maxHeight={100_000} /> : <AppView app={app} part="page" />}
+        {/* The app draws its whole page here, in the sandbox, as tall as it is. */}
+        <MadeAppFrame app={app} view="page" maxHeight={100_000} />
       </Card>
     </Page>
   );

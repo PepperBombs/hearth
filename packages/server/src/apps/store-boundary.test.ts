@@ -1,5 +1,5 @@
 /**
- * The tables that hold every mini-app's data are named in one source file
+ * The tables that hold every app's data are named in one source file
  * only (docs/mini-app-contract.md, section A6): `store.ts`, where every
  * statement carries its space and its app. A query written anywhere else
  * could leave them out, so this test fails when another file names the
@@ -28,12 +28,12 @@ function sourceFiles(folder = SOURCE): string[] {
 
 const names = (file: string) => DATA_TABLES.test(readFileSync(path.join(SOURCE, file), "utf8"));
 
-describe("SQL for mini-apps' data", () => {
+describe("SQL for apps' data", () => {
   const files = sourceFiles();
   const checked = files.filter((file) => !file.endsWith(".test.ts") && !ALLOWED.includes(file));
 
   it("is looked for in the whole of the server's source", () => {
-    expect(files).toEqual(expect.arrayContaining(["app.ts", "main.ts", "apps/calls.ts", "apps/installs.ts", ...ALLOWED]));
+    expect(files).toEqual(expect.arrayContaining(["app.ts", "main.ts", "apps/installs.ts", "made/apps.ts", "made/builtin.ts", ...ALLOWED]));
     expect(checked.length).toBeGreaterThan(15);
     for (const file of ALLOWED) expect(checked).not.toContain(file);
   });

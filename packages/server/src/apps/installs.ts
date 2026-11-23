@@ -42,7 +42,7 @@ const ACCESS = `CASE WHEN m.role = 'owner' THEN 'edit' ELSE coalesce(x.level, a.
  * what the space's owners allow an assistant there, and "none" for an app
  * the owners left out.
  *
- * Callers add conditions and an order, and drop apps the server has no code for.
+ * Callers add conditions and an order, and drop apps the server holds no app for.
  */
 const VISIBLE = `
   SELECT a.space_id AS spaceId,
@@ -74,9 +74,10 @@ type VisibleRow = {
 };
 
 /**
- * Who is asking: the person themselves, through the web app or an app's
- * own tests, or an assistant acting for them (docs/mini-app-contract.md,
- * section F), which may do no more than the space's owners allow it.
+ * Who is asking: the person themselves, through the web app, or an
+ * assistant acting for them, their own model in the chat
+ * (docs/platform.md, "The chat"), which may do no more than the space's
+ * owners allow it.
  */
 export type Caller = "person" | "assistant";
 
@@ -86,7 +87,7 @@ export type Caller = "person" | "assistant";
  *
  * Null means the app is not there for them, whatever the reason: they are
  * not in the space, the space does not have the app, the app was removed
- * from it, the server holds no code for it, or their access is "none"; for
+ * from it, the server holds no app of that ID, or their access is "none"; for
  * an assistant also that the space's owners allow it nothing there, or left
  * the app out. Every route about one app answers 404 `not_found` for null,
  * so that none of those reasons can be told apart.
@@ -139,14 +140,10 @@ export function listAppsForUser(db: Db, registry: Registry, userId: string): App
       enabled: row.enabled === 1,
       pinned: row.pinned === 1,
       hasPage: app.hasPage,
-      ...(app.made
-        ? {
-            made: true,
-            version: app.version ?? 1,
-            ...(app.template ? { template: app.template } : {}),
-            ...(manifest.settings ? { settings: manifest.settings } : {}),
-          }
-        : {}),
+      made: app.made,
+      version: app.version,
+      ...(app.template ? { template: app.template } : {}),
+      ...(manifest.settings ? { settings: manifest.settings } : {}),
     });
   }
   return apps;
@@ -170,6 +167,8 @@ export type AppRequest = { userId: string; spaceId: string; appId: string };
 
 /**
  * Adds an app to a space, or brings a removed one back with the data it had.
+ * An app made in Hearth is added to its space when it is made
+ * (`createMadeApp` in src/made/apps.ts), and to no other.
  *
  * Owners may, and members an owner has allowed to add apps. `memberAccess`
  * is what the other members of a group get, "none" when left out: the
@@ -184,8 +183,8 @@ export type AppRequest = { userId: string; spaceId: string; appId: string };
  *   different `memberAccess` is refused; changing access is its own action.
  *
  * Throws a Refusal: 404 when the person is not in the space or the server
- * has no app of this name, 403 when they may not add apps here, 409 when the
- * app cannot be added as things stand.
+ * has no app of this name for it, 403 when they may not add apps here, 409
+ * when the app cannot be added as things stand.
  */
 export function addApp(
   db: Db,
@@ -203,10 +202,7 @@ export function addApp(
       }
       const app = registry.get(appId);
       // A made app is its space's own: it is not there to be added anywhere else.
-      if (!app || (app.madeIn !== undefined && app.madeIn !== spaceId)) throw notFound();
-      if (app.manifest.spaces && !app.manifest.spaces.includes(member.kind)) {
-        throw new Refusal(409, "conflict", `This app cannot be added to a ${member.kind} space.`);
-      }
+      if (!app || app.madeIn !== spaceId) throw notFound();
 
       const now = new Date().toISOString();
       const install = installOf(db, spaceId, appId);
@@ -276,7 +272,7 @@ export function setAppPrefs(db: Db, registry: Registry, request: AppRequest & { 
 
 /**
  * Every app a space has, as its owners see it: those removed from it and
- * those whose code the server no longer holds too, each with how many rows
+ * those the server no longer holds an app for too, each with how many rows
  * it keeps, what members get and the exceptions made for single members.
  * Then everyone in the space with their address and right to add apps, and
  * the people invited who have not arrived yet. This is what the owners'
@@ -405,9 +401,8 @@ export function removeApp(db: Db, registry: Registry, request: AppRequest): void
  * the app, or had it and kept its data, cannot take it.
  *
  * The person moving it must own the space it is in (owner's decision 3),
- * and own the space it goes to or be allowed to add apps there; the app's
- * manifest must allow that kind of space. In one immediate transaction,
- * after the checks:
+ * and own the space it goes to or be allowed to add apps there. In one
+ * immediate transaction, after the checks:
  *
  * 1. Every exception made for single members goes: access starts afresh.
  * 2. What belongs to people who are not in the new space (their own
@@ -443,10 +438,6 @@ export function moveApp(
     const ownsTarget = target.role === "owner";
     if (!ownsTarget && target.canAddApps !== 1) {
       throw new Refusal(403, "forbidden", "Moving an app into a space is for its owners and the members they allow to add apps.");
-    }
-    const manifest = registry.get(appId)?.manifest;
-    if (manifest?.spaces && !manifest.spaces.includes(target.kind)) {
-      throw new Refusal(409, "conflict", `This app cannot be moved to a ${target.kind} space.`);
     }
     // The space the app is in has it too, so moving it to where it is ends here.
     if (installOf(db, toSpaceId, appId)) {
@@ -486,7 +477,7 @@ export function moveApp(
  * settings, everyone's access, switches and pins, and the entry itself.
  *
  * Owners only, and only for an app nobody can be using: one that was
- * removed from the space, or whose code the server no longer holds.
+ * removed from the space, or that the server no longer holds an app for.
  * `confirm` is the app's ID as the person typed it.
  *
  * Throws a Refusal: 404 when the person is not in the space or the space

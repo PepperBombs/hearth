@@ -1,6 +1,5 @@
 import { defineConfig } from "@playwright/test";
 import {
-  APPS_DIR,
   GUEST_EMAIL,
   GUEST_PORT,
   GUEST_URL,
@@ -12,7 +11,6 @@ import {
   OWNER_URL,
   SHARED_DB,
   SHARED_DB_DIR,
-  STAND_INS,
   WEB_PORT,
   WEB_URL,
   WITH_REAL_SERVER,
@@ -36,35 +34,19 @@ import {
  *   stranger. The owner's and the member's share a database file in the
  *   system's temporary folder, made afresh when the owner's copy starts, so
  *   that they are two people on one server; the stranger's is in memory.
- *   The owner's and the member's run their apps' jobs, and share one file of
- *   stand-in answers beside the database (STAND_INS), which the tests write,
- *   so that no job reaches the network; the stranger's runs none.
- *   Set HEARTH_E2E_SERVER=0 to leave this project out.
- *
- * Both builds hold the framework's sample apps (packages/fixture-apps):
- * every build command below runs `pnpm apps:sync` first, with
- * HEARTH_APPS_DIR naming that folder. Afterwards the generated lists and
- * both dist folders hold those apps, until the next `pnpm build`.
- *
- * The tests in e2e/mini-apps are not run here: they are about mini-apps of
- * another repository, built in by playwright.mini-apps.config.ts.
+ *   Every copy answers its apps' fetches from one file of stand-in answers
+ *   beside that database (STAND_INS), which the tests write, so that no app
+ *   reaches the network. Set HEARTH_E2E_SERVER=0 to leave this project out.
  *
  * Ports are 4173 to 4176; set HEARTH_E2E_PORT to move all four.
  */
 const reuseExistingServer = !process.env.CI;
-
-/** What every command that builds is given: the folder of mini-apps to build in. */
-const buildEnv = { HEARTH_APPS_DIR: APPS_DIR };
-
-/** The tests of mini-apps from another repository, which playwright.mini-apps.config.ts runs. */
-const MINI_APPS_TESTS = /[\\/]e2e[\\/]mini-apps[\\/]/;
 
 /** The tests that run against the real server. */
 const REAL_SERVER_TESTS = /real-server\.spec\.ts$/;
 
 export default defineConfig({
   testDir: "./e2e",
-  testIgnore: MINI_APPS_TESTS,
   outputDir: "./test-results",
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
@@ -76,21 +58,21 @@ export default defineConfig({
     locale: "en-US",
     timezoneId: "UTC",
     colorScheme: "light",
-    // Tests of the service worker switch this back on for themselves.
+    // Tests of the service worker, and those that collect the errors of an app's sandboxed page,
+    // switch this back on for themselves (see docs/notes/e2e.md).
     serviceWorkers: "block",
     trace: "off",
     video: "off",
     screenshot: "off",
   },
   projects: [
-    { name: "web", testIgnore: [REAL_SERVER_TESTS, MINI_APPS_TESTS], use: { baseURL: WEB_URL } },
+    { name: "web", testIgnore: REAL_SERVER_TESTS, use: { baseURL: WEB_URL } },
     ...(WITH_REAL_SERVER ? [{ name: "server", testMatch: REAL_SERVER_TESTS, use: { baseURL: OWNER_URL } }] : []),
   ],
   webServer: [
     {
       name: "web",
-      command: `pnpm apps:sync && pnpm --filter @hearth/web build && pnpm --filter @hearth/web exec vite preview --host 127.0.0.1 --port ${WEB_PORT} --strictPort`,
-      env: buildEnv,
+      command: `pnpm --filter @hearth/web build && pnpm --filter @hearth/web exec vite preview --host 127.0.0.1 --port ${WEB_PORT} --strictPort`,
       url: WEB_URL,
       reuseExistingServer,
       timeout: 120_000,
@@ -102,13 +84,10 @@ export default defineConfig({
           {
             name: "server",
             // Builds the server, then starts the copy that treats every request as the owner,
-            // on a database file of its own making: what an earlier run left there is deleted.
-            // The server reads the web app's folder on each request, so it does not matter
-            // whether the web build above has finished when this starts.
-            // The list of apps is written again here: it is the same list, and this
-            // entry must not depend on the one above having got that far.
-            command: `pnpm apps:sync && pnpm --filter @hearth/server build && rm -rf ${JSON.stringify(SHARED_DB_DIR)} && ${realServer(OWNER_PORT, OWNER_EMAIL, SHARED_DB, STAND_INS)}`,
-            env: buildEnv,
+            // on a database file of its own making: what an earlier run left there, the file of
+            // stand-ins with it, is deleted. The server reads the web app's folder on each request,
+            // so it does not matter whether the web build above has finished when this starts.
+            command: `pnpm --filter @hearth/server build && rm -rf ${JSON.stringify(SHARED_DB_DIR)} && ${realServer(OWNER_PORT, OWNER_EMAIL, SHARED_DB)}`,
             url: `${OWNER_URL}/api/health`,
             reuseExistingServer,
             timeout: 120_000,
@@ -118,8 +97,7 @@ export default defineConfig({
           {
             name: "server as a family member",
             // Started after the owner's copy, which created and migrated the database they share.
-            // Its jobs run too, over the same stand-ins: the claim in the database keeps each run single.
-            command: realServer(MEMBER_PORT, MEMBER_EMAIL, SHARED_DB, STAND_INS),
+            command: realServer(MEMBER_PORT, MEMBER_EMAIL, SHARED_DB),
             url: `${MEMBER_URL}/api/health`,
             reuseExistingServer,
             timeout: 120_000,
