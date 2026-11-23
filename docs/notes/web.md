@@ -35,6 +35,7 @@ Notes for whoever changes this part, people and agents alike. They are read when
   that state while rendering once the page no longer shows what the dialog
   is about, as `People` and `AddApp` do; otherwise it opens by itself when
   that comes back.
+- The kit's `Dialog` closes itself when it is taken off the page while open (a parent that draws it only while some state is set), so the browser gives focus back to what had it. When that control goes too, as a deleted conversation's delete button does, move focus to something that stays, in an effect once it is gone (`chat.tsx`, `refocus`).
 - The dialog that adds an app offers the built-in apps (`GET /api/catalog`,
   `useCatalog` in `src/apps/manage.tsx`) that the space has no copy of: the
   session's `template` of an app says which built-in app it came from. When

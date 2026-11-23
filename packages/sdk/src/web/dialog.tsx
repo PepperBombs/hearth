@@ -19,7 +19,8 @@ export type DialogProps = {
  * A modal dialog built on the browser's own <dialog>. Opening it with
  * showModal() puts it above everything, makes the rest of the page inert,
  * keeps keyboard focus inside, closes on Escape, and gives focus back to
- * whatever had it before. Children are mounted only while it is open.
+ * whatever had it before, also when it is taken off the page while open.
+ * Children are mounted only while it is open.
  */
 const DEFAULT_LAYOUT = "m-auto max-h-[calc(100dvh-32px)] w-[calc(100%-32px)] max-w-[460px] rounded-card border";
 
@@ -34,6 +35,15 @@ export function Dialog({ open, onClose, label, children, layoutClassName = DEFAU
     if (open && !dialog.open) dialog.showModal();
     if (!open && dialog.open) dialog.close();
   }, [open]);
+
+  // Taken off the page while open (its parent stopped drawing it): close it first,
+  // so the browser gives focus back as it does for any other close.
+  useLayoutEffect(() => {
+    const dialog = ref.current;
+    return () => {
+      if (dialog?.open) dialog.close();
+    };
+  }, []);
 
   /**
    * The browser reports a close a moment after it happens. If the dialog has

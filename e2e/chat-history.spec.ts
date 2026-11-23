@@ -123,12 +123,20 @@ test("the owner's conversations are kept: listed, opened again after a reload, c
     expect(secondId).not.toBe(firstId);
     await expect(listOn(page).getByRole("link")).toHaveText([new RegExp(`^${second}`), new RegExp(`^${first}`)]);
 
-    // Deleting the first asks first, then it is gone, here and on the server.
-    await listOn(page).getByRole("button", { name: `Delete conversation ${first}` }).click();
+    // Deleting the first asks first, then it is gone, here and on the server. With the keyboard: Cancel
+    // gives focus back to the delete button, and once the conversation is deleted, New conversation has it.
+    const deleteFirst = listOn(page).getByRole("button", { name: `Delete conversation ${first}` });
+    await deleteFirst.focus();
+    await page.keyboard.press("Enter");
     const confirm = page.getByRole("dialog", { name: "Delete this conversation?" });
     await expect(confirm.getByText("It cannot be undone. What the model made stays.")).toBeVisible();
+    await confirm.getByRole("button", { name: "Cancel" }).click();
+    await expect(confirm).toBeHidden();
+    await expect(deleteFirst).toBeFocused();
+    await page.keyboard.press("Enter");
     await confirm.getByRole("button", { name: "Delete" }).click();
     await expect(confirm).toBeHidden();
+    await expect(listOn(page).getByRole("button", { name: "New conversation" })).toBeFocused();
     await expect(listOn(page).getByRole("link")).toHaveText([new RegExp(`^${second}`)]);
     expect((await chatsOf(request, personalId)).map((chat) => chat.id)).toEqual([secondId]);
     expect((await request.get(`/api/spaces/${personalId}/chats/${firstId}`)).status()).toBe(404);

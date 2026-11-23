@@ -7,8 +7,8 @@
  */
 import type { AppSummary, ChatEntry, ChatEvent, ChatSummary, Session } from "@hearth/shared";
 import { QueryClient } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, useLocation } from "react-router";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../app";
 
@@ -131,21 +131,26 @@ class FakeServer {
   }
 }
 
-/** Where the page's address is now. */
+/** Where the page's address is now, and the browser's Back. */
 let where = "";
+let back = () => {};
 function Address() {
   const location = useLocation();
+  const navigate = useNavigate();
   where = location.pathname + location.search;
+  back = () => void navigate(-1);
   return null;
 }
 
-function start(server: FakeServer, at = "/chat") {
+/** Draws the app at `at`, or at the last of several addresses, the ones before it in the history. */
+function start(server: FakeServer, at: string | string[] = "/chat") {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init: RequestInit = {}) => {
     if (server.gate && String(input) === "/api/chat") await server.gate;
     return server.answer(String(input), init);
   });
+  const entries = Array.isArray(at) ? at : [at];
   render(
-    <MemoryRouter initialEntries={[at]}>
+    <MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>
       <App queryClient={new QueryClient({ defaultOptions: { queries: { retry: false } } })} />
       <Address />
     </MemoryRouter>,
@@ -226,6 +231,18 @@ describe("opening a conversation", () => {
     expect(searchOf()).toEqual({ space: PERSONAL, chat: "c-older" });
   });
 
+  it("keeps what was said before out of the live region, so opening it does not read it all aloud", async () => {
+    const server = new FakeServer();
+    server.events = [{ type: "text", text: "Noted: Hello there" }, { type: "done" }];
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+    expect((await screen.findByText("Keep notes for me")).closest("[aria-live]")).toBeNull();
+    send("Hello there");
+    const answer = await screen.findByText("Noted: Hello there");
+    expect(answer.closest("[aria-live]")?.getAttribute("aria-live")).toBe("polite");
+    expect(screen.getByText("Hello there", { selector: "div" }).closest("[aria-live]")).not.toBeNull();
+    expect(screen.getByText("Keep notes for me").closest("[aria-live]")).toBeNull();
+  });
+
   it("reads a conversation afresh each time it is opened", async () => {
     const server = new FakeServer();
     start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
@@ -279,6 +296,36 @@ describe("a new conversation", () => {
     expect(await screen.findByText("Noted: again")).toBeTruthy();
     expect(server.bodies[1]).toEqual({ spaceId: PERSONAL, chatId: "c-new", message: "again" });
     expect(screen.getByText("Noted: Hello there")).toBeTruthy();
+  });
+
+  it("keeps the first message on screen while it gets its ID", async () => {
+    const server = new FakeServer();
+    server.events = [{ type: "chat", chatId: "c-new", title: "Zebra flicker" }];
+    server.hang = true;
+    start(server);
+    await within(await listed()).findByRole("link", { name: /Plan the week/ });
+    const removed: string[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.removedNodes)
+          if (node instanceof Element && node.textContent?.includes("You: Zebra flicker")) removed.push(node.outerHTML);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    send("Zebra flicker");
+    await waitFor(() => expect(searchOf()).toEqual({ space: PERSONAL, chat: "c-new" }));
+    observer.disconnect();
+    expect(screen.getByText("Zebra flicker", { selector: "div" })).toBeTruthy();
+    expect(removed).toEqual([]);
+  });
+
+  it("takes the place of the new one in the history, so Back leaves the chat", async () => {
+    const server = new FakeServer();
+    start(server, ["/", "/chat"]);
+    await within(await listed()).findByRole("link", { name: /Plan the week/ });
+    send("Hello there");
+    await waitFor(() => expect(searchOf()).toEqual({ space: PERSONAL, chat: "c-new" }));
+    act(() => back());
+    await waitFor(() => expect(where).toBe("/"));
   });
 
   it("is what New conversation opens", async () => {
@@ -395,6 +442,31 @@ describe("deleting a conversation", () => {
     expect(within(conversations()).getByRole("link", { name: /Groceries/ })).toBeTruthy();
   });
 
+  it("gives focus to New conversation once the deleted one's row is gone", async () => {
+    const server = new FakeServer();
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+    expect(await screen.findByText("Keep notes for me")).toBeTruthy();
+    const trash = within(conversations()).getByRole("button", { name: "Delete conversation Groceries" });
+    expect(trash.getAttribute("aria-haspopup")).toBe("dialog");
+    trash.focus();
+    fireEvent.click(trash);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(within(conversations()).queryByRole("link", { name: /Groceries/ })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(within(conversations()).getByRole("button", { name: "New conversation" })));
+  });
+
+  it("takes the deleted one's place in the history", async () => {
+    const server = new FakeServer();
+    start(server, ["/", `/chat?space=${PERSONAL}&chat=c-recent`]);
+    expect(await screen.findByText("Keep notes for me")).toBeTruthy();
+    fireEvent.click(within(conversations()).getByRole("button", { name: "Delete conversation Plan the week" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete this conversation?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(searchOf()).toEqual({ space: PERSONAL }));
+    act(() => back());
+    await waitFor(() => expect(where).toBe("/"));
+  });
+
   it("leaves the open conversation open when another one is deleted", async () => {
     const server = new FakeServer();
     start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
@@ -451,6 +523,35 @@ describe("a message the server turns down", () => {
     server.refuse = { status: 409, message: "You have 500 conversations here. Delete some to start a new one." };
     send("hello");
     expect(await screen.findByText("You have 500 conversations here. Delete some to start a new one.")).toBeTruthy();
+  });
+});
+
+describe("a notice of the server", () => {
+  it("does not show again after the person leaves the conversation and comes back", async () => {
+    const server = new FakeServer();
+    start(server, `/chat?space=${PERSONAL}&chat=c-older`);
+    expect(await screen.findByText("Groceries please")).toBeTruthy();
+    server.refuse = { status: 409, message: "This conversation is still answering, in another window or tab." };
+    send("and eggs");
+    expect(await screen.findByText("This conversation is still answering, in another window or tab.")).toBeTruthy();
+    server.refuse = null;
+    fireEvent.click(within(conversations()).getByRole("link", { name: /Plan the week/ }));
+    expect(await screen.findByText("Keep notes for me")).toBeTruthy();
+    fireEvent.click(within(conversations()).getByRole("link", { name: /Groceries/ }));
+    expect(await screen.findByText("Groceries please")).toBeTruthy();
+    expect(screen.queryByText("This conversation is still answering, in another window or tab.")).toBeNull();
+  });
+
+  it("that a conversation is gone does not show again on the next new conversation", async () => {
+    const server = new FakeServer();
+    start(server, `/chat?space=${PERSONAL}&chat=c-deleted`);
+    expect(await screen.findByText("This conversation is gone.")).toBeTruthy();
+    await waitFor(() => expect(searchOf()).toEqual({ space: PERSONAL }));
+    fireEvent.click(within(conversations()).getByRole("link", { name: /Groceries/ }));
+    expect(await screen.findByText("Groceries please")).toBeTruthy();
+    fireEvent.click(within(conversations()).getByRole("button", { name: "New conversation" }));
+    await waitFor(() => expect(searchOf()).toEqual({ space: PERSONAL }));
+    expect(screen.queryByText("This conversation is gone.")).toBeNull();
   });
 });
 

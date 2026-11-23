@@ -121,6 +121,18 @@ describe("Dialog", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("closes itself when it is taken off the page while open, so the browser gives focus back", () => {
+    const close = vi.spyOn(HTMLDialogElement.prototype, "close");
+    const { rerender } = render(
+      <Dialog open onClose={() => {}} label="Delete">
+        <button type="button">Cancel</button>
+      </Dialog>,
+    );
+    rerender(<></>);
+    expect(close).toHaveBeenCalledTimes(1);
+    close.mockRestore();
+  });
+
   it("is not closed by the browser's late report of an earlier close", () => {
     const onClose = vi.fn();
     render(

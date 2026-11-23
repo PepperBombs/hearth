@@ -16,7 +16,7 @@ import type { AppSummary, ChatEntry, ChatEvent, ChatFailure, ChatSummary, Space 
 import { Button, Dialog, DialogBody, IconButton, Segmented, buttonClass } from "@hearth/sdk/web";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, MessagesSquare, Plus, Send, Square, Trash2, Undo2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 import { Card } from "../components/card";
 import { Page } from "../components/shell/page";
@@ -76,9 +76,13 @@ function retryOnce(failures: number, error: unknown): boolean {
   return failures < 1 && error instanceof ApiRequestError && (error.code === "network" || error.status >= 500);
 }
 
-/** The entries on screen, and which conversation they are of (`<spaceId>/<chatId>`, the ID left out for a new one). */
-type Shown = { key: string; entries: Entry[] };
-const NOTHING_SHOWN: Shown = { key: "", entries: [] };
+/**
+ * The entries on screen, and which conversation they are of (`<spaceId>/<chatId>`, the ID left out for a new one).
+ * The first `heard` were read when it was opened: they are drawn outside the live region, so that a screen
+ * reader announces only what this visit adds, not the whole conversation each time it is opened.
+ */
+type Shown = { key: string; entries: Entry[]; heard: number };
+const NOTHING_SHOWN: Shown = { key: "", entries: [], heard: 0 };
 
 const isGone = (error: unknown) => error instanceof ApiRequestError && error.status === 404;
 
@@ -103,6 +107,9 @@ export function Chat() {
   const turn = useRef<{ key: string; stop: AbortController } | null>(null);
   const [listOpen, setListOpen] = useState(false);
   const [deleting, setDeleting] = useState<{ spaceId: string; chat: ChatSummary } | null>(null);
+  /** A conversation deleted from the list beside: once its row is gone, focus goes to that list's New conversation. */
+  const [refocus, setRefocus] = useState<string | null>(null);
+  const side = useRef<HTMLElement>(null);
   const end = useRef<HTMLDivElement>(null);
 
   const chats = useQuery({
@@ -123,6 +130,7 @@ export function Chat() {
     gcTime: 0,
   });
   const entries = shown.key === openKey ? shown.entries : [];
+  const heard = shown.key === openKey ? shown.heard : 0;
 
   const open = (next: URLSearchParams, replace = false) => setSearch(next, { replace });
   const startNew = (replace = false) => {
@@ -148,13 +156,25 @@ export function Chat() {
   useEffect(() => {
     if (turn.current && turn.current.key !== openKey) turn.current.stop.abort();
     setShown((now) => (now.key === openKey ? now : NOTHING_SHOWN));
+    // A notice is about the conversation it was shown in: leaving drops it, so it does not come back.
+    setNotice((now) => (now && now.key !== openKey ? null : now));
   }, [openKey]);
   // What was read becomes what is shown; a new conversation shows nothing until something is said in it.
   const read = needsLoad && loaded.data?.chat.id === chatId && !loaded.isFetching ? loaded.data : undefined;
   useEffect(() => {
-    if (read) setShown({ key: openKey, entries: read.entries });
+    if (read) setShown({ key: openKey, entries: read.entries, heard: read.entries.length });
   }, [read, openKey]);
   useEffect(() => () => turn.current?.stop.abort(), []);
+
+  // The delete button that had focus went with its row, and the browser left focus on the page itself.
+  // (On a phone the dialog gives it back to Conversations, which stays.)
+  useEffect(() => {
+    if (refocus === null || chats.data?.some((chat) => chat.id === refocus)) return;
+    setRefocus(null);
+    if (document.activeElement === null || document.activeElement === document.body) {
+      side.current?.querySelector<HTMLButtonElement>("button[data-new-conversation]")?.focus();
+    }
+  }, [refocus, chats.data]);
 
   // In a block: scrollIntoView returns a promise in newer browsers, which an effect must not return.
   useEffect(() => {
@@ -171,7 +191,11 @@ export function Chat() {
     const before = sentChat === undefined ? [] : entries;
     const current = { key: openKey, stop: new AbortController() };
     turn.current = current;
-    setShown({ key: openKey, entries: [...before, { kind: "user", text }] });
+    setShown((now) => ({
+      key: openKey,
+      entries: [...before, { kind: "user", text }],
+      heard: now.key === openKey ? Math.min(now.heard, before.length) : 0,
+    }));
     setDraft("");
     setNotice(null);
     setRunning(current.stop);
@@ -182,9 +206,13 @@ export function Chat() {
         // The new conversation has its ID: into the address, in place of the new one, and into the list.
         const was = current.key;
         const key = `${sentSpace}/${event.chatId}`;
-        setShown((now) => (now.key === was ? { ...now, key } : now));
         current.key = key;
-        open(chatSearch(sentSpace, event.chatId), true);
+        // In one transition with the address, which the router changes in a transition: re-keyed alone,
+        // the entries would leave the screen for a render.
+        startTransition(() => {
+          setShown((now) => (now.key === was ? { ...now, key } : now));
+          open(chatSearch(sentSpace, event.chatId), true);
+        });
         void queryClient.invalidateQueries({ queryKey: chatsQueryKey(sentSpace) });
       } else if (event.type === "text") add({ kind: "model", text: event.text });
       else if (event.type === "error") add({ kind: "failure", failure: event.failure, detail: event.detail });
@@ -262,7 +290,7 @@ export function Chat() {
   return (
     <Page title={t("chat.title")}>
       <div className="mx-auto flex max-w-[1060px] items-start gap-6">
-        <aside className="sticky top-0 flex max-h-[calc(100dvh-104px)] w-60 flex-none flex-col overflow-y-auto @max-[768px]/main:hidden">
+        <aside ref={side} className="sticky top-0 flex max-h-[calc(100dvh-104px)] w-60 flex-none flex-col overflow-y-auto @max-[768px]/main:hidden">
           {list(
             () => {},
             (chat) => setDeleting({ spaceId, chat }),
@@ -289,7 +317,7 @@ export function Chat() {
            * conversation need side by side.
            */}
           <div className="flex flex-wrap gap-2 @min-[768px]/main:hidden">
-            <Button onClick={() => setListOpen(true)}>
+            <Button aria-haspopup="dialog" onClick={() => setListOpen(true)}>
               <MessagesSquare size={14} aria-hidden="true" />
               {t("chat.conversations")}
             </Button>
@@ -309,23 +337,33 @@ export function Chat() {
           ) : null}
           {space && space.assistant === "none" ? <AllowHere space={space} /> : null}
 
-          <div className="flex flex-col gap-3" aria-live="polite">
-            {needsLoad && loaded.isPending ? <p className="text-fg-3">{t("chat.loading")}</p> : null}
-            {needsLoad && loaded.isError && !isGone(loaded.error) ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <p role="alert" className="text-down">
-                  {t("chat.loadFailed")}
-                </p>
-                <Button size="sm" onClick={() => void loaded.refetch()}>
-                  {t("chat.retry")}
-                </Button>
+          <div className="flex flex-col gap-3">
+            {/* What was said before this visit, outside the live region: opening a conversation does not read it all aloud. */}
+            {heard > 0 ? (
+              <div className="flex flex-col gap-3">
+                {entries.slice(0, heard).map((entry, index) => (
+                  <EntryView key={index} entry={entry} />
+                ))}
               </div>
             ) : null}
-            {entries.map((entry, index) => (
-              <EntryView key={index} entry={entry} />
-            ))}
-            {running ? <p className="text-fg-3">{t("chat.working")}</p> : null}
-            <div ref={end} />
+            <div className="flex flex-col gap-3" aria-live="polite">
+              {needsLoad && loaded.isPending ? <p className="text-fg-3">{t("chat.loading")}</p> : null}
+              {needsLoad && loaded.isError && !isGone(loaded.error) ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <p role="alert" className="text-down">
+                    {t("chat.loadFailed")}
+                  </p>
+                  <Button size="sm" onClick={() => void loaded.refetch()}>
+                    {t("chat.retry")}
+                  </Button>
+                </div>
+              ) : null}
+              {entries.slice(heard).map((entry, index) => (
+                <EntryView key={heard + index} entry={entry} />
+              ))}
+              {running ? <p className="text-fg-3">{t("chat.working")}</p> : null}
+              <div ref={end} />
+            </div>
           </div>
 
           {shownNotice ? (
@@ -391,6 +429,7 @@ export function Chat() {
           onClose={() => setDeleting(null)}
           onDeleted={() => {
             setDeleting(null);
+            setRefocus(deleting.chat.id);
             // Deleting the open conversation starts a new one.
             if (deleting.chat.id === chatId) startNew(true);
           }}
@@ -419,7 +458,7 @@ function ChatList({ spaceId, chats, failed, onRetry, openId, onPick, onNew, onDe
   return (
     <nav aria-label={t("chat.conversations")} className="flex min-w-0 flex-col gap-2">
       <h2 className="text-md font-semibold">{t("chat.conversations")}</h2>
-      <Button className="justify-start" onClick={onNew}>
+      <Button className="justify-start" data-new-conversation="" onClick={onNew}>
         <Plus size={14} aria-hidden="true" />
         {t("chat.newConversation")}
       </Button>
@@ -455,7 +494,7 @@ function ChatList({ spaceId, chats, failed, onRetry, openId, onPick, onNew, onDe
                   {formatWhen(new Date(chat.updatedAt), now, locale)}
                 </time>
               </Link>
-              <IconButton label={t("chat.delete", { title: chat.title })} onClick={() => onDelete(chat)}>
+              <IconButton label={t("chat.delete", { title: chat.title })} aria-haspopup="dialog" onClick={() => onDelete(chat)}>
                 <Trash2 size={16} aria-hidden="true" />
               </IconButton>
             </li>
