@@ -64,16 +64,21 @@ class FakeServer {
   stopped = false;
   /** Holds POST /api/chat's answer back until it settles, as a slow network does. */
   gate: Promise<void> | null = null;
+  /** Keeps the stream open after the events until this settles, as a model that takes its time to finish does. */
+  finish: Promise<void> | null = null;
   requests: string[] = [];
   bodies: unknown[] = [];
   apps: AppSummary[] = [NOTES];
+  /** Whether the person has saved a model with its key, and how far the assistant may go in their own space. */
+  hasKey = true;
+  personalAssistant: "none" | "edit" = "edit";
 
   session(): Session {
     const me = { id: "u1", name: "Sam Example", role: "owner" as const };
     return {
       user: { id: "u1", email: "sam@example.com", name: "Sam Example", locale: this.locale, theme: "light" },
       spaces: [
-        { id: PERSONAL, kind: "personal", name: "", role: "owner", canAddApps: true, members: [me], assistant: "edit" },
+        { id: PERSONAL, kind: "personal", name: "", role: "owner", canAddApps: true, members: [me], assistant: this.personalAssistant },
         { id: FAMILY, kind: "group", name: "Family", role: "owner", canAddApps: true, members: [me], assistant: "edit" },
       ],
       apps: this.apps,
@@ -90,7 +95,13 @@ class FakeServer {
     const refused = (status: number, message: string) =>
       json({ error: { code: status === 404 ? "not_found" : "conflict", message } }, status);
     if (path === "/api/session") return json(this.session());
-    if (path === "/api/me/model") return json({ protocol: "openai", baseUrl: "https://api.example.com/v1", model: "sample", hasKey: true });
+    if (path === "/api/me/model") return json({ protocol: "openai", baseUrl: "https://api.example.com/v1", model: "sample", hasKey: this.hasKey });
+    const assistant = /^\/api\/spaces\/([^/]+)\/assistant$/.exec(path);
+    if (assistant && method === "PUT") {
+      const { level } = JSON.parse(String(init.body)) as { level: "none" | "edit" };
+      if (decodeURIComponent(assistant[1]!) === PERSONAL) this.personalAssistant = level;
+      return new Response(null, { status: 204 });
+    }
     const list = /^\/api\/spaces\/([^/]+)\/chats$/.exec(path);
     if (list) return json({ chats: this.chats[decodeURIComponent(list[1]!)] ?? [] });
     const one = /^\/api\/spaces\/([^/]+)\/chats\/([^/]+)$/.exec(path);
@@ -112,9 +123,14 @@ class FakeServer {
       if (started?.type === "chat") this.chats[body.spaceId]!.unshift(summary(started.chatId, started.title, "2026-11-23T09:00:00.000Z"));
       const text = this.events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
       const hang = this.hang;
+      const finish = this.finish;
       const stream = new ReadableStream<Uint8Array>({
         start: (controller) => {
           controller.enqueue(new TextEncoder().encode(text));
+          if (finish) {
+            void finish.then(() => controller.close());
+            return;
+          }
           if (!hang) return controller.close();
           // A fetch that is stopped ends its body with an AbortError, as a browser's does.
           const stop = () => {
@@ -160,7 +176,7 @@ function start(server: FakeServer, at: string | string[] = "/chat") {
 const conversations = () => screen.getByRole("navigation", { name: "Conversations" });
 /** The list, once the session is read and the page drawn. */
 const listed = () => screen.findByRole("navigation", { name: "Conversations" });
-const box = () => screen.getByRole("textbox", { name: /For example/ });
+const box = () => screen.getByRole("textbox", { name: "Message your model" });
 const send = (text: string) => {
   fireEvent.change(box(), { target: { value: text } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -567,6 +583,206 @@ describe("on a phone", () => {
   });
 });
 
+describe("a new conversation, before anything is said", () => {
+  it("greets the person and offers examples; one clicked goes into the box, to send or change, and is not sent", async () => {
+    const server = new FakeServer();
+    start(server);
+    expect(await screen.findByRole("heading", { level: 2, name: "What would you like to make?" })).toBeTruthy();
+    expect(screen.getByText(/Describe what you want to keep track of/)).toBeTruthy();
+    const examples = screen.getByRole("group", { name: "Examples" });
+    const chips = within(examples).getAllByRole("button");
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      "A list of books I want to read",
+      "Track my runs: how far and how long",
+      "A chore rota for the family",
+      "A ledger for my daily spending",
+    ]);
+    const chore = within(examples).getByRole("button", { name: "A chore rota for the family" });
+    await waitFor(() => expect((chore as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(chore);
+    expect((box() as HTMLTextAreaElement).value).toBe("A chore rota for the family");
+    expect(document.activeElement).toBe(box());
+    expect((box() as HTMLTextAreaElement).selectionStart).toBe("A chore rota for the family".length);
+    expect(server.bodies).toEqual([]);
+    expect(server.requests.some((request) => request.startsWith("POST"))).toBe(false);
+
+    // Sent, it is a conversation: the greeting goes.
+    send("A chore rota for the family");
+    expect(await screen.findByText("Noted: Hello there")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "What would you like to make?" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Examples" })).toBeNull();
+  });
+
+  it("is not what an open conversation shows: no greeting, no examples, no introduction", async () => {
+    const server = new FakeServer();
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+    expect(await screen.findByText("Keep notes for me")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "What would you like to make?" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Examples" })).toBeNull();
+    expect(screen.queryByText(/Describe what you want to keep track of/)).toBeNull();
+  });
+
+  it("asks for a model first, in place of the examples, when the person has none", async () => {
+    const server = new FakeServer();
+    server.hasKey = false;
+    start(server);
+    expect(await screen.findByRole("link", { name: "Choose your model" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "What would you like to make?" })).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Examples" })).toBeNull();
+    expect((box() as HTMLTextAreaElement).disabled).toBe(true);
+  });
+
+  it("offers to allow the assistant, in place of the examples, where it is off", async () => {
+    const server = new FakeServer();
+    server.personalAssistant = "none";
+    start(server);
+    expect(await screen.findByRole("button", { name: "Allow it here" })).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Examples" })).toBeNull();
+    expect((box() as HTMLTextAreaElement).disabled).toBe(true);
+  });
+});
+
+describe("the box to write in", () => {
+  it("sends on Enter, and not on Shift+Enter or while a character is being composed", async () => {
+    const server = new FakeServer();
+    start(server);
+    await within(await listed()).findByRole("link", { name: /Plan the week/ });
+    await waitFor(() => expect((box() as HTMLTextAreaElement).disabled).toBe(false));
+    fireEvent.change(box(), { target: { value: "Hello there" } });
+    fireEvent.keyDown(box(), { key: "Enter", shiftKey: true });
+    fireEvent.keyDown(box(), { key: "Enter", isComposing: true });
+    expect(server.bodies).toEqual([]);
+    fireEvent.keyDown(box(), { key: "Enter" });
+    expect(await screen.findByText("Noted: Hello there")).toBeTruthy();
+    expect(server.bodies).toEqual([{ spaceId: PERSONAL, message: "Hello there" }]);
+    expect((box() as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("says the model is working, for screen readers too, while a turn runs, and offers Stop in place of Send", async () => {
+    const server = new FakeServer();
+    server.hang = true;
+    server.events = [];
+    start(server, `/chat?space=${PERSONAL}&chat=c-older`);
+    expect(await screen.findByText("Groceries please")).toBeTruthy();
+    send("and milk");
+    const working = await screen.findByText("Working…");
+    expect(working.closest("[aria-live]")?.getAttribute("aria-live")).toBe("polite");
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(await screen.findByText("Stopped.")).toBeTruthy();
+    expect(screen.queryByText("Working…")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+  });
+});
+
+describe("what is said", () => {
+  it("draws the model's replies from Markdown, and the person's own words as they wrote them", async () => {
+    const server = new FakeServer();
+    server.events = [
+      { type: "chat", chatId: "c-new", title: "List" },
+      { type: "text", text: "Here is **your list**:\n\n- milk\n- eggs\n\nSee [the docs](https://example.com/docs)." },
+      { type: "done" },
+    ];
+    start(server);
+    await within(await listed()).findByRole("link", { name: /Plan the week/ });
+    send("Make it **bold** <b>please</b>");
+    const strong = await screen.findByText("your list");
+    expect(strong.tagName).toBe("STRONG");
+    const reply = strong.closest("[aria-live]") as HTMLElement;
+    expect(within(reply).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["milk", "eggs"]);
+    const link = within(reply).getByRole("link", { name: "the docs" });
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    // What the person wrote is not Markdown, nor HTML.
+    const said = screen.getByText("Make it **bold** <b>please</b>", { selector: "div" });
+    expect(said.querySelector("strong, b")).toBeNull();
+    expect(document.querySelectorAll("strong")).toHaveLength(1);
+  });
+
+  it("draws a reply kept from before from Markdown too", async () => {
+    const server = new FakeServer();
+    server.entries["c-older"] = [
+      { kind: "user", text: "Groceries please" },
+      { kind: "model", text: "Done:\n\n1. *Milk*\n2. `Eggs`" },
+    ];
+    start(server, `/chat?space=${PERSONAL}&chat=c-older`);
+    const milk = await screen.findByText("Milk");
+    expect(milk.tagName).toBe("EM");
+    expect(screen.getByText("Eggs").tagName).toBe("CODE");
+  });
+});
+
+describe("the list's parts by day", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("puts each conversation under Today, Yesterday, Previous 7 days or Older, on the reader's clock, with a time or a short date", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 10, 23, 12, 0));
+    const at = (day: number, hours: number, minutes: number, month = 11) => new Date(2026, month - 1, day, hours, minutes).toISOString();
+    const server = new FakeServer();
+    server.chats[PERSONAL] = [
+      summary("c-today", "Plan the week", at(23, 9, 5)),
+      summary("c-yesterday", "Groceries", at(22, 20, 0)),
+      summary("c-week", "Garden", at(19, 8, 0)),
+      summary("c-old", "Books", at(1, 8, 0)),
+      summary("c-older", "Recipes", at(30, 8, 0, 10)),
+    ];
+    start(server);
+    const list = await listed();
+    await within(list).findByRole("link", { name: /Plan the week/ });
+    expect(within(list).getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual([
+      "Today",
+      "Yesterday",
+      "Previous 7 days",
+      "Older",
+    ]);
+    const under = (heading: string) =>
+      within(within(list).getByRole("heading", { level: 3, name: heading }).parentElement!)
+        .getAllByRole("link")
+        .map((link) => [link.querySelector(".clip")?.textContent, link.querySelector("time")?.textContent]);
+    expect(under("Today")).toEqual([["Plan the week", "09:05"]]);
+    expect(under("Yesterday")).toEqual([["Groceries", "Nov 22"]]);
+    expect(under("Previous 7 days")).toEqual([["Garden", "Nov 19"]]);
+    expect(under("Older")).toEqual([
+      ["Books", "Nov 1"],
+      ["Recipes", "Oct 30"],
+    ]);
+  });
+});
+
+describe("the top bar", () => {
+  it("names the open conversation, and the page for a new one, and starts a new one from its own button", async () => {
+    const server = new FakeServer();
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+    expect(await screen.findByText("Keep notes for me")).toBeTruthy();
+    const bar = screen.getByRole("banner");
+    await waitFor(() => expect(within(bar).getByRole("heading", { level: 1 }).textContent).toBe("Plan the week"));
+    expect(document.title).toBe("Plan the week · Hearth");
+
+    fireEvent.click(within(bar).getByRole("button", { name: "New conversation" }));
+    await waitFor(() => expect(searchOf()).toEqual({ space: PERSONAL }));
+    expect(screen.queryByText("Keep notes for me")).toBeNull();
+    expect(within(bar).getByRole("heading", { level: 1 }).textContent).toBe("Chat");
+    expect(within(bar).getByRole("button", { name: "Conversations" }).getAttribute("aria-haspopup")).toBe("dialog");
+  });
+
+  it("names the page where the list is beside the conversation, which marks the open one; the tab still names the conversation", async () => {
+    // The main column as wide as on a computer: (jsdom lays nothing out, and measures everything 0 wide.)
+    const measure = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 600));
+    try {
+      const server = new FakeServer();
+      start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+      expect(await screen.findByText("Keep notes for me")).toBeTruthy();
+      await waitFor(() => expect(document.title).toBe("Plan the week · Hearth"));
+      expect(within(screen.getByRole("banner")).getByRole("heading", { level: 1 }).textContent).toBe("Chat");
+    } finally {
+      measure.mockRestore();
+    }
+  });
+});
+
 describe("in Chinese", () => {
   it("names the list, a new conversation and each delete button in Chinese, and asks in Chinese", async () => {
     const server = new FakeServer();
@@ -578,5 +794,120 @@ describe("in Chinese", () => {
     const dialog = await screen.findByRole("dialog", { name: "删除这个对话？" });
     expect(within(dialog).getByRole("button", { name: "删除" })).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "取消" })).toBeTruthy();
+  });
+});
+
+describe("an open conversation where the box is off", () => {
+  it("says the assistant is off above the box, and allowing it there opens the box", async () => {
+    const server = new FakeServer();
+    server.personalAssistant = "none";
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+    expect(await screen.findByText("Keep notes for me")).toBeTruthy();
+    const allow = await screen.findByRole("button", { name: "Allow it here" });
+    expect(screen.getByText("Your model may not change anything in this space yet.")).toBeTruthy();
+    expect((box() as HTMLTextAreaElement).disabled).toBe(true);
+    fireEvent.click(allow);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Allow it here" })).toBeNull());
+    await waitFor(() => expect((box() as HTMLTextAreaElement).disabled).toBe(false));
+    expect(server.requests).toContain(`PUT /api/spaces/${PERSONAL}/assistant`);
+    // Still the conversation: no greeting, no examples.
+    expect(screen.getByText("Keep notes for me")).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Examples" })).toBeNull();
+  });
+
+  it("asks for a model above the box when the person has none", async () => {
+    const server = new FakeServer();
+    server.hasKey = false;
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+    expect(await screen.findByText("Keep notes for me")).toBeTruthy();
+    expect(await screen.findByRole("link", { name: "Choose your model" })).toBeTruthy();
+    expect((box() as HTMLTextAreaElement).disabled).toBe(true);
+  });
+});
+
+describe("the greeting", () => {
+  it("balances its lines, so that no word or two is left alone on the last", async () => {
+    const server = new FakeServer();
+    start(server);
+    const heading = await screen.findByRole("heading", { level: 2, name: "What would you like to make?" });
+    expect(heading.className).toContain("text-balance");
+    expect(screen.getByText(/Describe what you want to keep track of/).className).toContain("text-balance");
+  });
+});
+
+describe("what a screen reader hears", () => {
+  /** The live region of the conversation that `inside` is in. */
+  const regionOf = (inside: HTMLElement) => inside.closest(".overflow-y-auto")!.querySelector<HTMLElement>('[aria-live="polite"]');
+  const hidden = /(^|\s)(empty:)?hidden(\s|$)/;
+
+  it("has the live region on the page before the first message of a visit, so that it and Working… are announced", async () => {
+    const server = new FakeServer();
+    server.hang = true;
+    server.events = [];
+    start(server, `/chat?space=${PERSONAL}&chat=c-older`);
+    expect(await screen.findByText("Groceries please")).toBeTruthy();
+    const region = regionOf(screen.getByText("Groceries please"));
+    expect(region).not.toBeNull();
+    // Empty, it is still drawn (jsdom applies no :empty rule: the class stands in for it).
+    expect(region!.className).not.toMatch(hidden);
+    send("and milk");
+    expect((await screen.findByText("Working…")).closest("[aria-live]")).toBe(region);
+    expect(screen.getByText("and milk", { selector: "div" }).closest("[aria-live]")).toBe(region);
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(await screen.findByText("Stopped.")).toBeTruthy();
+  });
+
+  it("has it in a new conversation too, before anything is said", async () => {
+    const server = new FakeServer();
+    start(server);
+    const greeting = await screen.findByRole("heading", { level: 2, name: "What would you like to make?" });
+    const region = regionOf(greeting);
+    expect(region).not.toBeNull();
+    expect(region!.className).not.toMatch(hidden);
+    await waitFor(() => expect((box() as HTMLTextAreaElement).disabled).toBe(false));
+    send("Hello there");
+    expect((await screen.findByText("Noted: Hello there")).closest("[aria-live]")).toBe(region);
+  });
+
+  it("can reach the conversation from the keyboard, as a named region that scrolls", async () => {
+    const server = new FakeServer();
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+    expect(await screen.findByText("Keep notes for me")).toBeTruthy();
+    const log = screen.getByRole("region", { name: "Messages" });
+    expect(log.tabIndex).toBe(0);
+    expect(log.className).toContain("overflow-y-auto");
+    expect(within(log).getByText("Keep notes for me")).toBeTruthy();
+  });
+
+  it("names the region in Chinese too", async () => {
+    const server = new FakeServer();
+    server.locale = "zh";
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+    expect(await screen.findByText("Keep notes for me")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "消息" })).toBeTruthy();
+  });
+});
+
+describe("reading back while a turn runs", () => {
+  it("is not taken to the end when the turn ends with nothing new", async () => {
+    const server = new FakeServer();
+    let end = () => {};
+    server.finish = new Promise<void>((resolve) => (end = resolve));
+    server.events = [{ type: "text", text: "Noted: and milk" }];
+    start(server, `/chat?space=${PERSONAL}&chat=c-older`);
+    expect(await screen.findByText("Groceries please")).toBeTruthy();
+    const view = screen.getByText("Groceries please").closest<HTMLElement>(".overflow-y-auto")!;
+    let top = 0;
+    Object.defineProperty(view, "scrollHeight", { configurable: true, get: () => 1000 });
+    Object.defineProperty(view, "clientHeight", { configurable: true, get: () => 200 });
+    Object.defineProperty(view, "scrollTop", { configurable: true, get: () => top, set: (value: number) => (top = value) });
+    send("and milk");
+    expect(await screen.findByText("Noted: and milk")).toBeTruthy();
+    expect(top).toBe(1000); // a new entry still goes to the end
+    top = 100; // the person scrolls up to read
+    fireEvent.scroll(view);
+    act(() => end());
+    expect(await screen.findByRole("button", { name: "Send" })).toBeTruthy();
+    expect(top).toBe(100);
   });
 });

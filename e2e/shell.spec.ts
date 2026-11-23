@@ -428,7 +428,7 @@ test.describe("shell on a phone", () => {
 
       // A message in a new conversation: its answer comes, and its ID goes into the address.
       await page.getByRole("button", { name: locale === "zh" ? "新对话" : "New conversation" }).click();
-      const box = page.getByRole("textbox", { name: locale === "zh" ? "例如：帮我做一个记录日常花销的记账应用" : "For example: make me a ledger for my daily spending" });
+      const box = page.getByRole("textbox", { name: locale === "zh" ? "给你的模型发消息" : "Message your model" });
       await box.fill(long);
       await box.press("Enter");
       await expect(page.getByText(`Noted: ${long}`)).toBeVisible();

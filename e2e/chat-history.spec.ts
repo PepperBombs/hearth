@@ -46,7 +46,7 @@ function watchForProblems(page: Page): string[] {
 
 /** Writes a message in the open conversation and waits for the stand-in model's answer. */
 async function say(page: Page, text: string): Promise<void> {
-  await page.getByRole("textbox", { name: "For example: make me a ledger for my daily spending" }).fill(text);
+  await page.getByRole("textbox", { name: "Message your model" }).fill(text);
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByText(`Noted: ${text}`)).toBeVisible();
   await expect(page.getByRole("button", { name: "Send" })).toBeVisible();

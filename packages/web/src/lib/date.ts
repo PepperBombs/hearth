@@ -12,21 +12,37 @@ export function formatToday(date: Date, locale: Locale): string {
 
 const INTL: Record<Locale, string> = { en: "en-US", zh: "zh-Hans-CN" };
 
-/**
- * When something last happened, on the reader's clock and in their language:
- * "now" or "5 minutes ago" within the hour, the time of day earlier today,
- * "yesterday", then the date, with the year when it is not this one.
- */
-export function formatWhen(date: Date, now: Date, locale: Locale): string {
-  const tag = INTL[locale];
-  const relative = new Intl.RelativeTimeFormat(tag, { numeric: "auto" });
-  const minutes = Math.floor((now.getTime() - date.getTime()) / 60_000);
-  if (minutes < 1) return relative.format(0, "second");
-  if (minutes < 60) return relative.format(-minutes, "minute");
+/** Whole days from `date` to `now` on the reader's clock: 0 today, 1 yesterday. */
+function daysBetween(date: Date, now: Date): number {
   const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const days = Math.round((day(now) - day(date)) / 86_400_000);
-  if (days === 0) return new Intl.DateTimeFormat(tag, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date);
-  if (days === 1) return relative.format(-1, "day");
+  // Rounded: a day across a change of summer time is 23 or 25 hours long.
+  return Math.round((day(now) - day(date)) / 86_400_000);
+}
+
+/** The parts a list by day is cut into, on the reader's clock. */
+export type DayGroup = "today" | "yesterday" | "week" | "older";
+
+/**
+ * Which part of a list by day something falls in: today, yesterday, the 7
+ * days before today (yesterday aside), or earlier. A time a little ahead of
+ * this device's clock counts as today.
+ */
+export function dayGroup(date: Date, now: Date): DayGroup {
+  const days = daysBetween(date, now);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days <= 7) return "week";
+  return "older";
+}
+
+/**
+ * A short time for a row of a list: the time of day for today, otherwise
+ * the date, with the year when it is not this one. "09:05", "Nov 3",
+ * "11月3日", "Nov 3, 2025".
+ */
+export function formatListTime(date: Date, now: Date, locale: Locale): string {
+  const tag = INTL[locale];
+  if (daysBetween(date, now) <= 0) return new Intl.DateTimeFormat(tag, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date);
   return new Intl.DateTimeFormat(tag, {
     month: "short",
     day: "numeric",
