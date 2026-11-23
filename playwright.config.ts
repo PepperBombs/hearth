@@ -6,6 +6,7 @@ import {
   MEMBER_EMAIL,
   MEMBER_PORT,
   MEMBER_URL,
+  MODEL_PORT,
   OWNER_EMAIL,
   OWNER_PORT,
   OWNER_URL,
@@ -27,8 +28,9 @@ import {
  *   test decides exactly what the server says: a member, someone not invited,
  *   a failure. This is where almost every test lives.
  *
- * - "server" runs the few tests in e2e/real-server.spec.ts against the real
- *   server, built and started here with sign-in switched off (HEARTH_AUTH=dev),
+ * - "server" runs the few tests in e2e/real-server.spec.ts and
+ *   e2e/chat-history.spec.ts against the real server, built and started
+ *   here with sign-in switched off (HEARTH_AUTH=dev),
  *   serving the same built web app. Three copies run: one that treats every
  *   request as the owner, one as a member of the owner's family and one as a
  *   stranger. The owner's and the member's share a database file in the
@@ -36,14 +38,17 @@ import {
  *   that they are two people on one server; the stranger's is in memory.
  *   Every copy answers its apps' fetches from one file of stand-in answers
  *   beside that database (STAND_INS), which the tests write, so that no app
- *   reaches the network. Set HEARTH_E2E_SERVER=0 to leave this project out.
+ *   reaches the network. Their chat asks a stand-in model, a small server
+ *   started here too (e2e/model-stand-in.ts), never a real one. The tests
+ *   share the owner, so they run one at a time. Set HEARTH_E2E_SERVER=0 to
+ *   leave this project out.
  *
- * Ports are 4173 to 4176; set HEARTH_E2E_PORT to move all four.
+ * Ports are 4173 to 4177; set HEARTH_E2E_PORT to move all five.
  */
 const reuseExistingServer = !process.env.CI;
 
 /** The tests that run against the real server. */
-const REAL_SERVER_TESTS = /real-server\.spec\.ts$/;
+const REAL_SERVER_TESTS = /(real-server|chat-history)\.spec\.ts$/;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -67,7 +72,8 @@ export default defineConfig({
   },
   projects: [
     { name: "web", testIgnore: REAL_SERVER_TESTS, use: { baseURL: WEB_URL } },
-    ...(WITH_REAL_SERVER ? [{ name: "server", testMatch: REAL_SERVER_TESTS, use: { baseURL: OWNER_URL } }] : []),
+    // One at a time: the tests share the owner's preferences, model and spaces.
+    ...(WITH_REAL_SERVER ? [{ name: "server", testMatch: REAL_SERVER_TESTS, workers: 1, use: { baseURL: OWNER_URL } }] : []),
   ],
   webServer: [
     {
@@ -81,6 +87,16 @@ export default defineConfig({
     },
     ...(WITH_REAL_SERVER
       ? [
+          {
+            name: "stand-in model",
+            // Answers the chat of every copy below, in place of a real model. Node runs it as it is, stripping its types.
+            command: `node e2e/model-stand-in.ts ${MODEL_PORT}`,
+            port: MODEL_PORT,
+            reuseExistingServer,
+            timeout: 30_000,
+            stdout: "ignore" as const,
+            stderr: "pipe" as const,
+          },
           {
             name: "server",
             // Builds the server, then starts the copy that treats every request as the owner,

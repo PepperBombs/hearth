@@ -197,8 +197,9 @@ export function changeMember(db: Db, request: SpaceRequest & { memberId: string;
 /**
  * Takes someone out of a group: an owner removing a member, or anyone
  * leaving. Their exceptions, switches, pins and own settings in the group's
- * apps go with them (the database cascades); the rows they wrote stay,
- * since they belong to the group.
+ * apps go with them, and so do their conversations with their model there
+ * (the database cascades); the rows they wrote stay, since they belong to
+ * the group.
  *
  * Throws a Refusal: 404 when the person asking is not in the space, or the
  * person to remove is not; 403 when a plain member removes someone else;

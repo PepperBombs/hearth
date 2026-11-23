@@ -44,17 +44,23 @@ function world(modelFetch?: typeof fetch) {
   const saveModel = (body: Record<string, unknown>) => call("/api/me/model", { method: "PUT", body: JSON.stringify(body) });
   const assistant = (spaceId: string, level: "none" | "view" | "edit") =>
     db.prepare("UPDATE spaces SET assistant = ? WHERE id = ?").run(level, spaceId);
-  /** The chat's events, once its stream has ended. */
-  const chat = async (spaceId: string, text: string) => {
+  /**
+   * The chat's events, once its stream has ended, after the one that names
+   * a new conversation (its ID is `chatId` of the list).
+   */
+  const chat = async (spaceId: string, text: string, chatId?: string) => {
     const response = await call("/api/chat", {
       method: "POST",
-      body: JSON.stringify({ spaceId, messages: [{ role: "user", content: text }] }),
+      body: JSON.stringify({ spaceId, message: text, ...(chatId ? { chatId } : {}) }),
     });
     expect(response.headers.get("content-type")).toMatch(/text\/event-stream/);
-    return (await response.text())
+    const events = (await response.text())
       .split("\n")
       .filter((line) => line.startsWith("data: "))
       .map((line) => JSON.parse(line.slice("data: ".length)) as { type: string; [key: string]: unknown });
+    if (chatId) return Object.assign(events, { chatId });
+    expect(events[0]).toMatchObject({ type: "chat", chatId: expect.any(String) });
+    return Object.assign(events.slice(1), { chatId: events[0]!.chatId as string });
   };
   return { ...people, call, saveModel, assistant, chat, errors, registry: madeAppsRegistry(db) };
 }
@@ -173,11 +179,18 @@ describe("the chat", () => {
       app.request(path, { method, body: JSON.stringify(body), headers: as(SAM, { "Content-Type": "application/json" }) });
     await post("/api/me/model", { protocol: "openai", baseUrl: "https://api.example.com/v1", model: "chat-1", apiKey: KEY }, "PUT");
     people.db.prepare("UPDATE spaces SET assistant = 'edit' WHERE id = ?").run(people.samsSpace);
-    const events = async (text: string) =>
-      (await (await post("/api/chat", { spaceId: people.samsSpace, messages: [{ role: "user", content: text }] })).text())
+    let chatId: string | undefined;
+    // One conversation: the first message starts it, the second goes on in it.
+    const events = async (text: string) => {
+      const all = (await (await post("/api/chat", { spaceId: people.samsSpace, message: text, ...(chatId ? { chatId } : {}) })).text())
         .split("\n")
         .filter((line) => line.startsWith("data: "))
-        .map((line) => JSON.parse(line.slice(6)) as unknown);
+        .map((line) => JSON.parse(line.slice(6)) as { type: string; chatId?: string });
+      if (chatId) return all;
+      expect(all[0]).toMatchObject({ type: "chat", title: text });
+      chatId = all[0]!.chatId;
+      return all.slice(1);
+    };
 
     expect(await events("给记账加一个分类")).toEqual([
       { type: "action", action: "app_updated", appId, appName: "记账", version: 2, previous: 1 },
@@ -213,6 +226,71 @@ describe("the chat", () => {
     const events = await chat(samsSpace, "做个应用");
     expect(events.at(-1)).toEqual({ type: "done" });
     expect((db.prepare("SELECT count(*) AS n FROM made_apps").get() as { n: number }).n).toBe(0);
+  });
+
+  it("gives the model the conversation the server kept, not what the browser says, and keeps what happened in order", async () => {
+    let madeId = "";
+    const model = fakeModel([
+      () => openAiAnswer({ content: "好的，做一个记账应用。", tool_calls: [toolCall("call_1", "create_app", { manifest: MANIFEST, html: "<p>记账</p>" })] }, "tool_calls"),
+      (sent) => {
+        const messages = sent.body.messages as { role: string; content?: string }[];
+        madeId = (JSON.parse(messages.at(-1)!.content!) as { appId: string }).appId;
+        return openAiAnswer({ content: "做好了。" });
+      },
+      (sent) => {
+        // The second message: the system prompt, then what was said, as plain text, the steps of one turn joined.
+        const messages = (sent.body.messages as { role: string; content: string }[]).slice(1);
+        expect(messages).toEqual([
+          { role: "user", content: "做一个记账应用" },
+          { role: "assistant", content: "好的，做一个记账应用。\n\n做好了。" },
+          { role: "user", content: "谢谢" },
+        ]);
+        return openAiAnswer({ content: "不客气。" });
+      },
+    ]);
+    const { samsSpace, saveModel, assistant, chat, call, errors } = world(model.fetch);
+    await saveModel({ protocol: "openai", baseUrl: "https://api.example.com/v1", model: "chat-1", apiKey: KEY });
+    assistant(samsSpace, "edit");
+
+    const first = await chat(samsSpace, "做一个记账应用");
+    expect(first.at(-1)).toEqual({ type: "done" });
+    const second = await chat(samsSpace, "谢谢", first.chatId);
+    expect([...second]).toEqual([{ type: "text", text: "不客气。" }, { type: "done" }]);
+    expect(model.sent).toHaveLength(3);
+    expect(errors).toEqual([]);
+
+    const kept = await (await call(`/api/spaces/${samsSpace}/chats/${first.chatId}`)).json();
+    expect(kept).toEqual({
+      chat: { id: first.chatId, title: "做一个记账应用", createdAt: expect.any(String), updatedAt: expect.any(String) },
+      entries: [
+        { kind: "user", text: "做一个记账应用" },
+        { kind: "model", text: "好的，做一个记账应用。" },
+        { kind: "action", action: "app_created", appId: madeId, appName: "记账" },
+        { kind: "model", text: "做好了。" },
+        { kind: "user", text: "谢谢" },
+        { kind: "model", text: "不客气。" },
+      ],
+    });
+  });
+
+  it("keeps why a turn failed, and gives the model none of it", async () => {
+    const model = fakeModel([
+      () => new Response("{}", { status: 500 }),
+      (sent) => {
+        expect((sent.body.messages as { role: string; content: string }[]).slice(1)).toEqual([
+          { role: "user", content: "你好\n\n在吗" },
+        ]);
+        return openAiAnswer({ content: "在。" });
+      },
+    ]);
+    const { samsSpace, saveModel, assistant, chat, call } = world(model.fetch);
+    await saveModel({ protocol: "openai", baseUrl: "https://api.example.com/v1", model: "chat-1", apiKey: KEY });
+    assistant(samsSpace, "edit");
+    const first = await chat(samsSpace, "你好");
+    expect(first.at(-1)).toMatchObject({ type: "error", failure: "model_failed" });
+    await chat(samsSpace, "在吗", first.chatId);
+    const kept = (await (await call(`/api/spaces/${samsSpace}/chats/${first.chatId}`)).json()) as { entries: { kind: string }[] };
+    expect(kept.entries.map((entry) => entry.kind)).toEqual(["user", "failure", "user", "model"]);
   });
 
   it("says what is missing before it asks any model", async () => {
@@ -270,9 +348,10 @@ describe("the chat", () => {
     await call("/api/me/model", { protocol: "anthropic", baseUrl: "https://api.anthropic.com", model: "claude-opus-5-5", apiKey: KEY });
     people.db.prepare("UPDATE spaces SET assistant = 'edit' WHERE id = ?").run(people.samsSpace);
 
-    const text = await (await call("/api/chat", { spaceId: people.samsSpace, messages: [{ role: "user", content: "记一笔咖啡 18 元" }] })).text();
+    const text = await (await call("/api/chat", { spaceId: people.samsSpace, message: "记一笔咖啡 18 元" })).text();
     const events = text.split("\n").filter((line) => line.startsWith("data: ")).map((line) => JSON.parse(line.slice(6)) as unknown);
     expect(events).toEqual([
+      { type: "chat", chatId: expect.any(String), title: "记一笔咖啡 18 元" },
       { type: "text", text: "好的。" },
       { type: "action", action: "row_added", appId, appName: "记账" },
       { type: "text", text: "记好了。" },

@@ -17,7 +17,11 @@ Notes for whoever changes this part, people and agents alike. They are read when
   `groups`, the people it knows in `people`, `ownAFamily` for a ready
   family) and records their changes in `groupChanges`. The owners' list of
   a space it was given none for, a personal one included, is drawn from the
-  session.
+  session. For the chat it answers the person's model (`model`, null until a
+  test sets one), their conversations in each space (`chats`: listed, read
+  and deleted, 404 for a space or conversation not theirs) and
+  `POST /api/chat`, whose made-up model answers "Noted: " and the message,
+  keeping both and recording the request in `chatRequests`.
 - Removing an app keeps everyone's switches, pins and settings, and its
   data, and the end-to-end tests against the real server share one server.
   A test there that changes them puts them back, or works in a group of its
@@ -40,6 +44,22 @@ Notes for whoever changes this part, people and agents alike. They are read when
   owner's copy starts: a test writes it whole with `writeStandIns` before it
   opens an app that fetches, such as GitHub Trending, and until then every
   fetch fails as the network would. No copy reaches a real host.
+- The chat of every copy of the real server asks a stand-in model, never a
+  real one: `e2e/model-stand-in.ts`, a small Node server that
+  `playwright.config.ts` starts on `MODEL_PORT` (`e2e/servers.ts`, the port
+  after Lin's) and every copy is given as `HEARTH_MODEL_STANDIN`, with a
+  `HEARTH_SECRET` of their own that seals the keys the tests save (the same
+  in every copy, so Lin's copy opens what the owner's sealed). It answers
+  `POST /chat/completions` alone, with "Noted: " and the person's last
+  message, and calls no tool. A test may save any OpenAI-compatible model
+  in Settings (`https://api.example.com/v1`, a made-up key): nothing reaches
+  that host.
+- The tests against the real server are `real-server.spec.ts` and
+  `chat-history.spec.ts` (`REAL_SERVER_TESTS`); they share the owner's
+  preferences, model and spaces, so the "server" project runs them in one
+  worker, one file after another. A test there that changes the owner's
+  model, the assistant's switch of a space or its conversations puts them
+  back when it ends.
 - Playwright's `serviceWorkers: "block"` (the default in `playwright.config.ts`) runs a script in every frame that reads `navigator.serviceWorker`, which a made app's sandboxed frame refuses with a page error. A test that draws a made app and collects page errors allows service workers (`test.use({ serviceWorkers: "allow" })`), so that every error it collects is a real one.
 - A made app's page lives in an iframe: reach it with `sandbox(page, appId)` (`e2e/fixtures.ts`), which is `page.frameLocator('iframe[data-made-app="<id>"]')`. A grocery card keeps only what is still to buy, so an item ticked there leaves it, at once when nothing else is left and before its tick is saved: read the server's rows after it with `expect.poll`.
 - A fetch of an app's page that the server answers with an error, such as a 502 for a host that failed, is logged by the browser as a console error ("Failed to load resource"): a test that collects console errors expects that line.

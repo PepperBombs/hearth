@@ -399,6 +399,44 @@ test.describe("shell on a phone", () => {
     }
   });
 
+  test("the chat, its conversations and the list of them stay inside the edges, in both languages", async ({ page, api }) => {
+    const long = "Make me a ledger for our daily spending, with a column for who paid and one for what it was for, kept for the whole year";
+    for (const locale of ["en", "zh"] as const) {
+      const session = sessionWithApps({ locale, name: "A person with quite a long name indeed" });
+      api.setSession({ ...session, spaces: session.spaces.map((space) => ({ ...space, assistant: "edit" as const })) });
+      api.model = { protocol: "openai", baseUrl: "https://api.example.com/v1", model: "sample-model", hasKey: true };
+      const at = "2026-11-20T08:00:00.000Z";
+      api.chats = {
+        [PERSONAL_SPACE]: [
+          { chat: { id: "chat-long", title: `${long.slice(0, 80)}…`, createdAt: at, updatedAt: at }, entries: [{ kind: "user", text: long }, { kind: "model", text: `Noted: ${long}` }] },
+          { chat: { id: "chat-short", title: "Groceries", createdAt: at, updatedAt: at }, entries: [{ kind: "user", text: "Groceries" }] },
+        ],
+      };
+
+      await page.goto(`/chat?space=${PERSONAL_SPACE}&chat=chat-long`);
+      await expect(page.getByText(`Noted: ${long}`)).toBeVisible();
+      await expectNothingPastTheEdge(page);
+
+      // On a phone the list is a dialog, opened from a button, and the open conversation is marked in it.
+      await page.getByRole("button", { name: locale === "zh" ? "对话记录" : "Conversations" }).click();
+      const list = page.getByRole("dialog");
+      await expect(list.getByRole("link", { name: /^Make me a ledger/ })).toHaveAttribute("aria-current", "page");
+      await expectNothingPastTheEdge(page);
+      await list.getByRole("link", { name: /^Groceries/ }).click();
+      await expect(list).toBeHidden();
+      await expect(page).toHaveURL(/chat=chat-short/);
+
+      // A message in a new conversation: its answer comes, and its ID goes into the address.
+      await page.getByRole("button", { name: locale === "zh" ? "新对话" : "New conversation" }).click();
+      const box = page.getByRole("textbox", { name: locale === "zh" ? "例如：帮我做一个记录日常花销的记账应用" : "For example: make me a ledger for my daily spending" });
+      await box.fill(long);
+      await box.press("Enter");
+      await expect(page.getByText(`Noted: ${long}`)).toBeVisible();
+      await expect(page).toHaveURL(/chat=chat-\d+/);
+      await expectNothingPastTheEdge(page);
+    }
+  });
+
   test("an app's page in a group names the group in the top bar", async ({ page, api }) => {
     api.setSession(sessionWithBuiltInApps());
     await page.goto(`/apps/${FAMILY_SPACE}/m-checklist`);

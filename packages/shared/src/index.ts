@@ -501,17 +501,26 @@ export const modelSettingsRequestSchema = z.strictObject({
 });
 export type ModelSettingsRequest = z.infer<typeof modelSettingsRequestSchema>;
 
-/** One message of the conversation as the browser keeps it: plain text. */
+/**
+ * One message of the conversation as the model is given it: plain text.
+ * The server builds these from the conversation it keeps (`historyFor` in
+ * packages/server/src/model/chats.ts).
+ */
 export const chatMessageSchema = z.strictObject({
   role: z.enum(["user", "assistant"]),
-  content: z.string().max(20_000),
+  content: z.string(),
 });
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 
-/** POST /api/chat: the conversation so far, last of all the person's new message. */
+/**
+ * POST /api/chat: the person's new message, in a conversation of theirs in
+ * the space, or in a new one when `chatId` is left out. The server keeps the
+ * conversation and gives the model what was said before.
+ */
 export const chatRequestSchema = z.strictObject({
   spaceId: z.string().min(1).max(100),
-  messages: z.array(chatMessageSchema).min(1).max(60),
+  chatId: z.string().min(1).max(100).optional(),
+  message: z.string().trim().min(1).max(20_000),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 
@@ -531,24 +540,60 @@ export const CHAT_FAILURES = [
 ] as const;
 export type ChatFailure = (typeof CHAT_FAILURES)[number];
 
+/** A conversation as its list shows it. Its title is the start of its first message. */
+export const chatSummarySchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  createdAt: z.string(),
+  /** When something was last said in it. */
+  updatedAt: z.string(),
+});
+export type ChatSummary = z.infer<typeof chatSummarySchema>;
+
+/** GET /api/spaces/:spaceId/chats: the person's own conversations there, the one used last first. */
+export const chatListSchema = z.object({ chats: z.array(chatSummarySchema) });
+export type ChatList = z.infer<typeof chatListSchema>;
+
+/** What a change the model made in an app says, as an event and as a kept entry. */
+const chatActionFields = {
+  action: z.enum(CHAT_ACTIONS),
+  appId: z.string(),
+  appName: z.string(),
+  /** For a change to the app itself: the version it made, and the one before, which undoing it brings back. */
+  version: z.number().int().positive().optional(),
+  previous: z.number().int().positive().optional(),
+  /** For "app_restored": the earlier version it brought back. */
+  restored: z.number().int().positive().optional(),
+};
+
+/**
+ * One entry of a kept conversation, in the order it happened: what the
+ * person said, what the model said in one step, a change it made, or why a
+ * turn ended without an answer.
+ */
+export const chatEntrySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("user"), text: z.string() }),
+  z.object({ kind: z.literal("model"), text: z.string() }),
+  z.object({ kind: z.literal("action"), ...chatActionFields }),
+  z.object({ kind: z.literal("failure"), failure: z.enum(CHAT_FAILURES), detail: z.string() }),
+]);
+export type ChatEntry = z.infer<typeof chatEntrySchema>;
+
+/** GET /api/spaces/:spaceId/chats/:chatId: one conversation of the person's, whole. */
+export const chatSchema = z.object({ chat: chatSummarySchema, entries: z.array(chatEntrySchema) });
+export type Chat = z.infer<typeof chatSchema>;
+
 /**
  * One event of POST /api/chat's answer, a stream of server-sent events whose
- * data is this JSON. "text" is what the model said in one step; "action" a
- * change it made; the stream ends with "done" or "error".
+ * data is this JSON. "chat" comes first when the message started a new
+ * conversation; "text" is what the model said in one step; "action" a
+ * change it made; the stream ends with "done" or "error". "text", "action"
+ * and "error" are kept with the conversation as they are sent.
  */
 export const chatEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("chat"), chatId: z.string(), title: z.string() }),
   z.object({ type: z.literal("text"), text: z.string() }),
-  z.object({
-    type: z.literal("action"),
-    action: z.enum(CHAT_ACTIONS),
-    appId: z.string(),
-    appName: z.string(),
-    /** For a change to the app itself: the version it made, and the one before, which undoing it brings back. */
-    version: z.number().int().positive().optional(),
-    previous: z.number().int().positive().optional(),
-    /** For "app_restored": the earlier version it brought back. */
-    restored: z.number().int().positive().optional(),
-  }),
+  z.object({ type: z.literal("action"), ...chatActionFields }),
   z.object({ type: z.literal("error"), failure: z.enum(CHAT_FAILURES), detail: z.string() }),
   z.object({ type: z.literal("done") }),
   z.object({ type: z.literal("ping") }),

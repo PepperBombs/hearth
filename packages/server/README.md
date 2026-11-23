@@ -194,7 +194,10 @@ app.
 | `GET /api/me/model` | yes | The caller's own model: `{ protocol, baseUrl, model, hasKey }`, or `null`. The key never leaves the server. |
 | `PUT /api/me/model` | yes | Saves the caller's model: `{ protocol, baseUrl, model, apiKey? }`; without `apiKey` the saved key is kept. Answers like the `GET`. |
 | `DELETE /api/me/model` | yes | Forgets the caller's model and key. Answers `204`. |
-| `POST /api/chat` | yes | `{ spaceId, messages }`: the conversation so far, to the caller's own model, in one of their spaces. Answered as a stream of server-sent events (`ChatEvent` in `@hearth/shared`). |
+| `GET /api/spaces/:spaceId/chats` | yes | `{ chats }`: the caller's own conversations with their model in the space, the one used last first, each `{ id, title, createdAt, updatedAt }`. Nobody else's, in a group too. |
+| `GET /api/spaces/:spaceId/chats/:chatId` | yes | `{ chat, entries }`: one conversation of the caller's, whole, its entries in order (`ChatEntry` in `@hearth/shared`). `404` for anyone else's, or one of another space, as for one that is not there. |
+| `DELETE /api/spaces/:spaceId/chats/:chatId` | yes | Deletes one conversation of the caller's. Answers `204`. What the model made in it stays. |
+| `POST /api/chat` | yes | `{ spaceId, chatId?, message }`: the caller's new message to their own model, in a conversation of theirs in the space, or in a new one without `chatId`. The server keeps the conversation and gives the model what was said before. Answered as a stream of server-sent events (`ChatEvent` in `@hearth/shared`), the first `{ type: "chat", chatId, title }` for a new conversation. Before it: `404` for a space or conversation that is not the caller's, `409` while that conversation is answering already, when it holds 500 entries, or, for a new one, when the caller has 500 conversations in the space. |
 
 Every failure has the shape `{ error: { code, message } }`. The message is
 English text for logs and network traces; the web app chooses what to show
@@ -566,7 +569,9 @@ in use) and `user_models` (each person's own model, the key sealed);
 migration 6 `made_app_versions` (every version of a made app, the newest
 30 kept); migration 7 the columns `made_apps.template` and
 `template_hash` (the built-in app a copy was added from, and which release
-of it the copy is while nobody changed it).
+of it the copy is while nobody changed it). Migration 8 adds `chats` and
+`chat_entries`: each person's conversations with their model in a space,
+theirs alone, which go when they leave it.
 
 The server writes `space_apps`; the access route, and adding or moving an
 app as a member, write `app_access`; the rows routes and the chat write
@@ -577,7 +582,7 @@ people who are not in the new space. The routes for groups write `spaces`,
 `space_members`, `invitations` and `space_invitations`. SQL for `app_rows`
 and `app_settings` lives in `src/apps/store.ts` only; for `made_apps` and
 `made_app_versions` it is in `src/made/apps.ts` and `src/made/builtin.ts`,
-and for `user_models` in `src/model/settings.ts`. Nothing writes `app_jobs` any more, since the jobs
+for `user_models` in `src/model/settings.ts`, and for `chats` and `chat_entries` in `src/model/chats.ts`. Nothing writes `app_jobs` any more, since the jobs
 of mini-apps were removed: the move of their installs to the built-in apps
 deletes the rows of each install it moves (`src/made/builtin.ts`), and the
 table stays, as every table that has shipped does.

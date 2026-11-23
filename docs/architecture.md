@@ -289,7 +289,8 @@ says, and the routes ask it again.
   member stay when they become an owner, who can use every app anyway, and
   count again if they stop being one.
 - Someone who leaves loses their exceptions, switches, pins and own
-  settings in the group; the rows they wrote stay with the group.
+  settings in the group, and their conversations with their model there;
+  the rows they wrote stay with the group.
 - A personal space has no members to manage: nobody joins, leaves or
   renames it.
 
