@@ -153,19 +153,9 @@ export default app.routes({
 - **Every route has a `description`**: one English sentence saying what it
   does, for a reader who has not seen the app. A route without one stops the
   server from starting.
-- **Every query and mutation is also a tool for an assistant.** A person may
-  connect Claude to Hearth, and where a space's owners allow it, Claude
-  calls your routes as that person, with their access: a query wherever the
-  assistant may read, a mutation only where it may change things. So write
-  no route that is safe only because your own page calls it. The tool is
-  named `<app ID>_<route>` and described by the route's `description`, then
-  your app's English name and description, and Claude chooses by those; a
-  name longer than 64 characters is not offered (the server says so when it
-  starts). The route's `input` is shown to Claude as JSON Schema: a part
-  JSON Schema has no word for, such as `z.date()`, is shown as taking
-  anything, with a warning at start-up. A mutation is marked as one that may
-  destroy data, and an answer longer than 100,000 characters is not sent:
-  give a route that lists a lot a filter or a limit. Jobs are never tools.
+- **Your page is not the only caller.** Anyone who may use the app can call
+  its routes through Hearth's API, with their own access, so write no route
+  that is safe only because your own page calls it.
 - **`input`** is a zod schema for what the caller sends; the handler gets
   its output. Leave it out for a route that takes nothing.
 - **`ctx`** also has `user` (`id`, `name`), `locale`, `space` (`kind`,

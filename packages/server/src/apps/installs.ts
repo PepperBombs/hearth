@@ -107,31 +107,6 @@ export function resolveInstall(
   return level === "none" ? null : level;
 }
 
-/** One app in one space that an assistant may use for a person, and what it may do there. */
-export type AssistantInstall = { spaceId: string; appId: string; access: AccessLevel };
-
-/**
- * Every install an assistant may use for a person: in the order of the
- * session's apps, those the person has switched on for themselves, with
- * what the assistant may do with each. Apps the server holds no code for
- * are left out.
- */
-export function listAssistantInstalls(db: Db, registry: Registry, userId: string): AssistantInstall[] {
-  const rows = db
-    .prepare(
-      `${VISIBLE}
-        ORDER BY CASE s.kind WHEN 'personal' THEN 0 ELSE 1 END, s.created_at, s.id,
-                 a.created_at, a.app_id`,
-    )
-    .all({ userId }) as VisibleRow[];
-  const installs: AssistantInstall[] = [];
-  for (const row of rows) {
-    if (row.assistant === "none" || row.enabled !== 1 || !registry.has(row.appId)) continue;
-    installs.push({ spaceId: row.spaceId, appId: row.appId, access: row.assistant });
-  }
-  return installs;
-}
-
 /**
  * Every app a person can reach, for the session: their personal space
  * first, then groups from oldest to newest, and within a space in the order

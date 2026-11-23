@@ -2,10 +2,9 @@
 
 The Hearth server: a small [Hono](https://hono.dev) application on Node that
 answers the JSON API under `/api` and serves the built web app for every other
-path. It keeps its data in one SQLite file. `POST /mcp` is the assistant's MCP
-endpoint, through which Claude reads and changes the
-apps' data as the person who connected it, where a space's owners allow it
-(`src/assistant`; `docs/self-hosting.md`, section 10).
+path. It keeps its data in one SQLite file. Each person's own model works in
+the chat as their assistant (`src/model`; `docs/platform.md`), as far as a
+space's owners allow an assistant there (`src/assistant`).
 
 It is the app shell plus most of mini-apps: the server is built with a
 list of apps; an app can be added to a space, removed, brought back, moved
@@ -195,7 +194,6 @@ app.
 | `POST /api/spaces/:spaceId/apps/:appId/m/:name` | yes | Runs the app's mutation of that name. Takes `{ input? }`; answers `{ output }`, or `{}` when it returns nothing. Needs edit access. |
 | `GET /api/spaces/:spaceId/apps/:appId/jobs/:job` | yes | How the app's job of that name went in this space: `{ lastStartedAt, lastSucceededAt, lastFailedAt, lastError, nextRunAt, state }`, `state` being `idle`, `requested` or `running`. Needs view access. |
 | `POST /api/spaces/:spaceId/apps/:appId/jobs/:job/run` | yes | Asks for a run now. No body. Answers `202` with the status, as the `GET`. Needs edit access. |
-| `POST /mcp` | yes | The assistant's MCP endpoint (`src/assistant/mcp.ts`, on the official SDK): JSON-RPC, answered as JSON or as an event stream. Its tools are the queries and mutations of the apps the person may use, where the space's level allows an assistant, and `hearth-spaces`; a call runs through `callApp` as the person, `by: "assistant"`. At most 60 calls a minute for each person, and answers of at most 100,000 characters. `GET` and `DELETE` answer `405`. See `docs/mini-app-contract.md`, section F. |
 
 Every failure has the shape `{ error: { code, message } }`. The message is
 English text for logs and network traces; the web app chooses what to show
@@ -648,13 +646,7 @@ does that.
   and must not have passed through a proxy; see "Run it in development".
   Listening on loopback alone would not stop a web page that points its own
   host name at `127.0.0.1` (DNS rebinding), nor a tunnel on the same machine.
-- `POST /mcp` is held to the same check, with one addition: an `Origin` that
-  is Claude's own site (`ASSISTANT_ORIGINS` in `src/assistant/mcp.ts`) is
-  accepted there, since Claude's servers name it in some of their requests.
-  `/api` accepts it from no one. A page of another site cannot make use of
-  that: the endpoint takes JSON only, which a page cannot send to another
-  site without the server's leave, and the server gives none.
-- Answers under `/api` and from `/mcp` are sent with `Cache-Control: no-store`.
+- Answers under `/api` are sent with `Cache-Control: no-store`.
 - Request bodies over 64 KB are refused.
 
 ## Database

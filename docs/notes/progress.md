@@ -121,3 +121,5 @@ guide (`docs/self-hosting.md`, section 10). All four are built and reviewed
 concern). Nothing has talked to the real Claude or to a real Access
 application with Managed OAuth: that is the owner's first try, after the
 deploy, and section 10 of the guide is marked as untried until then.
+
+In November 2026 the owner chose to remove the connector, since each person's own model in Hearth's chat (`docs/platform.md`) does what it did: the endpoint at `/mcp` and its tools, the Assistant card's address and "Add to Claude", the end-to-end project `assistant` and section 10 of the guide went, and the switches of F1 stay, set on the Assistant card, to govern that model in the chat.

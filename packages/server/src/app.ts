@@ -12,9 +12,7 @@ import { listAppsForUser } from "./apps/installs";
 import { requestGapFor } from "./apps/jobs";
 import { createRegistry, type BundledApp } from "./apps/registry";
 import { registerAppRoutes } from "./apps/routes";
-import { ASSISTANT_ORIGINS, createMcpEndpoint, methodNotAllowed } from "./assistant/mcp";
 import { registerAssistantRoutes } from "./assistant/routes";
-import { createToolCatalog } from "./assistant/tools";
 import { identifyFromConfig, type Identify } from "./auth";
 import type { Config } from "./config";
 import type { Db } from "./db/database";
@@ -44,8 +42,6 @@ export type AppOptions = {
   identify?: Identify;
   /** Receives unexpected errors. Defaults to the console. Nothing of them reaches the client. */
   logError?: (error: unknown) => void;
-  /** Receives what the server says once at start-up about its apps. Defaults to the console. */
-  warn?: (message: string) => void;
   /**
    * Called when a job may have fallen due at once: an app was added to a
    * space or brought back, or someone asked for a run. startServer
@@ -69,9 +65,6 @@ export type AppOptions = {
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-/** Where the assistant's MCP endpoint is: the address to give Claude is the server's own with this path. */
-export const MCP_PATH = "/mcp";
-
 /**
  * Builds the application without listening, so tests can call it directly.
  * Throws AppRegistryError when one of the given mini-apps is not valid.
@@ -82,10 +75,6 @@ export function createApp(options: AppOptions): Hono<Env> {
   const registry = withMadeApps(db, createRegistry(options.apps));
   const identify = options.identify ?? identifyFromConfig(config.auth);
   const logError = options.logError ?? ((error: unknown) => console.error(error));
-  const warn = options.warn ?? ((message: string) => console.warn(message));
-  // Every route of the build that can be an assistant's tool, made once (section F).
-  const catalog = createToolCatalog(registry);
-  for (const warning of catalog.warnings) warn(warning);
 
   /** Lets members through and puts the user on the context. */
   const requireMember: RequireMember = async (c, next) => {
@@ -166,21 +155,6 @@ export function createApp(options: AppOptions): Hono<Env> {
 
   app.all("/api", (c) => apiError(c, 404, "not_found", NOTHING_HERE));
   app.all("/api/*", (c) => apiError(c, 404, "not_found", NOTHING_HERE));
-
-  // The assistant's MCP endpoint (section F, "The endpoint"). Cloudflare
-  // Access names this address, path included, as the resource Claude signs
-  // in to, which is the form Claude requires.
-  const mcp = createMcpEndpoint({ db, registry, catalog, version: config.version, logError });
-  app.post(
-    MCP_PATH,
-    noStore(),
-    // Claude's servers may name Claude's own site as the origin: here alone, never on /api.
-    sameOrigin({ allowLoopbackOrigins: config.auth.mode === "dev", allowOrigins: ASSISTANT_ORIGINS }),
-    requireMember,
-    (c) => mcp.fetch(c.req.raw, c.get("user")),
-  );
-  // Only POST: no session is kept, so there is no stream to open and nothing to end.
-  app.on(["GET", "DELETE"], MCP_PATH, () => methodNotAllowed());
 
   app.get("*", serveWebApp(config.webDist));
 

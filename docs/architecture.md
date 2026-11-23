@@ -204,9 +204,10 @@ brings the app back.
 
 A mini-app's `server.ts` names its **collections** (a zod schema for the rows
 of each) and its routes: **queries**, which read, and **mutations**, which
-change data. Each route carries one English sentence saying what it does, so
-that an assistant can pick routes by it (see "The assistant" below); an app
-whose route has none does not start.
+change data. Each route carries one English sentence saying what it does,
+written for an assistant to pick routes by (decision 7 of the mini-app
+contract), though none reads it since the connector for Claude was removed
+(see "The assistant" below); an app whose route has none does not start.
 
 ```ts
 import { defineServer, z } from "@hearth/sdk/server";
@@ -547,43 +548,23 @@ with an invitation; everyone else gets "not a member".
 
 ## The assistant
 
-Each person may add Hearth to their own Claude as a custom connector
-(docs/mini-app-contract.md, section F; the steps are in
-`docs/self-hosting.md`, section 10). Claude then talks to Hearth's MCP
-endpoint at `/mcp` (`POST`; `GET` and `DELETE` answer 405).
+The assistant is each person's own model, which they save in Settings
+("Your model") and talk to in the chat (`docs/platform.md`). It works in one
+of the person's spaces at a time, as that person.
 
-- **Sign-in is Access's.** With Managed OAuth on, Cloudflare Access signs
-  Claude in as the person, in their browser, and forwards Claude's requests
-  with the same signed token a browser's carry. Hearth checks it with the
-  same `identify` and membership as `/api`, and implements no OAuth.
-- **The protocol is the official SDK's** (`@modelcontextprotocol/server`):
-  a server made for each request, which keeps no session, speaking MCP
-  2026-07-28 and the 2025 handshake Claude uses today.
-- **The tools are the apps' routes.** Every query and mutation of the build
-  is a tool named `<app ID>_<route>`, with its description and its input
-  schema as JSON Schema, and a `space` argument naming one of the person's
-  spaces. Queries are marked as reading only and mutations as changes, so
-  that Claude treats them that way; `hearth-spaces` says what Claude may
-  do where. A space is named as the person sees it, and a name means one
-  space: when two of a person's spaces are called alike, each is marked
-  with the start of its own ID (`assistantSpaceLabels` in `@hearth/shared`,
-  which the Assistant card shows too), so that a change approved for one
-  name can never land in another space.
-- **What Claude may do is the person's access, capped by the space.** Each
+- **What it may do is the person's access, capped by the space.** Each
   space's owners choose Off (where every space starts), Read only or Read
-  and change, in Settings, and may leave apps out. `VISIBLE` works out the
-  result beside the person's own access, and every call runs through
-  `callApp`, which checks it again inside its transaction.
-- **Hearth cannot make Claude ask** before a change: Claude decides from the
-  tools' hints and the person's settings in Claude, and its Research and
-  "Skip all approvals" do not ask at all. Read only is the hard limit on
-  what Claude does through `/mcp`.
-- **The sign-in is wider than the endpoint.** Access gives a program a
-  person signs in to their sign-in to the whole application, so all of
-  Hearth, as their browser has. The levels above hold at `/mcp`, which is
-  all Claude calls; they do not narrow what that sign-in could reach
-  elsewhere. Narrowing it is the owner's to decide (section F, "Left out
-  on purpose").
+  and change, on the Assistant card in Settings, and may leave apps out
+  there; an owner can also switch an Off space to Read and change from the
+  chat. `VISIBLE` works out the result beside the person's own access (its
+  `assistant`), and every tool of the chat reaches an app through
+  `resolveInstall` with `by: "assistant"`, inside the transaction that
+  reads or writes. Making an app needs Read and change for the space.
+- **The switches came with a connector for Claude** (section F of
+  `docs/mini-app-contract.md`): Hearth answered Claude at `/mcp`, with the
+  build's queries and mutations as its tools. The owner removed the
+  connector in November 2026, since the chat does what it did; the
+  switches stayed for the chat.
 
 ## Three repositories
 
