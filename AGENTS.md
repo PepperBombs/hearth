@@ -12,7 +12,7 @@ server, and their family uses it too. Each person makes the apps they want
 in a chat with their own model, or adds one that Hearth ships; an app is a
 manifest and one HTML page, kept in the database and run in the browser's
 sandbox (`docs/platform.md`). This repository is all of Hearth: public,
-AGPL-3.0. Beside it on the server lies `hearth-data` (private, the owner's
+MIT. Beside it on the server lies `hearth-data` (private, the owner's
 content, for later). The database file and secrets live in neither.
 
 ## Rules that must not be broken
