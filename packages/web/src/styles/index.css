@@ -195,3 +195,17 @@
     opacity: 0.45;
   }
 }
+
+/* The chat's three dots while the model works: each rises and brightens in turn. Only with motion-safe. */
+@keyframes hearth-typing {
+  0%,
+  70%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  35% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
