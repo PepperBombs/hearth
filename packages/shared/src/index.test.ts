@@ -19,6 +19,7 @@ import {
   appSummarySchema,
   createSpaceRequestSchema,
   deleteAppDataRequestSchema,
+  leaveGroupRequestSchema,
   memberPatchSchema,
   moveAppRequestSchema,
   sessionSchema,
@@ -118,6 +119,13 @@ describe("the session", () => {
     expect(accepts(spaceSchema, { ...space, members: [{ id: "user-1", name: "Sam", role: "guest" }] })).toBe(false);
   });
 
+  it("tells a group's owners how many invitations wait, as a whole number", () => {
+    expect(accepts(spaceSchema, { ...space, pendingInvitations: 2 })).toBe(true);
+    expect(accepts(spaceSchema, { ...space, pendingInvitations: 0 })).toBe(true);
+    expect(accepts(spaceSchema, { ...space, pendingInvitations: -1 })).toBe(false);
+    expect(accepts(spaceSchema, { ...space, pendingInvitations: 1.5 })).toBe(false);
+  });
+
   it("drops what it does not name, such as a member's email address", () => {
     const parsed = spaceSchema.parse({
       ...space,
@@ -128,12 +136,21 @@ describe("the session", () => {
 });
 
 describe("error codes", () => {
-  it("include forbidden and conflict", () => {
+  it("include forbidden, conflict and confirm_required", () => {
     expect(API_ERROR_CODES).toEqual(
-      expect.arrayContaining(["unauthenticated", "not_a_member", "forbidden", "invalid_request", "not_found", "conflict", "internal"]),
+      expect.arrayContaining([
+        "unauthenticated",
+        "not_a_member",
+        "forbidden",
+        "invalid_request",
+        "not_found",
+        "conflict",
+        "confirm_required",
+        "internal",
+      ]),
     );
-    expect(API_ERROR_CODES).toHaveLength(7);
-    for (const code of ["forbidden", "conflict"]) {
+    expect(API_ERROR_CODES).toHaveLength(8);
+    for (const code of ["forbidden", "conflict", "confirm_required"]) {
       expect(accepts(apiErrorSchema, { error: { code, message: "Sample failure" } })).toBe(true);
     }
     expect(accepts(apiErrorSchema, { error: { code: "teapot", message: "Sample failure" } })).toBe(false);
@@ -148,6 +165,7 @@ describe("request bodies", () => {
       [addMemberRequestSchema, { email: "lin@example.com" }],
       [memberPatchSchema, { canAddApps: true }],
       [withdrawInvitationRequestSchema, { email: "kim@example.com" }],
+      [leaveGroupRequestSchema, { confirm: "Family" }],
       [addAppRequestSchema, { memberAccess: "view" }],
       [deleteAppDataRequestSchema, { confirm: "checklist" }],
       [moveAppRequestSchema, { toSpaceId: "space-2" }],
@@ -185,6 +203,15 @@ describe("request bodies", () => {
     expect(withdrawInvitationRequestSchema.parse({ email: " kim@example.com " })).toEqual({ email: "kim@example.com" });
     expect(accepts(withdrawInvitationRequestSchema, { email: "" })).toBe(false);
     expect(accepts(withdrawInvitationRequestSchema, {})).toBe(false);
+  });
+
+  it("leave a group with or without its name to confirm", () => {
+    expect(leaveGroupRequestSchema.parse({})).toEqual({});
+    // Kept as typed: the server compares it trimmed with the group's name.
+    expect(leaveGroupRequestSchema.parse({ confirm: " Family " })).toEqual({ confirm: " Family " });
+    expect(accepts(leaveGroupRequestSchema, { confirm: "x".repeat(200) })).toBe(true);
+    expect(accepts(leaveGroupRequestSchema, { confirm: "x".repeat(201) })).toBe(false);
+    expect(accepts(leaveGroupRequestSchema, { confirm: 1 })).toBe(false);
   });
 
   it("change a member's role and right to add apps, each on its own", () => {

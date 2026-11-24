@@ -101,6 +101,21 @@ export function listSpacesForUser(db: Db, userId: string): Space[] {
     )
     .all(userId) as (SpaceMember & { spaceId: string })[];
 
+  // How many invitations wait in each group this person owns: owners see who they are.
+  const waiting = new Map(
+    (
+      db
+        .prepare(
+          `SELECT i.space_id AS spaceId, count(*) AS n
+             FROM space_members mine
+             JOIN space_invitations i ON i.space_id = mine.space_id
+            WHERE mine.user_id = ? AND mine.role = 'owner'
+            GROUP BY i.space_id`,
+        )
+        .all(userId) as { spaceId: string; n: number }[]
+    ).map(({ spaceId, n }) => [spaceId, n]),
+  );
+
   return spaces.map((space) => ({
     id: space.id,
     kind: space.kind,
@@ -112,6 +127,7 @@ export function listSpacesForUser(db: Db, userId: string): Space[] {
       .filter((member) => member.spaceId === space.id)
       .map(({ id, name, role }) => ({ id, name, role })),
     assistant: space.assistant,
+    ...(space.kind === "group" && space.role === "owner" ? { pendingInvitations: waiting.get(space.id) ?? 0 } : {}),
   }));
 }
 
