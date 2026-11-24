@@ -28,7 +28,11 @@ Notes for whoever changes this part, people and agents alike. They are read when
   test sets one), their conversations in each space (`chats`: listed, read
   and deleted, 404 for a space or conversation not theirs) and
   `POST /api/chat`, whose made-up model answers "Noted: " and the message,
-  keeping both and recording the request in `chatRequests`. The person's
+  keeping both and recording the request in `chatRequests`. It lists the
+  app center from `center` (none unless a test sets some, checked against
+  the contract) and unpublishes with `DELETE /api/center/:id` (404 when
+  unknown, 403 without `canUnpublish`), recording the path in
+  `centerChanges`. The person's
   answer to a request of the model's to delete
   (`POST .../confirmations/:id`) is recorded in `confirmationRequests` and
   kept in that request's entry of `chats`, so a reload shows it; a test

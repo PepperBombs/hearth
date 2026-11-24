@@ -15,6 +15,9 @@
  *   restart. In a group the person adding is asked who else may use it,
  *   "only me for now" first (owner's decision 1). Moving an app into a
  *   group asks the same.
+ * - "App center" in the header, and "More apps in the app center" in the Add
+ *   dialog and where it says there is nothing to add, lead to the apps
+ *   published to the person's groups (docs/center.md).
  * - A built-in app the space had and removed kept its data, and adding it
  *   again brings that back (owner's decision 2). Only an owner can, and for
  *   an owner the dialog reads the owners' list first and says so, with how
@@ -32,11 +35,11 @@
  *   entries go and that it cannot be undone; the server checks the name
  *   again. The model in the chat never deletes an app.
  */
-import { ArchiveRestore, ArrowRightLeft, ChevronRight, LayoutGrid, Pin, Plus, RefreshCw, Trash2, UserRound, Users } from "lucide-react";
+import { ArchiveRestore, ArrowRightLeft, ChevronRight, LayoutGrid, Pin, Plus, RefreshCw, Store, Trash2, UserRound, Users } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router";
 import type { AppSummary, CatalogApp, InstalledApp, Localized, MemberAccess, Space } from "@hearth/shared";
-import { Button, Dialog, DialogBody, EmptyState, IconButton, Input, Row, Rows, Switch, Tag } from "@hearth/sdk/web";
+import { Button, Dialog, DialogBody, EmptyState, IconButton, Input, Row, Rows, Switch, Tag, buttonClass } from "@hearth/sdk/web";
 import { useSpaceApps } from "../groups/queries";
 import {
   AppSettingsButton,
@@ -80,7 +83,16 @@ export function Apps() {
   ];
 
   return (
-    <Page title={t("apps.title")}>
+    <Page
+      title={t("apps.title")}
+      actions={
+        // The other way to get an app, besides the chat: the apps published to the person's groups (docs/center.md).
+        <Link to="/center" className={buttonClass({ size: "sm" })}>
+          <Store size={14} aria-hidden="true" />
+          {t("nav.center")}
+        </Link>
+      }
+    >
       <div className="flex max-w-[760px] flex-col gap-4">
         {session.apps.length === 0 ? (
           <Card className="min-h-[200px] justify-center">
@@ -815,9 +827,14 @@ function AddApp({ space }: { space: Space }) {
           </Button>
         </div>
       ) : none ? (
-        <p className="text-xs text-fg-3">
-          <LinkedText text={t(none)} to="/chat" />
-        </p>
+        <div className="flex flex-col gap-1 text-xs text-fg-3">
+          <p>
+            <LinkedText text={t(none)} to="/chat" />
+          </p>
+          <p>
+            <LinkedText text={t("apps.moreInCenter")} to="/center" />
+          </p>
+        </div>
       ) : null}
     </CardFooter>
   );
@@ -924,6 +941,9 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
             );
           })}
         </fieldset>
+        <p className="text-xs text-fg-3">
+          <LinkedText text={t("apps.moreInCenter")} to="/center" />
+        </p>
         {group ? (
           <fieldset className="flex min-w-0 flex-col gap-1.5">
             <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("apps.addWho")}</legend>

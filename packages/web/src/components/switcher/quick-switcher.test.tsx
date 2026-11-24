@@ -95,6 +95,10 @@ describe("quick switcher", () => {
     expect(options()).toHaveLength(1);
     expect(options()[0]).toContain("Settings");
 
+    fireEvent.change(input, { target: { value: "应用中心" } });
+    expect(options()).toHaveLength(1);
+    expect(options()[0]).toContain("App center");
+
     fireEvent.change(input, { target: { value: "语言" } });
     expect(options()[0]).toContain("中文");
 

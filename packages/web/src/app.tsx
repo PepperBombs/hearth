@@ -4,6 +4,7 @@ import { Route, Routes } from "react-router";
 import { Shell } from "./components/shell/shell";
 import { AppPage } from "./pages/app-page";
 import { Apps } from "./pages/apps";
+import { Center } from "./pages/center";
 import { Dashboard } from "./pages/dashboard";
 import { NotFound } from "./pages/not-found";
 import { Settings } from "./pages/settings";
@@ -19,6 +20,7 @@ export function AppRoutes() {
         <Route index element={<Dashboard />} />
         <Route path="apps" element={<Apps />} />
         <Route path="apps/:spaceId/:appId/*" element={<AppPage />} />
+        <Route path="center" element={<Center />} />
         <Route path="chat" element={<Chat />} />
         <Route path="settings" element={<Settings />} />
         <Route path="*" element={<NotFound />} />

@@ -569,7 +569,30 @@ Each step is one pull request, with `pnpm check` green.
    stand-in of `e2e/fixtures.ts`, and the switcher's end-to-end test,
    which lists its items exactly (`e2e/switcher.spec.ts:14`). Done
    when the page lists what the API gives, on a phone and a computer, in
-   both languages.
+   both languages. **Built:** the page is `pages/center.tsx`, its calls
+   `center/api.ts` (`useCenter`, read afresh each time the page opens, and
+   `useUnpublish`, which reads the center and the session again whatever
+   the server answered). "From Hearth" lists the built-in apps with a link
+   to the Apps page, where they are added. Each group the person is in has
+   a section, with a line when nothing is published there; a listing shows
+   who published it ("By you" for one's own) and the day, the revision with
+   its note, each collection with its fields, and the trust line. "Mine"
+   is shown only to someone who published something, each row with its
+   group and "Unpublish"; an owner of a group also finds "Unpublish" on
+   someone else's listing in that group's section, since `canUnpublish`
+   allows it and no other screen offers it. Unpublishing asks first, says
+   that copies keep working, and then says it was done in a line that takes
+   the focus; a 404 counts as done, since someone else unpublished it
+   first. The phone's Apps tab is a `Link` lit by `useMatch` on `/apps` and
+   `/center`, since a `NavLink` lights for its own path only. The ways in
+   from the Apps page are a link in its header and "More apps in the app
+   center" in the Add dialog and where it says there is nothing to add.
+   The stand-in answers `GET /api/center` from `center` and `DELETE
+   /api/center/:id`, refusing it without `canUnpublish`. Tested in
+   `pages/center.test.tsx`, `components/shell/sidebar.test.tsx` (the link,
+   and the tab lit on `/center`), the switcher's tests, and
+   `e2e/center-page.spec.ts`, on a computer and, in both languages, on a
+   phone.
 7. **Adding a copy from the page.** The Add-a-copy dialog from
    `AddAppForm`'s parts, "Open" and "Change it in the chat", its strings
    in both languages, and its unit test. Done when a person can add a copy

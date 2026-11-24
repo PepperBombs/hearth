@@ -64,6 +64,14 @@ export function buildSwitcherItems(options: {
       target: { kind: "navigate", to: "/apps" },
     },
     {
+      id: "page:center",
+      group: "pages",
+      label: t("nav.center"),
+      note: t("switcher.openPage"),
+      keywords: [...both("nav.center"), ...both("center.fromHearth"), "store", "share", "publish", "分享", "发布"],
+      target: { kind: "navigate", to: "/center" },
+    },
+    {
       id: "page:settings",
       group: "pages",
       label: t("nav.settings"),

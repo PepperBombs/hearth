@@ -22,8 +22,9 @@
  * (`model`), their conversations in each space (`chats`), read, listed and
  * deleted, a message, which its own made-up model answers with "Noted: "
  * and the message, and the person's answer to a request of the model's to
- * delete rows, kept in that request's entry. All names and addresses are
- * made up.
+ * delete rows, kept in that request's entry. And the app center
+ * (docs/center.md): the apps published to the person's groups (`center`),
+ * listed and unpublished. All names and addresses are made up.
  */
 import { expect, test as base, type FrameLocator, type Page, type Route } from "@playwright/test";
 import type { Setting } from "../packages/sdk/src/index.ts";
@@ -36,6 +37,7 @@ import {
   appSettingsPatchSchema,
   appSettingsSchema,
   catalogAppSchema,
+  centerSchema,
   chatListSchema,
   chatRequestSchema,
   chatSchema,
@@ -56,6 +58,7 @@ import {
   type AppSettings,
   type AppSummary,
   type CatalogApp,
+  type CenterListing,
   type Chat,
   type ChatEvent,
   type ChatEntry,
@@ -343,6 +346,14 @@ export class FakeApi {
   /** The built-in apps GET /api/catalog lists, which the Add dialog offers: every one the stand-in ships, unless a test says otherwise. */
   catalog: BuiltInId[] = [...BUILT_IN_IDS];
   /**
+   * The apps published to the person's groups, as GET /api/center lists
+   * them (checked against the contract), the newest first. None unless a
+   * test says otherwise. Unpublishing one takes it out.
+   */
+  center: CenterListing[] = [];
+  /** Every DELETE /api/center/:id, as its path, whether or not it was taken. */
+  readonly centerChanges: string[] = [];
+  /**
    * What was saved of each app's settings, by app ID: the values the space
    * shares and the person's own. GET .../settings answers every setting the
    * app declares, with its default where nothing was saved, as the server
@@ -441,6 +452,20 @@ export class FakeApi {
     // The apps shipped with Hearth (docs/platform.md, "Built-in apps"), as this stand-in ships them.
     if (path === "/api/catalog" && method === "GET") {
       return route.fulfill({ json: catalogAppSchema.array().parse(this.catalog.map(catalogApp)) });
+    }
+
+    // The app center: an app can be unpublished by its publisher or an owner of its group (`canUnpublish`).
+    if (path === "/api/center" && method === "GET") {
+      return route.fulfill({ json: centerSchema.parse({ listings: this.center }) });
+    }
+    const listing = /^\/api\/center\/([^/]+)$/.exec(path);
+    if (listing && method === "DELETE") {
+      this.centerChanges.push(path);
+      const found = this.center.find((entry) => entry.id === listing[1]);
+      if (!found) return fail({ status: 404, code: "not_found", message: "Sample failure" });
+      if (!found.canUnpublish) return fail({ status: 403, code: "forbidden", message: "Sample failure" });
+      this.center = this.center.filter((entry) => entry !== found);
+      return route.fulfill({ status: 204 });
     }
 
     const fromCatalog = /^\/api\/spaces\/([^/]+)\/catalog\/([^/]+)$/.exec(path);
