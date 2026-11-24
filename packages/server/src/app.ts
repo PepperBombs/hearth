@@ -11,6 +11,7 @@ import { outboundFor, type Outbound } from "./apps/fetch";
 import { listAppsForUser } from "./apps/installs";
 import { registerAppRoutes } from "./apps/routes";
 import { registerAssistantRoutes } from "./assistant/routes";
+import { registerCenterRoutes } from "./center/routes";
 import { identifyFromConfig, type Identify } from "./auth";
 import type { Config } from "./config";
 import type { Db } from "./db/database";
@@ -126,6 +127,7 @@ export function createApp(options: AppOptions): Hono<Env> {
     outbound: options.outbound ?? outboundFor(config),
     catalog: options.catalog ?? loadCatalog(),
   });
+  registerCenterRoutes(app, { db, registry, requireMember });
   registerModelRoutes(app, { db, registry, config, requireMember, logError, ...(options.modelFetch ? { fetch: options.modelFetch } : {}) });
 
   app.all("/api", (c) => apiError(c, 404, "not_found", NOTHING_HERE));

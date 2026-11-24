@@ -204,7 +204,10 @@ The types and schemas go in `packages/shared` first.
 - **Who may publish.** Someone who may change the source (`changeable`:
   edit access, and owner or `canAddApps` in its space); for a source in a
   group, an owner of that group; who is a member of the target, which is a
-  group, not a personal space.
+  group, not a personal space. Together these come to an owner of the
+  source's space, which is how it is built (`publishableApp`). Someone who
+  cannot see the app gets 404, someone who sees it but may not publish it
+  403; a target they are not in 404, their personal space 400.
 - **What publishing refuses,** each as a code with its place (`invalid`,
   `network`, `unchanged_copy`, `email` with where, `too_many`), which the
   dialog words in English and Chinese: a `Refusal`'s message is English
@@ -505,7 +508,20 @@ Each step is one pull request, with `pnpm check` green.
 3. **Publishing.** `GET` and `POST .../publish` and `DELETE
    /api/center/:id`, with every rule and refusal above, and the tests of
    who may publish, what is refused, unpublishing and leaving the group.
-   Done when those tests pass.
+   Done when those tests pass. **Built:** the routes in
+   `center/routes.ts`, the rules in `center/publish.ts`; who may publish is
+   `publishableApp` in `made/apps.ts`, which also says whether the app is
+   an untouched copy (it reads `template_hash` and `origin_hash`), and the
+   addresses looked for are `emailsAround` in `db/people.ts` (the person's
+   and those of everyone in a space with them). An address is found in any
+   case and only whole ("sam@example.com" is not in
+   "jimsam@example.com" or "sam@example.com.au"), in the name,
+   description, instructions, collections, settings, and each line of the
+   page, at most 10 places a review. A new listing answers 201, publishing
+   again 200. `GET .../publish` lists "too_many" for each of the person's
+   groups where they have 50 apps and this one is not among them; a `POST`
+   refuses with 400 for any other problem first, 409 for "too_many" alone.
+   Tested in `center/center.test.ts`.
 4. **Adding a copy.** `GET /api/center`, `POST .../center/:id` through
    `createMadeApp` with `origin` and the note, `AppSummary.source`, the
    rule in `moveApp`, and the tests of who sees, adding, moving,

@@ -21,6 +21,7 @@ import type { MemberAccess } from "@hearth/shared";
 import { addApp, resolveInstall, type Caller } from "../apps/installs";
 import type { RegisteredApp, Registry } from "../apps/registry";
 import { AppError, MAX_LIST_LIMIT, readOnlyStore, rowsNotFitting, writableStore, type StoreScope } from "../apps/store";
+import { templateHash } from "./catalog";
 import { asSdkManifest, checkMadeManifest, collectionSchemas, madeManifestSchema, type MadeManifest } from "./manifest";
 
 /** Every made app's ID starts so. No app of the releases before them was named like it. */
@@ -339,6 +340,39 @@ export function deleteMadeRows(
 /** Whether a made app of this ID is in this space now, whatever its manifest says: false once it was deleted or moved. */
 export function madeAppIsIn(db: Db, appId: string, spaceId: string): boolean {
   return db.prepare("SELECT 1 FROM made_apps WHERE app_id = ? AND space_id = ?").get(appId, spaceId) !== undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Publishing an app to a group (docs/center.md)
+// ---------------------------------------------------------------------------
+
+/** A made app as publishing reads it, with whether it is a copy nobody changed. */
+export type PublishSource = MadeApp & { untouchedCopy: boolean };
+
+/**
+ * The app, for someone who may publish it: who may change it (edit access,
+ * and owner or allowed to add apps in its space), and for an app of a
+ * group, an owner of that group. Both together come to an owner of the
+ * app's space: in a personal space its person, in a group its owners.
+ * Throws 404 when the person cannot see the app, as for one that does not
+ * exist, and 403 when they can but may not publish it.
+ *
+ * `untouchedCopy` is true for a copy of a built-in app that Hearth still
+ * keeps up to date (`template_hash` set: nobody changed it), and for a copy
+ * of a published app whose manifest and page still hash to the snapshot it
+ * was copied from (`origin_hash`). Either is someone else's app as they
+ * shipped or shared it.
+ */
+export function publishableApp(db: Db, registry: Registry, request: Omit<MadeRequest, "by">): PublishSource {
+  const { app } = reachable(db, registry, { ...request, by: "person" });
+  if (membershipOf(db, request.userId, request.spaceId)?.role !== "owner") {
+    throw new Refusal(403, "forbidden", "Publishing this app is for the owners of its space.");
+  }
+  const row = db
+    .prepare("SELECT template_hash AS templateHash, origin_hash AS originHash FROM made_apps WHERE app_id = ? AND space_id = ?")
+    .get(app.appId, app.spaceId) as { templateHash: string | null; originHash: string | null };
+  const untouchedCopy = row.templateHash !== null || (row.originHash !== null && templateHash(app.manifest, app.html) === row.originHash);
+  return { ...app, untouchedCopy };
 }
 
 // ---------------------------------------------------------------------------

@@ -150,3 +150,35 @@ export function findListingFor(db: Db, request: { userId: string; id: string }):
     | undefined;
   return row ? fromRow(row) : null;
 }
+
+/** The listing of an app in a group, by the app's ID wherever it lives now, or null: what publishing again replaces. */
+export function listingIdOf(db: Db, request: { spaceId: string; sourceAppId: string }): string | null {
+  const row = db
+    .prepare("SELECT id FROM published_apps WHERE space_id = @spaceId AND source_app_id = @sourceAppId")
+    .get(request) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
+/** How many apps a person has published to a group, against MAX_LISTINGS_PER_GROUP. */
+export function countListingsBy(db: Db, request: { spaceId: string; userId: string }): number {
+  return (
+    db.prepare("SELECT count(*) AS n FROM published_apps WHERE space_id = @spaceId AND created_by = @userId").get(request) as {
+      n: number;
+    }
+  ).n;
+}
+
+/** Where an app is published, among the groups the person is in: what its publish dialog lists. */
+export type AppListingRow = Pick<Listing, "id" | "spaceId" | "createdBy" | "revision" | "note" | "updatedAt">;
+
+/** The listings of one app in the person's groups, oldest group first by when it was published there. */
+export function listingsOfAppFor(db: Db, request: { userId: string; sourceAppId: string }): AppListingRow[] {
+  return db
+    .prepare(
+      `SELECT id, space_id AS spaceId, created_by AS createdBy, revision, note, updated_at AS updatedAt
+         FROM published_apps p
+        WHERE source_app_id = @sourceAppId AND ${LISTED}
+        ORDER BY created_at, id`,
+    )
+    .all(request) as AppListingRow[];
+}

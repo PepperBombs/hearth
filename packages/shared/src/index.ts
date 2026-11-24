@@ -871,7 +871,8 @@ export type AppListing = z.infer<typeof appListingSchema>;
 
 /**
  * GET /api/spaces/:spaceId/apps/:appId/publish, for those who may publish
- * the app (404 for everyone else, as for an app they cannot see): exactly
+ * the app, an owner of its space (404 for an app the person cannot see, as
+ * for one that does not exist; 403 for one they see but may not publish): exactly
  * what would leave (`app`: its settings as declared, with their defaults;
  * its instructions in full; the size of its page in bytes), the groups it
  * may go to, the groups the person is in where it is published already,
@@ -898,7 +899,8 @@ export type PublishReview = z.infer<typeof publishReviewSchema>;
 /**
  * POST /api/spaces/:spaceId/apps/:appId/publish: publish the app to a group
  * the person is in, or publish it there again, which replaces what was
- * published and adds 1 to the revision. A problem refuses it, 400
+ * published and adds 1 to the revision: 201 when it was not published
+ * there yet, 200 when it was. A problem refuses it, 400
  * `invalid_request` (409 `conflict` for "too_many"), with an English
  * message: the dialog words the problems from GET .../publish instead.
  */

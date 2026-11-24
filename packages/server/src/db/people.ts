@@ -131,6 +131,26 @@ export function listSpacesForUser(db: Db, userId: string): Space[] {
   }));
 }
 
+/**
+ * The email addresses of a person and of everyone they share a space with:
+ * the people whose addresses a model is likely to have written into an app
+ * of theirs, which publishing refuses (docs/center.md). Nobody else's: a
+ * check against every address on the server would tell a publisher who is
+ * on it.
+ */
+export function emailsAround(db: Db, userId: string): string[] {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT u.email
+         FROM space_members mine
+         JOIN space_members m ON m.space_id = mine.space_id
+         JOIN users u ON u.id = m.user_id
+        WHERE mine.user_id = ?`,
+    )
+    .all(userId) as { email: string }[];
+  return rows.map((row) => row.email);
+}
+
 /** A person's place in one space, and what kind of space it is. */
 export type Membership = { role: SpaceRole; canAddApps: 0 | 1; kind: SpaceKind };
 
