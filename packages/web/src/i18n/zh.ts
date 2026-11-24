@@ -346,6 +346,7 @@ export const zh: Dictionary = {
   "chat.footnoteBack": "回到正文",
   "chat.space": "空间",
   "chat.personal": "个人",
+  "chat.changeApp": "修改「{app}」：",
   "chat.placeholder": "给你的模型发消息",
   "chat.send": "发送",
   "chat.stop": "停止",

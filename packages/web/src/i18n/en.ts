@@ -365,6 +365,7 @@ export const en = {
   "chat.footnoteBack": "Back to the text",
   "chat.space": "Space",
   "chat.personal": "Personal",
+  "chat.changeApp": "Change “{app}”: ",
   "chat.placeholder": "Message your model",
   "chat.send": "Send",
   "chat.stop": "Stop",
