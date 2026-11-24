@@ -9,18 +9,25 @@
  *   its maker's words, who published it and when, its revision and note, the
  *   collections and fields it keeps, and the line that says what it may do.
  *   An owner of the group may unpublish someone else's app there.
+ * - "Add a copy" on each of them asks where: the group it is published to,
+ *   when the person may add apps there, or their personal space, the only
+ *   places a copy may go; in a group, who else may use it, "only me for
+ *   now" first. A space that holds a copy already says so, with "Open".
+ *   Once added: "Open" and "Change it in the chat".
  * - "Mine" lists what the person published, with "Unpublish". Copies keep
  *   working when their app is unpublished.
  *
  * Which of the person's spaces already hold a copy is read from the session
  * (`AppSummary.source.listingId`), never from the center's answer.
  */
-import { LayoutGrid, RefreshCw, ShieldCheck, Upload, Users } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import type { CenterListing, Localized, Space } from "@hearth/shared";
-import { Button, Dialog, DialogBody, Row, Rows, Tag } from "@hearth/sdk/web";
+import { LayoutGrid, Plus, RefreshCw, ShieldCheck, Upload, UserRound, Users } from "lucide-react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { Link } from "react-router";
+import type { AddCopyResult, CenterListing, Localized, MemberAccess, Space } from "@hearth/shared";
+import { Button, Dialog, DialogBody, Row, Rows, Tag, buttonClass } from "@hearth/sdk/web";
+import { CHOICE, RADIO, WhoCanUse } from "../apps/add-parts";
 import { useCatalog } from "../apps/manage";
-import { useCenter, useUnpublish } from "../center/api";
+import { useAddCopy, useCenter, useUnpublish } from "../center/api";
 import { AppIcon } from "../components/app-icon";
 import { Card, CardHeader } from "../components/card";
 import { LinkedText } from "../components/linked-text";
@@ -30,7 +37,7 @@ import { formatDay } from "../lib/date";
 import { useToday } from "../lib/use-today";
 import { failureCode } from "../session/api";
 import { useI18n } from "../session/preferences";
-import { useSession } from "../session/session";
+import { appPath, useSession } from "../session/session";
 
 /** An app just unpublished, said at the top of the page: its row, and the button that was in it, are gone. */
 type Notice = { id: string; name: Localized };
@@ -191,8 +198,11 @@ function ListingRow(props: { listing: CenterListing; group: Space; onUnpublished
           <span>{t("center.trust")}</span>
         </p>
       </div>
-      {/* The publisher unpublishes from "Mine"; an owner of the group may unpublish anyone's here. */}
-      {listing.canUnpublish && !listing.mine ? <UnpublishButton listing={listing} group={group} onUnpublished={onUnpublished} /> : null}
+      <div className="ml-auto flex flex-none flex-wrap justify-end gap-2">
+        <AddCopyButton listing={listing} group={group} />
+        {/* The publisher unpublishes from "Mine"; an owner of the group may unpublish anyone's here. */}
+        {listing.canUnpublish && !listing.mine ? <UnpublishButton listing={listing} group={group} onUnpublished={onUnpublished} /> : null}
+      </div>
     </Row>
   );
 }
@@ -323,5 +333,168 @@ function UnpublishDialog(props: { listing: CenterListing; group: Space; open: bo
         </div>
       </DialogBody>
     </Dialog>
+  );
+}
+
+function AddCopyButton({ listing, group }: { listing: CenterListing; group: Space }) {
+  const { locale, t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const name = pickLocalized(listing.name, locale);
+  const title = t("center.addCopyTitle", { app: name });
+  return (
+    <>
+      <Button size="sm" className="flex-none" aria-haspopup="dialog" aria-label={t("center.addCopyOf", { app: name })} onClick={() => setOpen(true)}>
+        <Plus size={14} aria-hidden="true" />
+        {t("center.addCopy")}
+      </Button>
+      <Dialog open={open} onClose={() => setOpen(false)} label={title}>
+        <AddCopyForm listing={listing} group={group} title={title} onClose={() => setOpen(false)} />
+      </Dialog>
+    </>
+  );
+}
+
+/**
+ * Mounted each time the dialog opens, so that it starts from the first space
+ * without a copy and "only me for now". A copy may go only to the group the
+ * app is published to, where the person may add apps, or to their personal
+ * space (docs/center.md, decision 3).
+ */
+function AddCopyForm(props: { listing: CenterListing; group: Space; title: string; onClose: () => void }) {
+  const { listing, group, title, onClose } = props;
+  const session = useSession();
+  const { locale, t } = useI18n();
+  const name = useId();
+  const add = useAddCopy();
+  const app = pickLocalized(listing.name, locale);
+  const personal = session.spaces.find((space) => space.kind === "personal");
+  const places = [personal, group.canAddApps ? group : undefined].filter((space): space is Space => space !== undefined);
+  // Which spaces hold a copy already, as the session lists the apps the person sees there.
+  const copyIn = (space: Space) => session.apps.find((entry) => entry.spaceId === space.id && entry.source?.listingId === listing.id);
+  const free = places.filter((space) => copyIn(space) === undefined);
+  const [chosenId, setChosenId] = useState(free[0]?.id ?? "");
+  const [memberAccess, setMemberAccess] = useState<MemberAccess>("none");
+  const [added, setAdded] = useState<(AddCopyResult & { space: Space }) | null>(null);
+  // The session is loaded again after a refusal; a space that now holds a copy is not chosen.
+  const chosen = free.find((space) => space.id === chosenId) ?? free[0];
+  const inGroup = chosen?.kind === "group";
+
+  if (added) return <Added added={added} app={app} onClose={onClose} />;
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!chosen || add.isPending) return;
+    // Settles once the session is loaded again, so that the copy is in it when it is offered.
+    add.mutateAsync({ spaceId: chosen.id, id: listing.id, memberAccess: inGroup ? memberAccess : undefined }).then(
+      (result) => setAdded({ ...result, space: chosen }),
+      // The dialog shows the failure; nothing else waits for it.
+      () => undefined,
+    );
+  };
+
+  const failure = add.error ? failureCode(add.error) : null;
+  const problem: PlainMessageKey | null =
+    failure === null
+      ? null
+      : failure === "conflict"
+        ? "center.addConflict"
+        : failure === "not_found"
+          ? "center.addGone"
+          : failure === "forbidden"
+            ? "apps.addRefused"
+            : "apps.addFailed";
+
+  return (
+    <form onSubmit={submit} className="flex max-h-[calc(100dvh-34px)] flex-col">
+      <DialogBody className="min-h-0 overflow-y-auto">
+        <h2 className="text-md font-semibold">{title}</h2>
+        <p className="text-fg-2">{t("center.addCopyBody")}</p>
+        <fieldset className="flex min-w-0 flex-col gap-1">
+          <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("center.addCopyWhere")}</legend>
+          {places.map((space) => {
+            const copy = copyIn(space);
+            const own = space.kind === "personal";
+            const label = own ? t("nav.personal") : space.name;
+            return (
+              <div key={space.id} className="flex min-w-0 items-center gap-2">
+                <label className={`${CHOICE} flex-1 ${copy ? "cursor-default opacity-70" : ""}`}>
+                  <input
+                    type="radio"
+                    name={`${name}-space`}
+                    value={space.id}
+                    className={RADIO}
+                    disabled={copy !== undefined}
+                    checked={chosen?.id === space.id}
+                    onChange={() => setChosenId(space.id)}
+                  />
+                  {own ? (
+                    <UserRound size={16} aria-hidden="true" className="flex-none text-fg-2" />
+                  ) : (
+                    <Users size={16} aria-hidden="true" className="flex-none text-fg-2" />
+                  )}
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="clip font-medium">{label}</span>
+                    <span className="text-xs text-fg-3">{copy ? t("center.hasCopy") : own ? t("apps.onlyYou") : t("apps.shared")}</span>
+                  </span>
+                </label>
+                {copy ? (
+                  <Link
+                    to={appPath(copy)}
+                    className={buttonClass({ size: "sm", className: "flex-none" })}
+                    aria-label={own ? t("center.openCopyPersonal") : t("center.openCopyIn", { space: space.name })}
+                  >
+                    {t("center.open")}
+                  </Link>
+                ) : null}
+              </div>
+            );
+          })}
+        </fieldset>
+        {group.canAddApps ? null : <p className="text-xs text-fg-3">{t("center.groupNotAddable", { group: group.name })}</p>}
+        {inGroup ? <WhoCanUse name={name} value={memberAccess} onChange={setMemberAccess} /> : null}
+        {problem ? (
+          <p role="status" className="text-xs text-down">
+            {t(problem)}
+          </p>
+        ) : null}
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>{t("apps.cancel")}</Button>
+          <Button type="submit" variant="primary" disabled={add.isPending || !chosen}>
+            {t("apps.addConfirm")}
+          </Button>
+        </div>
+      </DialogBody>
+    </form>
+  );
+}
+
+/** Says where the copy went, and takes the focus: "Open" it, or change it in the chat. */
+function Added({ added, app, onClose }: { added: AddCopyResult & { space: Space }; app: string; onClose: () => void }) {
+  const { t } = useI18n();
+  const ref = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+  const { space, appId, restored } = added;
+  const said =
+    space.kind === "personal"
+      ? t(restored ? "center.restoredPersonal" : "center.addedPersonal", { app })
+      : t(restored ? "center.restoredIn" : "center.addedIn", { app, space: space.name });
+  const chat = `/chat?${new URLSearchParams({ space: space.id, app: appId }).toString()}`;
+  return (
+    <DialogBody>
+      <p ref={ref} role="status" tabIndex={-1} className="rounded-ctl font-medium">
+        {said}
+      </p>
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button onClick={onClose}>{t("center.close")}</Button>
+        <Link to={chat} className={buttonClass({})}>
+          {t("center.changeInChat")}
+        </Link>
+        <Link to={appPath({ id: appId, spaceId: space.id })} className={buttonClass({ variant: "primary" })}>
+          {t("center.open")}
+        </Link>
+      </div>
+    </DialogBody>
   );
 }

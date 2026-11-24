@@ -2,12 +2,13 @@
  * The app center's page (docs/center.md), against the stand-in server
  * (e2e/fixtures.ts): reached from the Apps page, it lists the built-in apps
  * and what is published to the person's groups, on a computer and on a
- * phone, in both languages, and unpublishes the person's own. The whole loop
+ * phone, in both languages, unpublishes the person's own, and adds a copy
+ * and opens the chat on it. The whole loop
  * against the real server is step 9's in docs/center.md.
  */
 import type { Page } from "@playwright/test";
 import type { CenterListing } from "../packages/shared/src/index.ts";
-import { FAMILY_SPACE, LIN, PHONE, expect, expectNothingPastTheEdge, ownAFamily, test, type FakeApi } from "./fixtures.ts";
+import { FAMILY_SPACE, LIN, PERSONAL_SPACE, PHONE, expect, expectNothingPastTheEdge, ownAFamily, test, type FakeApi } from "./fixtures.ts";
 
 function listing(id: string, extra: Partial<CenterListing> = {}): CenterListing {
   return {
@@ -78,6 +79,28 @@ test.describe("the app center", () => {
 
   test.describe("on a phone", () => {
     test.use(PHONE);
+
+    test("adds a copy to the personal space and opens the chat on it", async ({ page, api }) => {
+      familyWithListings(api);
+      await page.goto("/center");
+      await region(page, "In Family").getByRole("button", { name: "Add a copy of Ledger" }).click();
+      const dialog = page.getByRole("dialog", { name: "Add a copy of “Ledger”" });
+      await expect(dialog.getByRole("radio", { name: /Personal/ })).toBeChecked();
+      await expectNothingPastTheEdge(page);
+      await dialog.getByRole("button", { name: "Add", exact: true }).click();
+      await expect(dialog.getByText("A copy of “Ledger” is in your personal space now.")).toBeFocused();
+      expect(api.appChanges).toEqual([`POST /api/spaces/${PERSONAL_SPACE}/center/p-ledger0001 {}`]);
+
+      await dialog.getByRole("link", { name: "Change it in the chat" }).click();
+      await expect(page).toHaveURL(new RegExp(`/chat\\?space=${PERSONAL_SPACE}$`));
+      await expect(page.getByRole("textbox", { name: "Message your model" })).toHaveValue("Change “Ledger”: ");
+
+      // Back in the center, the personal space now says it holds a copy, with Open.
+      await page.goto("/center");
+      await region(page, "In Family").getByRole("button", { name: "Add a copy of Ledger" }).click();
+      await expect(dialog.getByRole("radio", { name: /Personal/ })).toBeDisabled();
+      await expect(dialog.getByRole("link", { name: "Open the copy in your personal space" })).toHaveAttribute("href", `/apps/${PERSONAL_SPACE}/m-copy-1`);
+    });
 
     test("fits the screen in both languages, with Apps lit in the tab bar", async ({ page, api }) => {
       for (const locale of ["en", "zh"] as const) {

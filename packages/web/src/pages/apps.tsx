@@ -40,6 +40,7 @@ import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } fr
 import { Link } from "react-router";
 import type { AppSummary, CatalogApp, InstalledApp, Localized, MemberAccess, Space } from "@hearth/shared";
 import { Button, Dialog, DialogBody, EmptyState, IconButton, Input, Row, Rows, Switch, Tag, buttonClass } from "@hearth/sdk/web";
+import { CHOICE, RADIO, WhoCanUse } from "../apps/add-parts";
 import { useSpaceApps } from "../groups/queries";
 import {
   AppSettingsButton,
@@ -356,7 +357,7 @@ function MoveForm({ app, from, targets, onClose, onMoved, title }: MoveDialogPro
             return (
               <label
                 key={space.id}
-                className="flex min-w-0 cursor-pointer items-center gap-2.5 rounded-ctl border border-line px-2.5 py-2 has-checked:border-accent has-checked:bg-accent-soft"
+                className={CHOICE}
               >
                 <input
                   type="radio"
@@ -380,23 +381,7 @@ function MoveForm({ app, from, targets, onClose, onMoved, title }: MoveDialogPro
           })}
         </fieldset>
         {group ? (
-          <fieldset className="flex min-w-0 flex-col gap-1.5">
-            <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("apps.addWho")}</legend>
-            {ACCESS_CHOICES.map((choice) => (
-              <label key={choice.value} className="flex min-h-7 cursor-pointer items-center gap-2.5 max-md:min-h-11">
-                <input
-                  type="radio"
-                  name={`${name}-access`}
-                  value={choice.value}
-                  className={RADIO}
-                  checked={memberAccess === choice.value}
-                  onChange={() => setMemberAccess(choice.value)}
-                />
-                <span>{t(choice.label)}</span>
-              </label>
-            ))}
-            <p className="text-xs text-fg-3">{t("apps.addWhoHint")}</p>
-          </fieldset>
+          <WhoCanUse name={name} value={memberAccess} onChange={setMemberAccess} />
         ) : null}
         <p className="text-fg-2">{t("apps.moveBody")}</p>
         {from.kind === "group" ? <p className="text-fg-2">{t("apps.moveOthers")}</p> : null}
@@ -617,23 +602,7 @@ function BringBackForm({ space, entry, onClose, onBack, title }: BringBackProps 
         <h2 className="text-md font-semibold">{title}</h2>
         <p className="text-fg-2">{comes}</p>
         {group ? (
-          <fieldset className="flex min-w-0 flex-col gap-1.5">
-            <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("apps.addWho")}</legend>
-            {ACCESS_CHOICES.map((choice) => (
-              <label key={choice.value} className="flex min-h-7 cursor-pointer items-center gap-2.5 max-md:min-h-11">
-                <input
-                  type="radio"
-                  name={`${name}-access`}
-                  value={choice.value}
-                  className={RADIO}
-                  checked={memberAccess === choice.value}
-                  onChange={() => setMemberAccess(choice.value)}
-                />
-                <span>{t(choice.label)}</span>
-              </label>
-            ))}
-            <p className="text-xs text-fg-3">{t("apps.addWhoHint")}</p>
-          </fieldset>
+          <WhoCanUse name={name} value={memberAccess} onChange={setMemberAccess} />
         ) : null}
         {failure ? (
           <p role="status" className="text-xs text-down">
@@ -840,14 +809,6 @@ function AddApp({ space }: { space: Space }) {
   );
 }
 
-const ACCESS_CHOICES: ReadonlyArray<{ value: MemberAccess; label: PlainMessageKey }> = [
-  { value: "none", label: "apps.accessNone" },
-  { value: "view", label: "apps.accessView" },
-  { value: "edit", label: "apps.accessEdit" },
-];
-
-const RADIO = "size-4 flex-none accent-accent";
-
 function AddAppDialog(props: { space: Space; addable: CatalogApp[]; open: boolean; onClose: () => void }) {
   const { t } = useI18n();
   const title = props.space.kind === "group" ? t("apps.addTo", { space: props.space.name }) : t("apps.addToPersonal");
@@ -916,7 +877,7 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
             return (
               <label
                 key={app.id}
-                className="flex min-w-0 cursor-pointer items-center gap-2.5 rounded-ctl border border-line px-2.5 py-2 has-checked:border-accent has-checked:bg-accent-soft"
+                className={CHOICE}
               >
                 <input
                   type="radio"
@@ -945,23 +906,7 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
           <LinkedText text={t("apps.moreInCenter")} to="/center" />
         </p>
         {group ? (
-          <fieldset className="flex min-w-0 flex-col gap-1.5">
-            <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("apps.addWho")}</legend>
-            {ACCESS_CHOICES.map((choice) => (
-              <label key={choice.value} className="flex min-h-7 cursor-pointer items-center gap-2.5 max-md:min-h-11">
-                <input
-                  type="radio"
-                  name={`${name}-access`}
-                  value={choice.value}
-                  className={RADIO}
-                  checked={memberAccess === choice.value}
-                  onChange={() => setMemberAccess(choice.value)}
-                />
-                <span>{t(choice.label)}</span>
-              </label>
-            ))}
-            <p className="text-xs text-fg-3">{t("apps.addWhoHint")}</p>
-          </fieldset>
+          <WhoCanUse name={name} value={memberAccess} onChange={setMemberAccess} />
         ) : null}
         {owner && list.isError && !known ? (
           <div role="alert" className="flex flex-wrap items-center gap-2">

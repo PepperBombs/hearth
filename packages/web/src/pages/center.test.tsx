@@ -1,10 +1,10 @@
 /**
  * The app center (docs/center.md), drawn against a stand-in for the server:
  * "From Hearth", a section for each of the person's groups with what is
- * published there, "Mine" with "Unpublish", in both languages; and the ways
- * in from the Apps page.
+ * published there, "Mine" with "Unpublish", in both languages; adding a
+ * copy; and the ways in from the Apps page.
  */
-import type { CatalogApp, CenterListing, Session } from "@hearth/shared";
+import type { AppSummary, CatalogApp, CenterListing, Session } from "@hearth/shared";
 import { QueryClient } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router";
@@ -15,7 +15,7 @@ const PERSONAL = "space-personal";
 const FAMILY = "space-family";
 const CLUB = "space-club";
 
-function sessionFor(locale: "en" | "zh" = "en"): Session {
+function sessionFor(locale: "en" | "zh" = "en", apps: AppSummary[] = [], familyRole: "owner" | "member" = "owner"): Session {
   const me = { id: "u1", email: "sam@example.com", name: "Sam Example", locale, theme: "light" as const };
   const member = (role: "owner" | "member") => [
     { id: me.id, name: me.name, role },
@@ -25,10 +25,10 @@ function sessionFor(locale: "en" | "zh" = "en"): Session {
     user: me,
     spaces: [
       { id: PERSONAL, kind: "personal", name: "", role: "owner", canAddApps: true, assistant: "none", members: [{ id: me.id, name: me.name, role: "owner" }] },
-      { id: FAMILY, kind: "group", name: "Family", role: "owner", canAddApps: true, assistant: "none", members: member("owner") },
+      { id: FAMILY, kind: "group", name: "Family", role: familyRole, canAddApps: familyRole === "owner", assistant: "none", members: member(familyRole) },
       { id: CLUB, kind: "group", name: "Book club", role: "member", canAddApps: false, assistant: "none", members: member("member") },
     ],
-    apps: [],
+    apps,
     canCreateGroups: false,
     canInvitePeople: false,
     version: "test",
@@ -88,16 +88,59 @@ const LISTINGS: CenterListing[] = [
 
 type Answer = { status: number; body?: unknown };
 
-/** Answers the session, the catalog, the center and unpublishing, and records every request. */
-function start(options: { locale?: "en" | "zh"; listings?: CenterListing[]; unpublish?: Answer; centerFails?: boolean; at?: string } = {}) {
+/** A copy of a listing in a space, as the session lists it. */
+function copyOf(id: string, spaceId: string, listingId: string): AppSummary {
+  return {
+    id,
+    spaceId,
+    name: { en: "Ledger", zh: "Ledger" },
+    description: { en: "What we spend, by month.", zh: "What we spend, by month." },
+    icon: "wallet",
+    color: "green",
+    widgetSize: "small",
+    access: "edit",
+    enabled: true,
+    pinned: false,
+    hasPage: true,
+    made: true,
+    version: 1,
+    source: { listingId, by: "Lin Example" },
+  };
+}
+
+type StartOptions = {
+  locale?: "en" | "zh";
+  listings?: CenterListing[];
+  unpublish?: Answer;
+  centerFails?: boolean;
+  at?: string;
+  /** The apps the session lists at first. */
+  apps?: AppSummary[];
+  /** Sam's role in Family; a member there may not add apps. */
+  familyRole?: "owner" | "member";
+  /** How POST .../center/:id is answered; by default a new copy, `m-copy1`, which the session then lists. */
+  addCopy?: Answer;
+};
+
+/** Answers the session, the catalog, the center, unpublishing and adding a copy, and records every request with its body. */
+function start(options: StartOptions = {}) {
   const requests: string[] = [];
   let listings = options.listings ?? LISTINGS;
+  let apps = options.apps ?? [];
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const method = init.method ?? "GET";
     const path = String(input);
     requests.push(`${method} ${path}`);
-    if (path === "/api/session") return json(sessionFor(options.locale));
+    if (path === "/api/session") return json(sessionFor(options.locale, apps, options.familyRole));
+    const copied = /^\/api\/spaces\/([^/]+)\/center\/([^/]+)$/.exec(path);
+    if (copied && method === "POST") {
+      requests[requests.length - 1] += ` ${String(init.body)}`;
+      const answer = options.addCopy ?? { status: 201, body: { appId: "m-copy1", restored: false } };
+      const appId = (answer.body as { appId?: string } | undefined)?.appId;
+      if (answer.status < 300 && appId) apps = [...apps, copyOf(appId, copied[1] ?? "", copied[2] ?? "")];
+      return json(answer.body, answer.status);
+    }
     if (path === "/api/catalog") return json(CATALOG);
     if (path === "/api/center") return options.centerFails ? json({ error: { code: "internal", message: "Sample failure" } }, 500) : json({ listings });
     const unpublished = /^\/api\/center\/(.+)$/.exec(path);
@@ -226,6 +269,86 @@ describe("the app center", () => {
     expect(await screen.findByText("The app center could not be loaded.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
     expect(await within(await section("From Hearth")).findByText("Checklist")).toBeTruthy();
+  });
+});
+
+describe("adding a copy", () => {
+  const openAddDialog = async (app = "Ledger") => {
+    fireEvent.click(await within(await section("In Family")).findByRole("button", { name: `Add a copy of ${app}` }));
+    return screen.findByRole("dialog", { name: `Add a copy of “${app}”` });
+  };
+
+  it("adds one to the personal space, reads the session again, and offers to open it or change it in the chat", async () => {
+    const requests = start();
+    const dialog = await openAddDialog();
+    expect(within(dialog).getByText(/The copy is an app of your own, with no entries yet\./)).toBeTruthy();
+    const personal = within(dialog).getByRole("radio", { name: /Personal/ }) as HTMLInputElement;
+    expect(personal.checked).toBe(true);
+    expect(within(dialog).getByRole("radio", { name: /Family/ })).toBeTruthy();
+    // Who else may use it is asked for a group alone.
+    expect(within(dialog).queryByRole("group", { name: "Who else can use it" })).toBeNull();
+    requests.length = 0;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+
+    const said = await within(dialog).findByText("A copy of “Ledger” is in your personal space now.");
+    await waitFor(() => expect(document.activeElement).toBe(said));
+    // The session was read again before the copy was offered, so the chat finds it to name.
+    expect(requests).toEqual(["POST /api/spaces/space-personal/center/p-ledger0001 {}", "GET /api/session"]);
+    expect(within(dialog).getByRole("link", { name: "Open" }).getAttribute("href")).toBe("/apps/space-personal/m-copy1");
+    expect(within(dialog).getByRole("link", { name: "Change it in the chat" }).getAttribute("href")).toBe(
+      "/chat?space=space-personal&app=m-copy1",
+    );
+    fireEvent.click(within(dialog).getByRole("link", { name: "Open" }));
+    expect(screen.getByTestId("where").textContent).toBe("/apps/space-personal/m-copy1");
+  });
+
+  it("adds one to the group, asking who else may use it, only me for now first", async () => {
+    const requests = start();
+    const dialog = await openAddDialog();
+    fireEvent.click(within(dialog).getByRole("radio", { name: /Family/ }));
+    const who = within(dialog).getByRole("group", { name: "Who else can use it" });
+    expect((within(who).getByRole("radio", { name: "Only me for now" }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(within(who).getByRole("radio", { name: "Everyone can view" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    expect(await within(dialog).findByText("A copy of “Ledger” is in Family now.")).toBeTruthy();
+    expect(requests).toContain('POST /api/spaces/space-family/center/p-ledger0001 {"memberAccess":"view"}');
+  });
+
+  it("says which space holds a copy already, with Open, and offers only the others", async () => {
+    start({ apps: [copyOf("m-old", PERSONAL, "p-ledger0001"), copyOf("m-other", FAMILY, "p-reading001")] });
+    const dialog = await openAddDialog();
+    const personal = within(dialog).getByRole("radio", { name: /Personal/ }) as HTMLInputElement;
+    expect(personal.disabled).toBe(true);
+    expect(within(dialog).getByText("Has a copy already")).toBeTruthy();
+    expect(within(dialog).getByRole("link", { name: "Open the copy in your personal space" }).getAttribute("href")).toBe(
+      "/apps/space-personal/m-old",
+    );
+    // A copy of another app in Family is no copy of this one.
+    expect((within(dialog).getByRole("radio", { name: /Family/ }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("offers only the personal space to someone who may not add apps to the group, and says why", async () => {
+    start({ familyRole: "member" });
+    const dialog = await openAddDialog();
+    expect(within(dialog).getAllByRole("radio")).toHaveLength(1);
+    expect(within(dialog).getByText("Only the owners of Family, and the people they allow, can add apps there.")).toBeTruthy();
+  });
+
+  it("keeps the dialog with the reason when the space holds a copy the person cannot see", async () => {
+    start({ addCopy: { status: 409, body: { error: { code: "conflict", message: "Sample failure" } } } });
+    const dialog = await openAddDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    expect(await within(dialog).findByText("This space has this app already. If you do not see it, ask an owner of the space.")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Add" })).toBeTruthy();
+  });
+
+  it("says a removed copy came back with its entries, in Chinese too", async () => {
+    start({ locale: "zh", addCopy: { status: 200, body: { appId: "m-back", restored: true } } });
+    fireEvent.click(await within(await section("Family里分享的")).findByRole("button", { name: "添加Ledger的副本" }));
+    const dialog = await screen.findByRole("dialog", { name: "添加「Ledger」的副本" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "添加" }));
+    expect(await within(dialog).findByText("「Ledger」的副本已回到你的个人空间，条目都还在。")).toBeTruthy();
+    expect(within(dialog).getByRole("link", { name: "在对话里修改" }).getAttribute("href")).toBe("/chat?space=space-personal&app=m-back");
   });
 });
 

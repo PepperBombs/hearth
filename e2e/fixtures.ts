@@ -24,12 +24,14 @@
  * and the message, and the person's answer to a request of the model's to
  * delete rows, kept in that request's entry. And the app center
  * (docs/center.md): the apps published to the person's groups (`center`),
- * listed and unpublished. All names and addresses are made up.
+ * listed and unpublished, and a copy of one added to a space. All names and
+ * addresses are made up.
  */
 import { expect, test as base, type FrameLocator, type Page, type Route } from "@playwright/test";
 import type { Setting } from "../packages/sdk/src/index.ts";
 import {
   addAppRequestSchema,
+  addCopyRequestSchema,
   addFromCatalogRequestSchema,
   addMemberRequestSchema,
   appAccessRequestSchema,
@@ -468,6 +470,14 @@ export class FakeApi {
       return route.fulfill({ status: 204 });
     }
 
+    const copied = /^\/api\/spaces\/([^/]+)\/center\/([^/]+)$/.exec(path);
+    if (copied && method === "POST") {
+      const [, spaceId = "", listingId = ""] = copied;
+      this.appChanges.push(`POST ${path} ${JSON.stringify(body ?? null)}`);
+      if (this.appFailure) return fail(this.appFailure);
+      return answer(this.addCopy(spaceId, listingId, body));
+    }
+
     const fromCatalog = /^\/api\/spaces\/([^/]+)\/catalog\/([^/]+)$/.exec(path);
     if (fromCatalog && method === "POST") {
       const [, spaceId = "", templateId = ""] = fromCatalog;
@@ -617,6 +627,39 @@ export class FakeApi {
     const members = owner ? {} : { [this.current.user.id]: "edit" as const };
     const added = builtInApp(template, spaceId, { id: appId });
     owners?.apps.push({ id: appId, template, hasCode: true, removedAt: null, rowCount: 0, memberAccess, members, assistant: true, ...shownAs(added) });
+    this.setSession({ ...this.current, apps: [...this.current.apps, added] });
+    return { status: 201, json: { appId, restored: false } };
+  }
+
+  /**
+   * POST /api/spaces/:spaceId/center/:id, as the server answers it for a new
+   * copy: to the group the app is published to or the person's personal
+   * space, for whoever may add apps there, once per space. The copy is a
+   * made app of the space's own with the listing's name, icon and colour,
+   * version 1 and no entries. Bringing back a removed copy is the real
+   * server's to test.
+   */
+  private addCopy(spaceId: string, listingId: string, body: unknown): { json: unknown; status: number } | Failure {
+    const refuse = (status: number, code: ApiErrorCode): Failure => ({ status, code, message: "Sample failure" });
+    const parsed = addCopyRequestSchema.safeParse(body);
+    if (!parsed.success) return refuse(400, "invalid_request");
+    const listing = this.center.find((entry) => entry.id === listingId);
+    const space = this.current.spaces.find((candidate) => candidate.id === spaceId);
+    if (!listing || !space || (space.id !== listing.spaceId && space.kind !== "personal")) return refuse(404, "not_found");
+    if (!space.canAddApps) return refuse(403, "forbidden");
+    if (this.current.apps.some((candidate) => candidate.spaceId === spaceId && candidate.source?.listingId === listingId)) return refuse(409, "conflict");
+    const taken = new Set(this.current.apps.map((candidate) => candidate.id));
+    let n = 1;
+    while (taken.has(`m-copy-${n}`)) n += 1;
+    const appId = `m-copy-${n}`;
+    const by = this.current.spaces.some((candidate) => candidate.id === listing.spaceId) ? { by: listing.publishedBy.name } : {};
+    const added = app(appId, spaceId, listing.name.en, listing.name.zh, listing.description.en, listing.description.zh, listing.icon, listing.color, {
+      source: { listingId, ...by },
+    });
+    const owner = space.role === "owner";
+    const members = owner ? {} : { [this.current.user.id]: "edit" as const };
+    const memberAccess = parsed.data.memberAccess ?? "none";
+    this.groups[spaceId]?.apps.push({ id: appId, hasCode: true, removedAt: null, rowCount: 0, memberAccess, members, assistant: true, ...shownAs(added) });
     this.setSession({ ...this.current, apps: [...this.current.apps, added] });
     return { status: 201, json: { appId, restored: false } };
   }

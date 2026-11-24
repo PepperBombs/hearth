@@ -32,7 +32,9 @@ Notes for whoever changes this part, people and agents alike. They are read when
   app center from `center` (none unless a test sets some, checked against
   the contract) and unpublishes with `DELETE /api/center/:id` (404 when
   unknown, 403 without `canUnpublish`), recording the path in
-  `centerChanges`. The person's
+  `centerChanges`. `POST .../center/:id` adds a new copy (`m-copy-1`, …)
+  with the listing's `source`, recorded in `appChanges`; bringing back a
+  removed copy is left to the real server. The person's
   answer to a request of the model's to delete
   (`POST .../confirmations/:id`) is recorded in `confirmationRequests` and
   kept in that request's entry of `chats`, so a reload shows it; a test

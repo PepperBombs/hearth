@@ -277,9 +277,10 @@ The types and schemas go in `packages/shared` first.
     "by Lin", the date, the revision and note, and the fields it keeps.
   - The trust line on each card: "It reads and changes only its own
     entries, and reaches no website."
-  - "Add a copy" opens a dialog made from `AddAppForm`'s parts: which
-    space (the group or your personal space, where you may add apps), and
-    in a group, "who else may use it", "only me for now" first. A space
+  - "Add a copy" opens a dialog made from `AddAppForm`'s parts (now in
+    `apps/add-parts.tsx`): which space (your personal space or the group,
+    where you may add apps), and in a group, "who else may use it", "only
+    me for now" first. A space
     where the session shows a copy of this listing says so, with "Open";
     a 409 for a copy the person cannot see says "This space has this app
     already". After adding: "Open" and "Change it in the chat".
@@ -596,7 +597,28 @@ Each step is one pull request, with `pnpm check` green.
 7. **Adding a copy from the page.** The Add-a-copy dialog from
    `AddAppForm`'s parts, "Open" and "Change it in the chat", its strings
    in both languages, and its unit test. Done when a person can add a copy
-   from the page.
+   from the page. **Built:** "Add a copy" on each listing of a group's
+   section opens `AddCopyForm` in `pages/center.tsx`. The parts it shares
+   with the Apps page's dialogs (the radio buttons, the bordered choice and
+   "Who else can use it") moved from `pages/apps.tsx` to
+   `apps/add-parts.tsx`, and every dialog there uses them. It offers the
+   person's personal space first, then the group, only when they may add
+   apps there (otherwise a line says who may). A space where the session
+   shows a copy of this listing is offered disabled, "Has a copy already",
+   with "Open". "Who else can use it" shows for the group alone, "only me
+   for now" first. `useAddCopy` (`center/api.ts`) reads the session and the
+   space's owners' list again whatever the server answered, and settles only
+   then, so the copy is in the session when the dialog says where it went
+   (a line that takes the focus) and offers "Open" and "Change it in the
+   chat" (`/chat?space=…&app=…`). A 409 says "This space has this app
+   already. If you do not see it, ask an owner of the space."; a 404 that
+   the app is no longer shared there; a 403 that it cannot be added there.
+   The dialog cannot tell beforehand that the space removed a copy, since
+   neither the session nor the owners' list names a removed app's listing:
+   it says so afterwards ("back …, with its entries"), from `restored`. The
+   stand-in of `e2e/fixtures.ts` answers `POST .../center/:id` for a new
+   copy. Tested in `pages/center.test.tsx` and, at phone width,
+   `e2e/center-page.spec.ts`.
 8. **The publish dialog and the copy's line.** "Publish…" on the app page
    with its review, the problems worded from their codes, the tick,
    "Publish again" and "Unpublish"; "Copy of … · by …" and "No longer
