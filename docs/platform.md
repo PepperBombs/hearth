@@ -348,6 +348,48 @@ mini-apps framework, removed" below).
   the next page to open waits until the refresh has not moved for a minute
   before it starts its own.
 
+## The app center
+
+Step 4 of this direction, built in November 2026 to the design in
+`docs/center.md`, which holds every rule and decision: a person shares an
+app they made with a group they are in, and the others there add a copy of
+their own and have it changed in the chat.
+
+- **Publishing.** "Publish…" on an app's page, for an owner of its space
+  who is in a group, opens a review of exactly what would leave: the name
+  and description, the collections and fields, the settings with their
+  defaults, the instructions for the model in full and the page's size;
+  never entries, setting values, conversations or versions. Publishing
+  wants the tick "I have checked that this holds nothing private". The
+  server refuses an app that names hosts, an unchanged copy of a built-in
+  or a published app, one that fails the manifest's checks, and one that
+  holds the email address of the publisher or of anyone they share a space
+  with; and more than 50 listings of one person in one group.
+- **A listing** (`published_apps`, migration 10, its SQL in
+  `src/center/published.ts` alone, where `LISTED` decides who sees it) is a
+  snapshot of the manifest and page, seen only by the members of its group.
+  "Publish again" replaces it as the next revision. It goes when its
+  publisher or an owner of the group unpublishes it, when the publisher
+  leaves the group, and with the group.
+- **The center** (`/center`, from the Apps page, the sidebar and the
+  switcher; on a phone under the Apps tab) lists the built-in apps and, for
+  each group, what is published there, with who published it, the revision
+  and note, the fields it keeps and the line "It reads and changes only its
+  own entries, and reaches no website."
+- **A copy** is an ordinary made app of the space it went to, the person's
+  personal space or the listing's group (nowhere else): a new ID, version 1
+  noted "Copy of “Ledger” (revision 2)", no entries, and "only me for now"
+  in a group. A space holds one copy of a listing; adding it again brings a
+  removed one back with its entries. "Change it in the chat" opens the chat
+  with "Change “Ledger”: " in the box. A copy nobody changed cannot be
+  moved into a group or published. Its page says whose app it was, or that
+  it is no longer shared; it keeps working after its listing goes.
+- **The model** never publishes, unpublishes or adds a copy; a copy's
+  instructions reach it labelled as written by someone else, granting
+  nothing.
+- **The frame guard** (see "The sandbox") takes away any app's page that
+  navigates its frame away.
+
 ## The mini-apps framework, removed
 
 Before the platform, apps were written by hand against `@hearth/sdk`: a
@@ -393,15 +435,17 @@ with which name, and that nothing of it is left in any table while other
 apps keep theirs.
 `e2e/deleting.spec.ts` does both in a browser against the real server,
 whose stand-in model (`e2e/model-stand-in.ts`) asks to delete the row a
-message names. `HEARTH_MODEL_STANDIN` (dev
+message names. The app center's rules are tested through the API in
+`src/center/center.test.ts`, and its whole loop in `e2e/center.spec.ts`,
+where the stand-in model makes an app for Lin and renames the owner's copy. `HEARTH_MODEL_STANDIN` (dev
 mode only) sends every chat to a stand-in, for trying the web app without
 a real model.
 
 ## Not built yet
 
 - **Undoing a row the model added or changed.**
-- **The center**: publishing an app, finding others', installing a copy and
-  changing it to fit.
+- **The center's next steps**: updates of copies nobody changed, a preview,
+  and the rest of "Later" in `docs/center.md`.
 - **Developers' path** (answer 3): uploading an app written by hand.
 - **Jobs for made apps** (a scheduled fetch the platform runs for an app).
 - **Sign-in for a public platform**: Cloudflare Access is fine while the

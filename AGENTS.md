@@ -55,7 +55,9 @@ list, Ideas and GitHub Trending, to which the installs of the old apps of
 those names move at start-up. In November 2026 the owner removed the
 connector, then the old framework: the SDK's server side and hooks,
 `hearth-apps`, the sample apps, the build-time registry, jobs and the
-deploy's mini-apps repositories.
+deploy's mini-apps repositories. Then the app center (`docs/center.md`): a
+made app published to a group, the center at `/center`, and copies that
+people add and change in the chat; updates of copies come next.
 
 ## Layout
 
@@ -63,7 +65,7 @@ deploy's mini-apps repositories.
 |---|---|
 | `packages/shared` | The API contract: types and schemas for server and web. Change it first. |
 | `packages/sdk` | `@hearth/sdk`: the manifest rules every app is checked against, and the UI kit the web app is drawn with. |
-| `packages/server` | The Hono server: database, identity, `/api`, apps in spaces (`src/apps`), made apps (`src/made`), the built-in apps (`catalog`), the chat (`src/model`), groups, the assistant's switches. |
+| `packages/server` | The Hono server: database, identity, `/api`, apps in spaces (`src/apps`), made apps (`src/made`), the built-in apps (`catalog`), the chat (`src/model`), the app center (`src/center`), groups, the assistant's switches. |
 | `packages/web` | The React app: shell, pages, the sandbox's frame (`src/made`), `src/i18n` (English and Chinese). |
 | `e2e` | Playwright end-to-end tests. |
 | `deploy` | The deploy script, its tests, systemd units. |

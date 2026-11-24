@@ -357,7 +357,8 @@ already record `origin_hash` and `origin_revision`.
 - **Who.** The publisher, or an owner of the listing's group.
 - **What goes.** The listing, at once. Copies are not touched: they keep
   working, with their entries, settings and versions. Their `origin`
-  becomes NULL, and their page says "No longer shared".
+  becomes NULL, and their page says "A copy of an app that is no longer
+  shared".
 - **Publishing again later** makes a new listing. Older copies do not
   follow it.
 - **The publisher leaves the group,** or is removed from it: their
@@ -474,8 +475,9 @@ already record `origin_hash` and `origin_revision`.
 - **`e2e/center.spec.ts`,** with the stand-in model: Lin makes an app and
   publishes it to Family. The owner, at phone width, finds it in the app
   center, adds a copy to Personal and changes it in the chat. Lin's app is
-  as it was. Lin unpublishes, and the owner's copy still works, marked "No
-  longer shared". The existing end-to-end tests pass with the frame guard.
+  as it was. Lin unpublishes, and the owner's copy still works, marked "A
+  copy of an app that is no longer shared". The existing end-to-end tests
+  pass with the frame guard.
 
 ## Build steps
 
@@ -657,7 +659,25 @@ Each step is one pull request, with `pnpm check` green.
    center" in `docs/platform.md`, replacing its line under "Not built
    yet"; one line each in `docs/notes/platform.md`, `docs/notes/server.md`
    and `docs/notes/progress.md`; AGENTS.md's "Where it stands". Done when
-   the end-to-end test passes in CI.
+   the end-to-end test passes in CI. **Built:** `e2e/center.spec.ts` runs
+   in the "server" project (`REAL_SERVER_TESTS` in `playwright.config.ts`),
+   since the loop needs two people on one real server. The stand-in model
+   (`e2e/model-stand-in.ts`) learnt two requests so that the chat can make
+   and change an app without a real model: "make " and a name makes a
+   ledger (`create_app`), and "Change “Ledger”: call it …", the chat link's
+   words finished by the person, renames it (`read_app`, `update_app`). In a
+   group of the test's own, Lin makes "Ledger" in her personal space's chat
+   and publishes it from its page with a note and the tick. The owner, on a
+   phone, finds it under the group with "By lin", the revision and note and
+   the trust line, adds a copy to their personal space, follows "Change it
+   in the chat" and has the copy renamed; the copy's page says "A copy of an
+   app lin shared". Lin's app and the listing are as they were. Lin
+   unpublishes from the publish dialog, and the owner's copy keeps its new
+   name and shows an entry written after, with "A copy of an app that is no
+   longer shared". The test puts back both people's models, conversations
+   and assistant levels, deletes both apps for good and removes Lin from
+   the group. The section "The app center" in `docs/platform.md` replaces
+   its line under "Not built yet".
 
 After that, as its own step: updates of copies, as described above.
 

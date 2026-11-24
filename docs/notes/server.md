@@ -230,3 +230,4 @@ Notes for whoever changes this part, people and agents alike. They are read when
   `made_apps.origin_hash` is set; the rest of the server learns of it from
   the registry (`RegisteredApp.copy`), never from `made_apps` itself, and
   `moveApp` refuses to move an untouched one into a group.
+- Every statement about `published_apps` is in `src/center/published.ts`, and each names a group; who sees a listing is `LISTED` there alone, and who may use a copy is still `VISIBLE` alone. `src/center/published.test.ts` reads the server's source for both. A listing goes with its publisher's membership of the group, by its key to `space_members`, so leaving a group needs no code for it.
