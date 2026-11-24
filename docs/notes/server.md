@@ -208,6 +208,12 @@ Notes for whoever changes this part, people and agents alike. They are read when
   an owner there gets an `edit` exception, as when adding, and the app is
   included for the assistant under that space's level. A target with an
   entry for the app, removed or not, is 409: nothing is ever merged.
+- The app center's table, `published_apps` (migration 10, docs/center.md),
+  is named in `src/center/published.ts` alone, every statement there names
+  a group (its own `space_id`, or `LISTED`, the person's groups), and a
+  test reads the source for both (`src/center/published.test.ts`). It goes
+  with its publisher's membership of the group, by cascade, and sets
+  `made_apps.origin` of its copies to NULL.
 - Server tests that need a group mostly insert it with SQL (`family()` in
   `src/apps/test-world.ts`), and their apps with `makeApp` there, a made
   app written straight into the database; `src/groups/routes.test.ts`

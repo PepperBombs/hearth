@@ -97,7 +97,9 @@ Each question has the recommended answer first.
   app's manifest and page, published to one group. It is not the live app:
   the publisher's later changes do not reach it until they publish again.
 - **Revision.** "Publish again" replaces the snapshot and adds 1 to the
-  revision. Only the newest snapshot is kept.
+  revision. Only the newest snapshot is kept. Whoever publishes it again
+  (for a group's app, another owner of it) becomes its publisher: they
+  checked what this snapshot holds, and the center names them.
 - **The source.** The app it was published from. The listing names it as
   plain text and does not depend on it: the source may be changed, moved
   or deleted, and the listing stays as it is.
@@ -482,6 +484,24 @@ Each step is one pull request, with `pnpm check` green.
    listing in `fill` of `groups/routes.test.ts` and the table in
    `db/database.test.ts`. Done when the migration test, the scope test
    and the group-delete test pass; nothing else calls the table yet.
+   **Built:** the center's section at the end of
+   `packages/shared/src/index.ts` (`centerSchema`, `publishReviewSchema`
+   with `PUBLISH_PROBLEM_CODES` and a problem's `where` as `{ part, line? }`,
+   `publishRequestSchema`, `addCopyRequestSchema` and their answers, the
+   three limits) and `AppSummary.source`; a collection is shown as its name
+   and its fields' names. A refused `POST .../publish` answers with an
+   English message, and the dialog words the problems from `GET
+   .../publish`, so the error's shape is unchanged. Migration 10 as above,
+   tested in `db/center-schema.test.ts`. `center/published.ts` has
+   `insertListing`, `replaceListing` (which also sets the publisher, see
+   "Revision"), `deleteListing`, `listListingsFor` (no pages) and
+   `findListingFor` (with the page); who sees a listing is `LISTED` alone,
+   and the hash is `templateHash`, worked out there.
+   `center/published.test.ts` reads the server's source: `published_apps`
+   is named only there and in the migrations, and every statement names a
+   group. The tests that list the migrations a database runs
+   (`db/apps-schema.test.ts`, `db/chats-schema.test.ts`, `made/made.test.ts`)
+   changed with it: migration 9's own test now stops at 9.
 3. **Publishing.** `GET` and `POST .../publish` and `DELETE
    /api/center/:id`, with every rule and refusal above, and the tests of
    who may publish, what is refused, unpublishing and leaving the group.

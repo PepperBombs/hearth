@@ -161,8 +161,8 @@ describe("migration 9 on a database that migration 8 made", () => {
     // The release that asks before deleting starts on the same file.
     db = openDatabase(path);
     try {
-      expect(migrate(db).map((migration) => migration.id)).toEqual([9]);
-      expect(all(db, "SELECT id, name FROM migrations ORDER BY id")).toEqual(MIGRATIONS.map(({ id, name }) => ({ id, name })));
+      expect(migrate(db, upTo(9)).map((migration) => migration.id)).toEqual([9]);
+      expect(all(db, "SELECT id, name FROM migrations ORDER BY id")).toEqual(upTo(9).map(({ id, name }) => ({ id, name })));
       for (const [table, rows] of Object.entries(before)) {
         expect(all(db, `SELECT * FROM ${table} ORDER BY rowid`), table).toEqual(rows);
       }
