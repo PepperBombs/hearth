@@ -429,6 +429,8 @@ export const en = {
   "chat.busy": "This conversation is still answering, in another window or tab.",
   "chat.full": "This conversation is full. Start a new one.",
   "chat.tooMany": "You have 500 conversations here. Delete some to start a new one.",
+  // The frame guard (docs/center.md): a page that navigated its frame away is taken off the screen.
+  "made.leftPage": "This app tried to leave its page and was stopped.",
   "model.title": "Your model",
   "model.intro": "Hearth uses your own model, with your own key, to make your apps and keep their data. The key is stored encrypted on this server and never shown again.",
   "model.protocol": "Kind",

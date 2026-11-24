@@ -410,6 +410,7 @@ export const zh: Dictionary = {
   "chat.busy": "这个对话正在另一个窗口或标签页里回答。",
   "chat.full": "这个对话已经满了，请开始新对话。",
   "chat.tooMany": "你在这里已有 500 个对话。删掉一些才能开始新对话。",
+  "made.leftPage": "这个应用试图离开自己的页面，已被拦下。",
   "model.title": "你的模型",
   "model.intro": "Hearth 用你自己的模型和密钥来做应用、管数据。密钥加密保存在这台服务器上，之后不会再显示。",
   "model.protocol": "类型",

@@ -99,13 +99,26 @@ second. The page reports its height (a page sized to its frame, `100vh`, is
 told apart, or it would grow the frame for ever), and gets the theme's
 colours as CSS variables.
 
-What the sandbox does not stop: a page can still navigate its own frame to
-another address, and a browser may let it open a WebRTC connection, so an
-app's page could send away the data of that same app that it was given.
+The frame guard: the page Hearth serves loads once for each address the
+frame is given, and that address changes only with the theme, the
+language, the view or the app's version. A second `load` at the same
+address means the page navigated its frame away, or reloaded itself, so
+`MadeAppFrame` takes the frame off the screen and says "This app tried to
+leave its page and was stopped" in its place. The app stays stopped in that
+place, whatever the theme, language or view, until its next version (a
+change in the chat may be the fix) or until Hearth is loaded again. It
+applies to every app, the built-in ones too. An honest page trips it as
+well, so a page opens its links in a new tab and never reloads or leaves
+itself: the built-in pages do so, and the chat's guidance for writing a
+page says so.
+
+What the sandbox does not stop: the guard finds a navigation only after it
+happened, so whatever the page put in the new address may already have
+left; and a browser may let a page open a WebRTC connection. So an app's
+page could still send away the data of that same app that it was given.
 Every app on the platform is still one a person chose to use: made by
 their own model, or shared by someone they know. Before sharing with
-strangers, this needs a closer look (a separate origin for frames, and
-watching for a frame that navigates away).
+strangers, this needs a separate origin for frames.
 
 ## Your own model
 

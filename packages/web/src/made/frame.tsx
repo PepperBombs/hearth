@@ -7,9 +7,14 @@
  * component by message; this component answers with the person's sign-in,
  * always for the app and space it drew the iframe for, whatever the message
  * says, and only to messages from that iframe.
+ *
+ * It also guards the frame (docs/center.md, "Privacy and safety"): a page
+ * may load once for each address this component gives the iframe. A second
+ * `load` for the same address means the page navigated its frame somewhere
+ * else, so the frame is taken off the screen and a line says why.
  */
 import type { AppSummary } from "@hearth/shared";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { pickLocalized } from "../i18n";
 import { usePreferences } from "../session/preferences";
 import { addRow, fetchForApp, listRows, readSettings, removeRow, replaceRows, saveSettings, updateRow, type ListOptions } from "./api";
@@ -91,12 +96,28 @@ async function answer(app: AppSummary, op: unknown, args: unknown): Promise<unkn
  */
 export function MadeAppFrame({ app, view = "card", maxHeight = 560 }: { app: AppSummary; view?: "card" | "page"; maxHeight?: number }) {
   const frame = useRef<HTMLIFrameElement>(null);
-  const { locale, resolvedTheme } = usePreferences();
+  const { locale, resolvedTheme, t } = usePreferences();
   const [height, setHeight] = useState(200);
   const src =
     `/api/spaces/${encodeURIComponent(app.spaceId)}/apps/${encodeURIComponent(app.id)}/frame` +
     // The version, so that a change to the app draws its new page.
     `?theme=${resolvedTheme}&locale=${locale}&view=${view}&v=${app.version ?? 1}`;
+
+  // The frame guard. `loads` counts the iframe's loads since `src` last changed: the page Hearth served
+  // loads once, and a second load for the same address is the page, or a link in it the person clicked,
+  // navigating the frame away. What it put in the new address may already have left; what it reads of
+  // the app's data from now on does not, since the frame is gone. A stopped app stays stopped, in other
+  // themes, languages and views too, until its next version (a change in the chat) or a reload of Hearth.
+  const loads = useRef(0);
+  useLayoutEffect(() => {
+    loads.current = 0;
+  }, [src]);
+  const version = `${app.spaceId}/${app.id}@${app.version ?? 1}`;
+  const [stopped, setStopped] = useState<string | null>(null);
+  const onLoad = () => {
+    loads.current += 1;
+    if (loads.current > 1) setStopped(version);
+  };
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -137,6 +158,14 @@ export function MadeAppFrame({ app, view = "card", maxHeight = 560 }: { app: App
     };
   }, [app.id, onChanged]);
 
+  if (stopped === version) {
+    return (
+      <p role="alert" className="rounded-ctl bg-surface px-3 py-4 text-sm text-down" data-made-app-stopped={app.id}>
+        {t("made.leftPage")}
+      </p>
+    );
+  }
+
   return (
     <iframe
       // One frame per app: another app's page gets a frame of its own, so that the page shown before,
@@ -149,6 +178,7 @@ export function MadeAppFrame({ app, view = "card", maxHeight = 560 }: { app: App
       referrerPolicy="no-referrer"
       className="block w-full rounded-ctl border-0 bg-surface"
       style={{ height }}
+      onLoad={onLoad}
       data-made-app={app.id}
     />
   );

@@ -1,12 +1,13 @@
 # The app center
 
-Design, not built: for the owner to approve.
+Approved by the owner, every decision with its recommended answer, and
+built one step at a time: "Build steps" marks each step that is built.
 
 This is step 4 of the direction in `docs/platform.md`, the line under "Not
 built yet": "publishing an app, finding others', installing a copy and
-changing it to fit". Nothing here is built. The questions in "The owner's
-decisions" come first; each has the answer this design recommends, and the
-rest of the document assumes those answers.
+changing it to fit". The questions in "The owner's decisions" come first;
+each has the answer this design recommends, and the rest of the document
+assumes those answers.
 
 ## What it is
 
@@ -375,7 +376,12 @@ already record `origin_hash` and `origin_revision`.
   when the `src` changes (theme, language, view or version). A second load
   for the same `src` means the page navigated its frame away: the frame is
   removed and the card or page says "This app tried to leave its page and
-  was stopped", in both languages. It applies to every app.
+  was stopped", in both languages. It applies to every app, wherever it is
+  drawn: the dashboard's card, the app's page and the chat. A stopped app
+  stays stopped in that place, whatever the theme, language or view, until
+  its next version or until Hearth is loaded again: a new theme gives the
+  frame a new `src`, and the page would be served again only to leave
+  again.
   - This finds the navigation after it happened: what the page put in the
     address may already have left. A page can still open a WebRTC
     connection. `docs/platform.md` says both plainly, under "What the
@@ -463,7 +469,12 @@ Each step is one pull request, with `pnpm check` green.
    away, with its message in both languages; its unit test; the line on
    links in the chat's guidance for pages; the sandbox section of
    `docs/platform.md`. Done when the guard's test passes and `pnpm build
-   && pnpm e2e` passes with the built-in apps unchanged.
+   && pnpm e2e` passes with the built-in apps unchanged. **Built:** the
+   guard in `packages/web/src/made/frame.tsx` (the count is reset in a
+   layout effect whenever `src` changes, and the line is a `role="alert"`
+   paragraph, `made.leftPage`), its test in
+   `packages/web/src/made/frame.test.tsx`, the line in `model/chat.ts`, and
+   "The frame guard" in the sandbox section of `docs/platform.md`.
 2. **The contract and the table.** The types and schemas in
    `packages/shared`; migration 10 and `center-schema.test.ts`;
    `center/published.ts` (insert, replace, delete, list for a member, get
