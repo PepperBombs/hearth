@@ -62,14 +62,16 @@ async function rowsOf(api: APIRequestContext, spaceId: string, appId: string, co
 
 /**
  * Deletes for good what an earlier run against the same server left of a
- * built-in app in a space: removing an app keeps its data, and adding it
- * again would bring that back.
+ * built-in app in a space, in use or removed: removing an app keeps its
+ * data, and adding it again would bring that back.
  */
 async function forgetBuiltIn(api: APIRequestContext, spaceId: string, template: string): Promise<void> {
-  const list = (await (await api.get(`/api/spaces/${spaceId}/apps`)).json()) as { apps: { id: string; template?: string; removedAt: string | null }[] };
+  const list = (await (await api.get(`/api/spaces/${spaceId}/apps`)).json()) as {
+    apps: { id: string; template?: string; name?: { en: string } }[];
+  };
+  // Deleting for good wants the app's name, as the person types it on the Apps page.
   for (const entry of list.apps.filter((app) => app.template === template)) {
-    if (entry.removedAt === null) expect((await api.delete(`/api/spaces/${spaceId}/apps/${entry.id}`)).status()).toBe(204);
-    expect((await api.delete(`/api/spaces/${spaceId}/apps/${entry.id}/data`, { data: { confirm: entry.id } })).status()).toBe(204);
+    expect((await api.delete(`/api/spaces/${spaceId}/apps/${entry.id}/data`, { data: { confirm: entry.name?.en ?? entry.id } })).status()).toBe(204);
   }
 }
 

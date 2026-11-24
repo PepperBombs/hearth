@@ -622,7 +622,7 @@ describe("settings and the life of an app in a space", () => {
     await settingsIn(await save(SAM, world.family, { space: { title: "Ours" }, user: { nickname: "Sam" } }));
     await settingsIn(await save(LIN, world.family, { user: { nickname: "Lin" } }));
     expect((await remove(SAM, world.family)).status).toBe(204);
-    const gone = await call(SAM, "DELETE", `/api/spaces/${world.family}/apps/${PLANNER}/data`, { confirm: PLANNER });
+    const gone = await call(SAM, "DELETE", `/api/spaces/${world.family}/apps/${PLANNER}/data`, { confirm: "Planner" });
     expect(gone.status).toBe(204);
     expect(stored()).toEqual([]);
     await expectError(await add(SAM, world.family, { memberAccess: "view" }), 404, "not_found");

@@ -1,7 +1,8 @@
 /**
  * What a person does with an app as a whole, rather than inside it: add a
- * built-in app to a space, remove an app, move it to another space, switch
- * it on or off and pin it for themselves, and open its settings. The Apps
+ * built-in app to a space, remove an app, bring a removed one back, delete
+ * one for good, move it to another space, switch it on or off and pin it
+ * for themselves, and open its settings. The Apps
  * page uses all of them; the dashboard's cards and an app's page offer the
  * settings.
  *
@@ -23,7 +24,7 @@ import { ApiRequestError } from "../session/api";
 import { useI18n } from "../session/preferences";
 import { SESSION_QUERY_KEY, useSession } from "../session/session";
 import { addFromCatalog, CATALOG_QUERY_KEY, fetchCatalog } from "../made/api";
-import { moveAppToSpace, patchAppPrefs, removeAppFromSpace, type Install } from "./api";
+import { bringBackApp, deleteAppForGood, moveAppToSpace, patchAppPrefs, removeAppFromSpace, type Install } from "./api";
 import { hasSettings, settingsQueryKey } from "./settings";
 import { AppSettingsDialog } from "./settings-dialog";
 
@@ -98,6 +99,33 @@ export function useRemoveApp() {
   return useMutation({
     mutationFn: (install: Install) => removeAppFromSpace(install),
     onSettled: (_result, _error, install) => reloadAfter(client, install.spaceId),
+  });
+}
+
+export type BringBackRequest = { install: Install; memberAccess?: MemberAccess };
+
+/** Brings an app the space removed back, with its data; access starts afresh. Owners only. */
+export function useBringBackApp() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ install, memberAccess }: BringBackRequest) =>
+      bringBackApp(install, memberAccess === undefined ? {} : { memberAccess }),
+    onSettled: (_result, _error, { install }) => reloadAfter(client, install.spaceId),
+  });
+}
+
+export type DeleteForGoodRequest = { install: Install; confirm: string };
+
+/**
+ * Deletes an app from its space for good, in use or removed, with its
+ * rows, settings and versions, for everyone there. Owners only. Cannot be
+ * undone.
+ */
+export function useDeleteAppForGood() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ install, confirm }: DeleteForGoodRequest) => deleteAppForGood(install, confirm),
+    onSettled: (_result, _error, { install }) => reloadAfter(client, install.spaceId),
   });
 }
 

@@ -9,18 +9,32 @@
  * before anything runs, and every outcome is handed back to the model,
  * refusals included, so that it can tell the person or try again.
  */
-import { CHAT_FAILURES, type ChatEvent, type ChatMessage, type Space, type User } from "@hearth/shared";
+import {
+  CHAT_FAILURES,
+  DELETE_PREVIEW_ROWS,
+  MAX_DELETE_ROWS,
+  type ChatEvent,
+  type ChatMessage,
+  type ConfirmationDecision,
+  type ConfirmationResult,
+  type MadeRow,
+  type Space,
+  type User,
+} from "@hearth/shared";
 import { z } from "zod";
 import type { Registry } from "../apps/registry";
 import type { Config } from "../config";
 import type { Db } from "../db/database";
 import { listSpacesForUser } from "../db/people";
-import { NOTHING_HERE, Refusal } from "../http/errors";
+import { NOTHING_HERE, notFound, Refusal } from "../http/errors";
 import {
   addMadeRow,
   assistantMayChange,
   createMadeApp,
+  deleteMadeRows,
   listMadeRows,
+  madeAppIsIn,
+  rowsToDelete,
   madeAppsIn,
   updateMadeRow,
   changeMadeApp,
@@ -32,6 +46,7 @@ import {
 } from "../made/apps";
 import { MAX_HTML_BYTES, checkMadeManifest, madeHtmlSchema, madeManifestSchema, type MadeManifest } from "../made/manifest";
 import { ModelCallError, openConversation, type ToolCall, type ToolOutcome, type ToolSpec } from "./providers";
+import { CONFIRMATION_MS, createDeleteRequest, findDeleteRequest, settleDeleteRequest } from "./confirmations";
 import { modelAccess } from "./settings";
 
 /** How many requests to the model one message of the person's may take. */
@@ -101,6 +116,8 @@ To change an app (its fields, its page, its name or look), read it first with re
 
 Before you change rows you have not seen, read them with list_rows. Use the appId and collection names exactly as listed.
 
+You never delete anything yourself. To delete rows, read them with list_rows, then call delete_rows with their IDs: it deletes nothing, but asks the person, who confirms or declines in the conversation. Say what you asked them, in a sentence, and do not say it is done. You are told their answer with their next message. Deleting a whole app is not yours to do: its space's owners do it on the Apps page.
+
 ${DATA_RULE}`;
 }
 
@@ -123,6 +140,7 @@ const INPUTS = {
     note: z.string().trim().min(1).max(200),
   }),
   restore_app_version: z.strictObject({ appId: appRef.appId, version: z.number().int().min(1) }),
+  delete_rows: z.strictObject({ ...appRef, rowIds: z.array(z.string().min(1).max(100)).min(1).max(MAX_DELETE_ROWS) }),
 } as const;
 type ToolName = keyof typeof INPUTS;
 
@@ -188,7 +206,36 @@ const TOOLS: readonly ToolSpec[] = [
     description: "Brings an earlier version of an app made in this space back into use, as a new version. Refused if a row written since would not fit it.",
     inputSchema: jsonSchemaOf(INPUTS.restore_app_version),
   },
+  {
+    name: "delete_rows",
+    description:
+      `Use this for every deletion of rows. It deletes nothing by itself: it asks the person to confirm deleting these rows (1 to ${MAX_DELETE_ROWS}, by ID, read with list_rows first) of a collection of an app made in this space, and they confirm or decline in the conversation. You are told their answer with their next message.`,
+    inputSchema: jsonSchemaOf(INPUTS.delete_rows),
+  },
 ];
+
+/** How long one row's preview is at most, before its ellipsis. */
+const PREVIEW_LENGTH = 80;
+
+/**
+ * A few words of a row, for the person deciding whether it goes: the values
+ * of its first fields that hold something, in the manifest's order, joined.
+ * It is the row's own content, never translated.
+ */
+export function previewOf(row: MadeRow, fields: readonly string[]): string {
+  const values: string[] = [];
+  for (const field of fields) {
+    const value = row[field];
+    if (typeof value === "string" && value.trim() !== "") values.push(value.replace(/\s+/g, " ").trim());
+    else if (typeof value === "number") values.push(String(value));
+    else if (Array.isArray(value) && value.length > 0) values.push(value.join(", "));
+    if (values.length === 3) break;
+  }
+  // By code points, so that a character outside the basic plane is never cut in two.
+  const characters = Array.from(values.join(" · "));
+  if (characters.length === 0) return row.id;
+  return characters.length <= PREVIEW_LENGTH ? characters.join("") : `${characters.slice(0, PREVIEW_LENGTH).join("").trimEnd()}…`;
+}
 
 function output(value: unknown, limit = MAX_TOOL_OUTPUT): string {
   const text = JSON.stringify(value);
@@ -198,7 +245,7 @@ function output(value: unknown, limit = MAX_TOOL_OUTPUT): string {
 /** Runs one tool call for the person, and tells the conversation what changed. */
 async function runTool(
   deps: ChatDeps,
-  context: { user: User; space: Space },
+  context: { user: User; space: Space; chatId: string },
   call: ToolCall,
   emit: Emit,
 ): Promise<ToolOutcome> {
@@ -299,6 +346,50 @@ async function runTool(
         });
         return { id: call.id, content: output({ version: restored.version, restored: restored.restored }), isError: false };
       }
+      case "delete_rows": {
+        const { appId, collection, rowIds } = input as z.infer<typeof INPUTS.delete_rows>;
+        if (!assistantMayChange(db, context.space.id)) {
+          return fail("Deleting is switched off in this space: its owners allow an assistant to read only.");
+        }
+        const ids = [...new Set(rowIds)];
+        // What deleting would need, checked now, and the request kept, together: nothing is deleted here.
+        const asked = db
+          .transaction(() => {
+            const { rows, fields } = rowsToDelete(db, registry, request(appId), collection, ids);
+            const confirmationId = createDeleteRequest(db, {
+              chatId: context.chatId,
+              spaceId: context.space.id,
+              userId: context.user.id,
+              appId,
+              collection,
+              rowIds: ids,
+              now: new Date().toISOString(),
+            });
+            return confirmationId === null ? null : { confirmationId, preview: rows.slice(0, DELETE_PREVIEW_ROWS).map((row) => previewOf(row, fields)) };
+          })
+          .immediate();
+        if (asked === null) return fail("This conversation is gone.");
+        await emit({
+          type: "action",
+          action: "delete_requested",
+          appId,
+          appName: appName(appId),
+          confirmationId: asked.confirmationId,
+          collection,
+          count: ids.length,
+          preview: asked.preview,
+          status: "pending",
+        });
+        return {
+          id: call.id,
+          content: output({
+            asked: true,
+            count: ids.length,
+            note: "The person was asked to confirm. Nothing is deleted yet, and nothing will be unless they confirm. You will be told their answer with their next message.",
+          }),
+          isError: false,
+        };
+      }
     }
   } catch (error) {
     if (error instanceof Refusal) {
@@ -325,7 +416,7 @@ function today(): string {
 export async function runChat(
   deps: ChatDeps,
   user: User,
-  request: { spaceId: string; history: readonly ChatMessage[] },
+  request: { spaceId: string; chatId: string; history: readonly ChatMessage[] },
   emit: Emit,
   signal: AbortSignal,
 ): Promise<void> {
@@ -364,7 +455,7 @@ export async function runChat(
       for (const call of result.calls) {
         // A stop starts no further change; one already made is kept (the route stores its action).
         signal.throwIfAborted();
-        outcomes.push(await runTool(deps, { user, space }, call, emit));
+        outcomes.push(await runTool(deps, { user, space, chatId: request.chatId }, call, emit));
       }
       conversation.answer(outcomes);
     }
@@ -375,4 +466,86 @@ export async function runChat(
     }
     throw error;
   }
+}
+
+/**
+ * The person's answer to a request of their model's to delete rows
+ * (`delete_rows`), in one immediate transaction. Only the person whose
+ * conversation it is reaches it (404 otherwise), and only while it waits
+ * (409 otherwise).
+ *
+ * A request that waited longer than CONFIRMATION_MS, or whose app is no
+ * longer in the space (deleted, or moved out), expires whatever the answer,
+ * and that is kept. "decline" deletes nothing. "confirm" checks again, now,
+ * everything the request needed, since access may have changed: the space
+ * still lets the assistant change things, and the assistant, for this
+ * person, may still change the app (403 otherwise, and the request keeps
+ * waiting); then it deletes the rows that are still there, through the
+ * store, skipping those gone since.
+ */
+export function answerDeleteRequest(
+  deps: Pick<ChatDeps, "db" | "registry">,
+  request: { userId: string; spaceId: string; chatId: string; confirmationId: string; decision: ConfirmationDecision["decision"] },
+  now: Date = new Date(),
+): ConfirmationResult {
+  const { db, registry } = deps;
+  const scope = { chatId: request.chatId, spaceId: request.spaceId, userId: request.userId };
+  return db
+    .transaction((): ConfirmationResult => {
+      const asked = findDeleteRequest(db, { ...scope, id: request.confirmationId });
+      if (!asked) throw notFound();
+      if (asked.status !== "pending") {
+        throw new Refusal(409, "conflict", `This request was answered already: it is ${asked.status}.`);
+      }
+      const settle = (status: "confirmed" | "declined" | "expired", deleted: number | null, at = now.toISOString()) =>
+        settleDeleteRequest(db, { ...scope, id: asked.id, status, deleted, at });
+
+      const runsOut = Date.parse(asked.createdAt) + CONFIRMATION_MS;
+      if (now.getTime() > runsOut) {
+        settle("expired", null, new Date(runsOut).toISOString());
+        return { status: "expired", deleted: 0 };
+      }
+      if (!madeAppIsIn(db, asked.appId, request.spaceId)) {
+        settle("expired", null);
+        return { status: "expired", deleted: 0 };
+      }
+      if (request.decision === "decline") {
+        settle("declined", null);
+        return { status: "declined", deleted: 0 };
+      }
+      if (!assistantMayChange(db, request.spaceId)) {
+        throw new Refusal(
+          403,
+          "forbidden",
+          "Nothing was deleted: this space's owners no longer let the assistant change things here. The request still waits.",
+        );
+      }
+      let deleted: number;
+      try {
+        deleted = deleteMadeRows(
+          db,
+          registry,
+          { userId: request.userId, spaceId: request.spaceId, appId: asked.appId, by: "assistant" },
+          asked.collection,
+          asked.rowIds,
+        );
+      } catch (error) {
+        // The app is there (checked above), so a 404 means it is no longer one the assistant may use for this person.
+        if (error instanceof Refusal && error.status === 404 && error.message === NOTHING_HERE) {
+          throw new Refusal(
+            403,
+            "forbidden",
+            "Nothing was deleted: you, or the assistant for you, may no longer change this app here. The request still waits.",
+          );
+        }
+        if (error instanceof Refusal && error.status === 404) throw new Refusal(409, "conflict", `Nothing was deleted: ${error.message}`);
+        if (error instanceof Refusal && error.status === 403) {
+          throw new Refusal(403, "forbidden", `Nothing was deleted: ${error.message} The request still waits.`);
+        }
+        throw error;
+      }
+      settle("confirmed", deleted);
+      return { status: "confirmed", deleted };
+    })
+    .immediate();
 }

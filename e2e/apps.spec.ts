@@ -2,8 +2,9 @@
  * The Apps page and the settings dialog, against the stand-in server
  * (e2e/fixtures.ts): adding one of the built-in apps to a space or bringing
  * back one it removed, the person's own switch and pin, removing, moving an
- * app to another space, and the settings form drawn from what an app
- * declares, in both languages and on a phone. The same is done against the
+ * app to another space, the space's removed apps, brought back or deleted
+ * for good once their name is typed, and the settings form drawn from what
+ * an app declares, in both languages and on a phone. The same is done against the
  * real server, with the built-in apps Hearth ships, in e2e/real-server.spec.ts.
  */
 import {
@@ -20,8 +21,23 @@ import {
   test,
 } from "./fixtures.ts";
 import type { Page } from "@playwright/test";
+import type { InstalledApp } from "../packages/shared/src/index.ts";
+import type { FakeApi } from "./fixtures.ts";
 
 const spaceCard = (page: Page, name: string) => page.getByRole("main").getByRole("region", { name });
+
+/**
+ * The family of `ownAFamily`, which removed two apps and kept their data: a
+ * ledger made in the chat, with a name of its maker's in both languages,
+ * and the built-in feed.
+ */
+function familyWithRemovedApps(api: FakeApi, locale: "en" | "zh" = "en"): void {
+  ownAFamily(api, { locale });
+  const removed = { hasCode: true, removedAt: "2026-11-01T08:00:00.000Z", memberAccess: "view", members: {}, assistant: true } as const;
+  const ledger: InstalledApp = { ...removed, id: "m-ledger", rowCount: 12, name: { en: "Ledger", zh: "Ledger" }, icon: "wallet", color: "amber" };
+  const feed: InstalledApp = { ...removed, id: "m-feed", template: "feed", rowCount: 1, name: { en: "Feed", zh: "动态" }, icon: "trending-up", color: "purple" };
+  api.groups[FAMILY_SPACE]!.apps.push(ledger, feed);
+}
 
 test.describe("the Apps page", () => {
   test("adds a built-in app to a group, asking who else may use it", async ({ page, api }) => {
@@ -201,6 +217,145 @@ test.describe("the Apps page", () => {
     await expect(spaceCard(page, "个人").getByText("清单已移到这里。")).toBeFocused();
   });
 
+  test("lists the apps a space removed, for its owners, and brings one back with what it held", async ({ page, api }) => {
+    familyWithRemovedApps(api);
+    await page.goto("/apps");
+    const family = spaceCard(page, "Family");
+    const removed = family.getByRole("list", { name: "Removed apps" });
+    await expect(removed.getByRole("listitem")).toHaveText([/Ledger\s*12 entries/, /Feed\s*1 entry/]);
+    // The personal space removed nothing, so it shows no such list.
+    await expect(spaceCard(page, "Personal").getByRole("list", { name: "Removed apps" })).toHaveCount(0);
+
+    // An app made in the chat comes back from here, asking who else may use it, "only me for now" first.
+    await family.getByRole("button", { name: "Bring back Ledger in Family" }).click();
+    const dialog = page.getByRole("dialog", { name: "Bring back Ledger in Family?" });
+    await expect(dialog.getByText("It comes back with its data, 12 saved entries, and its settings.")).toBeVisible();
+    await expect(dialog.getByRole("radio", { name: "Only me for now" })).toBeChecked();
+    await dialog.getByRole("radio", { name: "Everyone can edit" }).check();
+    await dialog.getByRole("button", { name: "Bring back", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(family.getByText("Ledger is back.")).toBeFocused();
+    await expect(family.getByRole("switch", { name: "Show Ledger in Family" })).toBeChecked();
+    await expect(removed.getByRole("listitem")).toHaveText([/Feed/]);
+    expect(api.appChanges).toEqual([`PUT /api/spaces/${FAMILY_SPACE}/apps/m-ledger {"memberAccess":"edit"}`]);
+  });
+
+  test("deletes a removed app for good only once its name is typed, and says it cannot be undone", async ({ page, api }) => {
+    familyWithRemovedApps(api);
+    await page.goto("/apps");
+    const family = spaceCard(page, "Family");
+    await family.getByRole("button", { name: "Delete permanently: Ledger in Family" }).click();
+    const dialog = page.getByRole("dialog", { name: "Delete Ledger for good?" });
+    await expect(dialog.getByText("Its 12 entries, its settings and its versions are deleted for everyone in Family. This cannot be undone.")).toBeVisible();
+    const box = dialog.getByRole("textbox", { name: "Type “Ledger” to confirm" });
+    const confirm = dialog.getByRole("button", { name: "Delete", exact: true });
+    await expect(confirm).toBeDisabled();
+    for (const typed of ["Ledge", "ledger", "Ledger s"]) {
+      await box.fill(typed);
+      await expect(confirm).toBeDisabled();
+    }
+    // Cancel deletes nothing, and the box starts empty when the dialog opens again.
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
+    expect(api.appChanges).toEqual([]);
+    await family.getByRole("button", { name: "Delete permanently: Ledger in Family" }).click();
+    await expect(box).toHaveValue("");
+
+    await box.fill(" Ledger ");
+    await confirm.click();
+    await expect(dialog).toBeHidden();
+    await expect(family.getByText("Ledger was deleted.")).toBeFocused();
+    await expect(family.getByRole("list", { name: "Removed apps" }).getByRole("listitem")).toHaveText([/Feed/]);
+    expect(api.appChanges).toEqual([`DELETE /api/spaces/${FAMILY_SPACE}/apps/m-ledger/data {"confirm":"Ledger"}`]);
+  });
+
+  test("deletes an app in use for good from its Remove dialog, and says why the server refused", async ({ page, api }) => {
+    ownAFamily(api);
+    await page.goto("/apps");
+    const family = spaceCard(page, "Family");
+    await family.getByRole("button", { name: "Remove Checklist in Family" }).click();
+    const remove = page.getByRole("dialog", { name: "Remove Checklist in Family?" });
+    // Removing keeps its data, and it can be brought back; deleting it for good is offered beside that.
+    await expect(remove.getByText(/Its data is kept: bring it back from Removed apps on this page, or add it again/)).toBeVisible();
+    await remove.getByRole("button", { name: "Delete permanently" }).click();
+    const dialog = page.getByRole("dialog", { name: "Delete Checklist for good?" });
+    await expect(dialog.getByText("Its 3 entries, its settings and its versions are deleted for everyone in Family. This cannot be undone.")).toBeVisible();
+    await dialog.getByRole("textbox", { name: "Type “Checklist” to confirm" }).fill("Checklist");
+
+    // The server checks again: someone who is no longer an owner is told so, and nothing is deleted.
+    api.appFailure = { status: 403, code: "forbidden", message: "Sample failure" };
+    await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(dialog.getByText("Only an owner of this space can delete an app.")).toBeVisible();
+    api.appFailure = null;
+    await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(family.getByText("Checklist was deleted.")).toBeFocused();
+    await expect(family.getByText("No apps in this space yet.")).toBeVisible();
+    // Gone for good: not among the removed apps either.
+    await expect(family.getByRole("list", { name: "Removed apps" })).toHaveCount(0);
+    expect(api.appChanges).toEqual([
+      `DELETE /api/spaces/${FAMILY_SPACE}/apps/m-checklist/data {"confirm":"Checklist"}`,
+      `DELETE /api/spaces/${FAMILY_SPACE}/apps/m-checklist/data {"confirm":"Checklist"}`,
+    ]);
+  });
+
+  test("a removed app made in the chat is listed after it is removed, and comes back from there", async ({ page, api }) => {
+    // Removing it is the only way out of the dashboard for an app made in the chat: Removed apps is the way back.
+    api.setSession({ ...emptySession(), apps: [builtInApp("feed", PERSONAL_SPACE, { id: "m-notes", template: undefined, name: { en: "Notes", zh: "笔记" } })] });
+    await page.goto("/apps");
+    const personal = spaceCard(page, "Personal");
+    await personal.getByRole("button", { name: "Remove Notes" }).click();
+    const remove = page.getByRole("dialog", { name: "Remove Notes?" });
+    await expect(remove.getByText("It disappears for everyone in this space. Its data is kept: an owner can bring it back from Removed apps on this page.")).toBeVisible();
+    await remove.getByRole("button", { name: "Remove", exact: true }).click();
+    await expect(remove).toBeHidden();
+    await expect(personal.getByRole("list", { name: "Removed apps" }).getByRole("listitem")).toHaveText([/Notes\s*No entries/]);
+
+    // In a personal space there is nobody else to ask about.
+    await personal.getByRole("button", { name: "Bring back Notes" }).click();
+    const back = page.getByRole("dialog", { name: "Bring back Notes?" });
+    await expect(back.getByText("It comes back with its settings.")).toBeVisible();
+    await expect(back.getByRole("radio")).toHaveCount(0);
+    await back.getByRole("button", { name: "Bring back", exact: true }).click();
+    await expect(personal.getByText("Notes is back.")).toBeFocused();
+    await expect(personal.getByRole("switch", { name: "Show Notes" })).toBeChecked();
+    await expect(personal.getByRole("list", { name: "Removed apps" })).toHaveCount(0);
+    expect(api.appChanges).toEqual([`DELETE /api/spaces/${PERSONAL_SPACE}/apps/m-notes null`, `PUT /api/spaces/${PERSONAL_SPACE}/apps/m-notes {}`]);
+  });
+
+  test("a member sees no removed apps, and cannot delete or bring back any", async ({ page, api }) => {
+    familyWithRemovedApps(api);
+    api.setSession({ ...api.session, spaces: api.session.spaces.map((space) => (space.id === FAMILY_SPACE ? { ...space, role: "member" as const } : space)) });
+    await page.goto("/apps");
+    const family = spaceCard(page, "Family");
+    await expect(family.getByRole("switch", { name: "Show Checklist in Family" })).toBeVisible();
+    await expect(family.getByRole("list", { name: "Removed apps" })).toHaveCount(0);
+    await expect(family.getByRole("button", { name: /^(Bring back|Delete permanently|Remove)/ })).toHaveCount(0);
+  });
+
+  test("the removed apps and deleting one for good, in Chinese", async ({ page, api }) => {
+    familyWithRemovedApps(api, "zh");
+    await page.goto("/apps");
+    const family = spaceCard(page, "Family");
+    const removed = family.getByRole("list", { name: "已移除的应用" });
+    await expect(removed.getByRole("listitem")).toHaveText([/Ledger\s*12 条数据/, /动态\s*1 条数据/]);
+    await family.getByRole("button", { name: "永久删除Family的动态" }).click();
+    const dialog = page.getByRole("dialog", { name: "要永久删除动态吗？" });
+    await expect(dialog.getByText("它的 1 条数据、设置和所有版本都会被删除，Family里的所有人都将失去它。此操作无法撤销。")).toBeVisible();
+    // Its name in either language will do.
+    await dialog.getByRole("textbox", { name: "输入“动态”以确认" }).fill("Feed");
+    await dialog.getByRole("button", { name: "删除", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(family.getByText("动态已删除。")).toBeFocused();
+    await family.getByRole("button", { name: "恢复Family的Ledger" }).click();
+    await page.getByRole("dialog", { name: "恢复Family的Ledger？" }).getByRole("button", { name: "恢复", exact: true }).click();
+    await expect(family.getByText("Ledger已恢复。")).toBeFocused();
+    expect(api.appChanges).toEqual([
+      `DELETE /api/spaces/${FAMILY_SPACE}/apps/m-feed/data {"confirm":"Feed"}`,
+      `PUT /api/spaces/${FAMILY_SPACE}/apps/m-ledger {"memberAccess":"none"}`,
+    ]);
+  });
+
   test.describe("on a phone", () => {
     test.use(PHONE);
 
@@ -226,6 +381,43 @@ test.describe("the Apps page", () => {
       await expect(dialog).toBeHidden();
       await expect(spaceCard(page, "Family").getByText("Feed was moved here.")).toBeVisible();
       expect(api.appChanges).toEqual([`POST /api/spaces/${PERSONAL_SPACE}/apps/m-feed/move {"toSpaceId":"${FAMILY_SPACE}","memberAccess":"edit"}`]);
+    });
+
+    test("the removed apps and the dialogs that bring one back or delete it for good fit the screen, in both languages", async ({ page, api }) => {
+      for (const locale of ["en", "zh"] as const) {
+        familyWithRemovedApps(api, locale);
+        // A long name, made in the chat, which must wrap rather than push past the edge.
+        api.groups[FAMILY_SPACE]!.apps.push({
+          id: "m-long",
+          hasCode: true,
+          removedAt: "2026-11-02T08:00:00.000Z",
+          rowCount: 2048,
+          memberAccess: "none",
+          members: {},
+          assistant: true,
+          name: { en: "Spending of the whole family, by month and by person", zh: "全家每月按人记录的开支明细与预算对照表" },
+          icon: "wallet",
+          color: "teal",
+        });
+        await page.goto("/apps");
+        const family = spaceCard(page, "Family");
+        const rows = family.getByRole("list", { name: locale === "zh" ? "已移除的应用" : "Removed apps" }).getByRole("listitem");
+        await expect(rows).toHaveCount(3);
+        await expectNothingPastTheEdge(page);
+        for (const button of await rows.getByRole("button").all()) expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+
+        for (const opens of [locale === "zh" ? /^恢复.*开支/ : /^Bring back Spending/, locale === "zh" ? /^永久删除.*开支/ : /^Delete permanently: Spending/]) {
+          await family.getByRole("button", { name: opens }).tap();
+          const dialog = page.getByRole("dialog");
+          await dialog.evaluate((element) => Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished)));
+          const box = await dialog.boundingBox();
+          expect(box?.x).toBeGreaterThanOrEqual(0);
+          expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(390);
+          await dialog.getByRole("button", { name: locale === "zh" ? "取消" : "Cancel" }).tap();
+          await expect(dialog).toBeHidden();
+        }
+      }
+      expect(api.appChanges).toEqual([]);
     });
 
     test("fits the screen, with every control large enough to tap", async ({ page, api }) => {

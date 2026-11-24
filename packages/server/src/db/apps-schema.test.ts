@@ -330,7 +330,7 @@ describe("migration 4 on a database that migration 3 made", () => {
     // The release with the assistant starts on the same file.
     db = openDatabase(path);
     try {
-      expect(migrate(db).map((migration) => migration.id)).toEqual([4, 5, 6, 7, 8]);
+      expect(migrate(db).map((migration) => migration.id)).toEqual([4, 5, 6, 7, 8, 9]);
       expect(all(db, "SELECT id, name FROM migrations ORDER BY id")).toEqual(
         MIGRATIONS.map(({ id, name }) => ({ id, name })),
       );
@@ -829,6 +829,16 @@ describe("rows that belong to an app in a space", () => {
   });
 });
 
+/**
+ * Tables with a space and an app that do not belong to the app: they belong
+ * to a person's conversation, name the app by ID only, and outlive it.
+ * `chat_confirmations` (migration 9) keeps the chat's requests to delete
+ * rows; it stays in the space where it was asked when the app moves, and
+ * its waiting requests expire there instead (`expireRequestsFor`, which
+ * moveApp and deleteAppData call), so it has no key to space_apps.
+ */
+const ABOUT_CONVERSATIONS = ["chat_confirmations"];
+
 describe("every table that belongs to an app in a space", () => {
   it("names both the space and the app, and follows the app when it moves", () => {
     const db = openDatabase(":memory:");
@@ -840,7 +850,13 @@ describe("every table that belongs to an app in a space", () => {
       const columns = (db.pragma(`table_info(${table})`) as { name: string }[]).map((c) => c.name);
       return table !== "space_apps" && columns.includes("space_id") && columns.includes("app_id");
     });
-    expect(scoped.sort()).toEqual(["app_access", "app_jobs", "app_prefs", "app_rows", "app_settings", "made_apps"]);
+    expect(scoped.sort()).toEqual(["app_access", "app_jobs", "app_prefs", "app_rows", "app_settings", "chat_confirmations", "made_apps"]);
+    for (const table of ABOUT_CONVERSATIONS) {
+      const keys = db.pragma(`foreign_key_list(${table})`) as { table: string }[];
+      expect(keys.map((key) => key.table), `${table} belongs to a conversation, not to the app`).not.toContain("space_apps");
+      expect(keys.map((key) => key.table), `${table} goes with its conversation`).toContain("chats");
+    }
+    scoped.splice(0, scoped.length, ...scoped.filter((table) => !ABOUT_CONVERSATIONS.includes(table)));
 
     for (const table of scoped) {
       const keys = db.pragma(`foreign_key_list(${table})`) as {
@@ -877,10 +893,12 @@ describe("every table that belongs to an app in a space", () => {
       const columns = (db.pragma(`table_info(${table})`) as { name: string }[]).map((c) => c.name);
       return columns.includes("space_id") && columns.includes("app_id") && columns.includes("user_id");
     });
-    expect(aboutPeople.sort(), "the tables moveApp clears of people who are not in the new space").toEqual([
+    expect(aboutPeople.filter((table) => !ABOUT_CONVERSATIONS.includes(table)).sort(), "the tables moveApp clears of people who are not in the new space").toEqual([
       "app_access",
       "app_prefs",
       "app_settings",
     ]);
+    // A conversation's requests stay where they were asked, and do not move with the app.
+    expect(aboutPeople.filter((table) => ABOUT_CONVERSATIONS.includes(table))).toEqual(ABOUT_CONVERSATIONS);
   });
 });

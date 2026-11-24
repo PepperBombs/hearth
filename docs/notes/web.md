@@ -47,6 +47,8 @@ Notes for whoever changes this part, people and agents alike. They are read when
   (`useSpaceApps`, also for a personal space) and adds nothing until it has
   it, so that a built-in app the space removed is shown as coming back with
   its data ("Bring back"). A member who may add apps reads no owners' list.
+- The Apps page draws a space's removed apps for its owners ("Removed apps", `RemovedApps` in `pages/apps.tsx`) from the owners' list, which gives their names, icons, colours and entry counts, since the session lists no removed app. "Bring back" is the `PUT` of the app (`bringBackApp`), "Delete permanently" the `DELETE .../data` with the typed name (`deleteAppForGood`); an app in use offers the same dialog from its Remove dialog. The delete dialog deletes nothing until the owners' list has said how many entries go, and compares the typed name, trimmed and case for case, with the name in either language, as the server does.
+- The kit's `Button` has a `danger` variant (red, for what cannot be undone: deleting an app for good, the chat's Delete in a request to delete); `packages/web/tests/contrast.test.ts` holds its colours in light and dark.
 - The settings dialog takes the app as the session lists it and draws its
   form from `app.settings`, read as the SDK's `Setting`s
   (`declaredSettings` in `src/apps/settings.ts`). It sends only the values

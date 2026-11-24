@@ -24,6 +24,7 @@ import type { Db } from "../db/database";
 import { membershipOf } from "../db/people";
 import { listInvitations, listMemberDetails } from "../groups/members";
 import { notFound, Refusal } from "../http/errors";
+import { expireRequestsFor } from "../model/confirmations";
 import type { Registry } from "./registry";
 import { countRows, deleteAllData, deleteOwnSettingsOfOthers } from "./store";
 
@@ -302,10 +303,11 @@ export function listSpaceApps(db: Db, registry: Registry, request: { userId: str
       const exceptions = db
         .prepare("SELECT app_id AS appId, user_id AS userId, level FROM app_access WHERE space_id = ? ORDER BY user_id")
         .all(spaceId) as { appId: string; userId: string; level: MemberAccess }[];
-      const apps = installs.map(
-        (install): InstalledApp => ({
+      const apps = installs.map((install): InstalledApp => {
+        const held = registry.get(install.id);
+        return {
           id: install.id,
-          hasCode: registry.has(install.id),
+          hasCode: held !== undefined,
           removedAt: install.removedAt,
           rowCount: countRows(db, spaceId, install.id),
           memberAccess: install.memberAccess,
@@ -313,9 +315,17 @@ export function listSpaceApps(db: Db, registry: Registry, request: { userId: str
             exceptions.filter((exception) => exception.appId === install.id).map((exception) => [exception.userId, exception.level]),
           ),
           assistant: install.assistant === 1,
-          ...((template) => (template ? { template } : {}))(registry.get(install.id)?.template),
-        }),
-      );
+          ...(held?.template ? { template: held.template } : {}),
+          // What the Apps page draws a removed app with, which the session no longer lists.
+          ...(held
+            ? {
+                name: { en: held.manifest.name.en, zh: held.manifest.name.zh },
+                icon: held.manifest.icon,
+                color: held.manifest.color,
+              }
+            : {}),
+        };
+      });
       return { apps, members: listMemberDetails(db, spaceId), invitations: listInvitations(db, spaceId) };
     })
     .deferred();
@@ -448,6 +458,8 @@ export function moveApp(
       );
     }
 
+    // The chat's requests to delete its rows were asked in this space, and cannot be carried out here any more.
+    expireRequestsFor(db, { spaceId, appId, at: new Date().toISOString() });
     db.prepare("DELETE FROM app_access WHERE space_id = ? AND app_id = ?").run(spaceId, appId);
     db.prepare(
       `DELETE FROM app_prefs
@@ -473,16 +485,20 @@ export function moveApp(
 }
 
 /**
- * Deletes everything an app has in a space, for good: its rows, its
- * settings, everyone's access, switches and pins, and the entry itself.
+ * Deletes an app from a space for good, with everything it has there: its
+ * rows, its settings, everyone's access, switches and pins, the entry
+ * itself, and for an app made in Hearth the app and its versions, which go
+ * with the entry. The chat's requests to delete rows of it that are still
+ * waiting expire. Nothing of it is left to bring back.
  *
- * Owners only, and only for an app nobody can be using: one that was
- * removed from the space, or that the server no longer holds an app for.
- * `confirm` is the app's ID as the person typed it.
+ * Owners only. For an app the server holds, in use or removed, `confirm` is
+ * its name as the person typed it, in either of its languages, spaces
+ * around it aside. For an install the server holds no app for, which has no
+ * name the person could have seen, it is the app's ID.
  *
  * Throws a Refusal: 404 when the person is not in the space or the space
  * never had the app, 403 when they are not an owner, 400 when `confirm` is
- * not the app's ID, 409 when the app is still in use.
+ * not what it must be.
  */
 export function deleteAppData(
   db: Db,
@@ -496,19 +512,24 @@ export function deleteAppData(
       if (!member) throw notFound();
       // The same answer for every app ID, so a member learns nothing about removed apps.
       if (member.role !== "owner") {
-        throw new Refusal(403, "forbidden", "Deleting an app's data is for the space's owners.");
-      }
-      if (request.confirm !== appId) {
-        throw new Refusal(400, "invalid_request", "confirm: Must be the ID of the app whose data is to be deleted.");
+        throw new Refusal(403, "forbidden", "Deleting an app is for the space's owners.");
       }
       const install = installOf(db, spaceId, appId);
       if (!install) throw notFound();
-      if (install.removedAt === null && registry.has(appId)) {
-        throw new Refusal(409, "conflict", "This app is still in the space. Remove it first, then delete its data.");
+      const held = registry.get(appId);
+      if (held) {
+        const typed = request.confirm.trim();
+        const names = [held.manifest.name.en, held.manifest.name.zh].map((name) => name.trim());
+        if (typed === "" || !names.includes(typed)) {
+          throw new Refusal(400, "invalid_request", "confirm: Must be the name of the app to be deleted, as it is shown.");
+        }
+      } else if (request.confirm !== appId) {
+        throw new Refusal(400, "invalid_request", "confirm: Must be the ID of the app whose data is to be deleted.");
       }
+      expireRequestsFor(db, { spaceId, appId, at: new Date().toISOString() });
       // Rows and settings first: the database refuses to drop the entry while they exist.
       const deleted = deleteAllData(db, spaceId, appId);
-      // Access, switches and pins go with the entry.
+      // Access, switches, pins, and a made app with its versions go with the entry.
       db.prepare("DELETE FROM space_apps WHERE space_id = ? AND app_id = ?").run(spaceId, appId);
       return deleted;
     })

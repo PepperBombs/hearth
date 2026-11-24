@@ -136,7 +136,18 @@ Notes for whoever changes this part, people and agents alike. They are read when
 - `PUT /api/spaces/:spaceId/apps/:appId` only brings back a removed app:
   a made app is added to its space when it is made (`createMadeApp`, from
   the chat or from the catalog's route) and to no other, so for any other
-  space the answer is 404.
+  space the answer is 404. The owners' list (`GET .../apps`) gives each app
+  the server holds its name in both languages, icon and colour, removed or
+  not, since the session no longer lists a removed one and the Apps page
+  draws it from there.
+- `DELETE /api/spaces/:spaceId/apps/:appId/data` deletes an app for good,
+  in use or removed, owners only, and wants `confirm` to be its name in
+  either language, trimmed (its ID for an install the server holds no app
+  for), else 400. In one immediate transaction (`deleteAppData` in
+  `installs.ts`) it expires the app's waiting requests to delete
+  (`expireRequestsFor`), deletes its rows and settings through `store.ts`,
+  then its `space_apps` entry, whose cascades take access, prefs, switches,
+  `made_apps` and its versions.
 - A space may have several owners and must keep one. Triggers on
   `space_members` enforce it: insert the owner of a new space before anyone
   else, and expect `SQLITE_CONSTRAINT_TRIGGER` when the last owner is removed
@@ -148,10 +159,22 @@ Notes for whoever changes this part, people and agents alike. They are read when
   removed, and nothing else deletes them but the person
   (`src/db/chats-schema.test.ts`). Their SQL is in `src/model/chats.ts`
   alone.
-- Every table with `space_id` and `app_id` columns needs the composite
-  foreign key to `space_apps` with `ON UPDATE CASCADE` (a test in
-  `packages/server/src/db/apps-schema.test.ts` fails without it): moving an
-  app is one `UPDATE` of `space_apps.space_id`. `app_rows` and `app_settings`
+- `chat_confirmations` (migration 9, the model's requests to delete rows,
+  waiting for the person) refers to its conversation, `chats`, by
+  conversation, space and person with `ON DELETE CASCADE`, and on purpose
+  not to `space_apps`: a request outlives its app (it expires) and stays in
+  the space it was asked in when the app moves (moving expires it too).
+  Its SQL is in `src/model/confirmations.ts` alone, every statement scoped
+  by space and person but `expireRequestsFor`, which ends everyone's
+  requests about an app that is deleted or moved. Its status is read
+  afresh into the conversation whenever it is read; a request past 24
+  hours shows as expired at once but is written so only when someone acts
+  on it.
+- Every table with `space_id` and `app_id` columns but `chat_confirmations`
+  needs the composite foreign key to `space_apps` with `ON UPDATE CASCADE`
+  (a test in `packages/server/src/db/apps-schema.test.ts` fails without it,
+  and names that one exception): moving an app is one `UPDATE` of
+  `space_apps.space_id`. `app_rows` and `app_settings`
   are `ON DELETE RESTRICT` on purpose; `app_jobs` is `ON DELETE CASCADE`,
   since a job's status is not data and goes with the app's entry, and so is
   `made_apps`, since deleting the install deletes the app.

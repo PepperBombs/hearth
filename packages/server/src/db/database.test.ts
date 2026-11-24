@@ -58,6 +58,7 @@ describe("migrate", () => {
       "app_prefs",
       "app_rows",
       "app_settings",
+      "chat_confirmations",
       "chat_entries",
       "chats",
       "invitations",

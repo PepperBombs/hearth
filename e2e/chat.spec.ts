@@ -2,13 +2,15 @@
  * How the chat page is laid out, in a real browser, where jsdom cannot
  * measure: the list's rows, the notice above the box when it is off, the
  * fade where the conversation meets the box, reaching the conversation from
- * the keyboard and the box fitting its text at any width. The server is the
- * stand-in of e2e/fixtures.ts, whose made-up model answers "Noted: " and
- * the message; nothing reaches a real model.
+ * the keyboard and the box fitting its text at any width. And the card of a
+ * request of the model's to delete rows: answered with Delete or Cancel,
+ * what it says after, a refusal, and that it fits a phone. The server is
+ * the stand-in of e2e/fixtures.ts, whose made-up model answers "Noted: "
+ * and the message; nothing reaches a real model.
  */
 import type { Page } from "@playwright/test";
-import type { Session } from "../packages/shared/src/index.ts";
-import { PERSONAL_SPACE, PHONE, expect, expectNothingPastTheEdge, sessionWithApps, test, type FakeApi } from "./fixtures.ts";
+import type { ChatEntry, Session } from "../packages/shared/src/index.ts";
+import { PERSONAL_SPACE, PHONE, expect, expectNothingPastTheEdge, sandbox, sessionWithApps, test, type FakeApi } from "./fixtures.ts";
 
 /** A session whose spaces all let the person's model work, or none of them. */
 function sessionWith(assistant: "none" | "edit", locale: "en" | "zh" = "en"): Session {
@@ -51,6 +53,47 @@ const MODEL = { protocol: "openai" as const, baseUrl: "https://api.example.com/v
 /** The conversation, which scrolls by itself above the box. */
 const messages = (page: Page) => page.getByRole("region", { name: "Messages" });
 const listOn = (page: Page) => page.getByRole("navigation", { name: "Conversations" });
+
+/**
+ * A conversation in the person's space in which their model made the Notes
+ * app (its card drawn in the conversation) and then asked twice to delete
+ * rows of it: seven entries, of which five are shown, then one. Both wait
+ * for an answer unless `status` says otherwise.
+ */
+function deleteRequests(api: FakeApi, options: { status?: "pending" | "expired"; preview?: string[]; appName?: string } = {}): void {
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const appName = options.appName ?? "Notes";
+  const asked = (confirmationId: string, count: number, preview: string[]): ChatEntry => ({
+    kind: "action",
+    action: "delete_requested",
+    appId: "notes",
+    appName,
+    confirmationId,
+    collection: "notes",
+    count,
+    preview,
+    status: options.status ?? "pending",
+    deleted: 0,
+  });
+  api.chats = {
+    [PERSONAL_SPACE]: [
+      {
+        chat: { id: "chat-tidy", title: "Tidy up my notes", createdAt: at, updatedAt: at },
+        entries: [
+          { kind: "user", text: "Make me somewhere to keep notes" },
+          { kind: "action", action: "app_created", appId: "notes", appName },
+          { kind: "user", text: "Tidy up my notes: delete last week's" },
+          asked("confirm-week", 7, options.preview ?? ["Call the plumber", "Buy stamps", "Water the ferns", "Book the dentist", "Return the library books"]),
+          { kind: "model", text: "I asked you before deleting them." },
+          { kind: "user", text: "And the one about lunch" },
+          asked("confirm-lunch", 1, ["Lunch with Kim · 12.50"]),
+        ],
+      },
+    ],
+  };
+}
+
+const DECIDE = `/api/spaces/${PERSONAL_SPACE}/chats/chat-tidy/confirmations`;
 
 test.describe("the chat on a desktop", () => {
   test("a row of the list gives its title the whole row, and its delete button takes the time's place where the pointer is", async ({ page, api }) => {
@@ -185,6 +228,78 @@ test.describe("the chat on a desktop", () => {
   });
 });
 
+test.describe("a request of the model's to delete", () => {
+  test("is a card: what would go, Delete and Cancel; the answer stays after a reload, and the app's page reads its rows again", async ({ page, api }) => {
+    api.setSession(sessionWith("edit"));
+    api.model = MODEL;
+    deleteRequests(api);
+    await page.goto(`/chat?space=${PERSONAL_SPACE}&chat=chat-tidy`);
+    const week = page.getByRole("group", { name: "Delete 7 entries from “Notes”?" });
+    const lunch = page.getByRole("group", { name: "Delete 1 entry from “Notes”?" });
+    await expect(week.getByRole("listitem")).toHaveText(["Call the plumber", "Buy stamps", "Water the ferns", "Book the dentist", "Return the library books"]);
+    await expect(week.getByText("and 2 more")).toBeVisible();
+    await expect(lunch.getByRole("listitem")).toHaveText(["Lunch with Kim · 12.50"]);
+    // The app the model made is drawn in the conversation; it has heard of no change yet.
+    const notes = sandbox(page, "notes").locator("body");
+    await expect(notes).toHaveAttribute("data-changes", "0");
+
+    // Delete: the rows go, the card says so in place of its buttons, and the app's page reads its rows again.
+    await week.getByRole("button", { name: "Delete" }).click();
+    await expect(week.getByRole("status")).toHaveText("Deleted 7 entries.");
+    await expect(week.getByRole("button")).toHaveCount(0);
+    await expect(notes).toHaveAttribute("data-changes", "1");
+
+    // Cancel: nothing goes, and nothing needs reading again.
+    await lunch.getByRole("button", { name: "Cancel" }).click();
+    await expect(lunch.getByRole("status")).toHaveText("Kept: nothing was deleted.");
+    await expect(lunch.getByRole("button")).toHaveCount(0);
+    expect(api.confirmationRequests).toEqual([`${DECIDE}/confirm-week {"decision":"confirm"}`, `${DECIDE}/confirm-lunch {"decision":"decline"}`]);
+    await expect(notes).toHaveAttribute("data-changes", "1");
+
+    // Read back from the server, both cards say what became of them, here or on any other device.
+    await page.reload();
+    await expect(week.getByRole("status")).toHaveText("Deleted 7 entries.");
+    await expect(lunch.getByRole("status")).toHaveText("Kept: nothing was deleted.");
+    await expect(page.getByRole("main").getByRole("button", { name: /^(Delete|Cancel)$/ })).toHaveCount(0);
+  });
+
+  test("a refusal says why and leaves the request waiting; one answered elsewhere shows that answer", async ({ page, api }) => {
+    api.setSession(sessionWith("edit"));
+    api.model = MODEL;
+    deleteRequests(api);
+    await page.goto(`/chat?space=${PERSONAL_SPACE}&chat=chat-tidy`);
+    const week = page.getByRole("group", { name: "Delete 7 entries from “Notes”?" });
+
+    // The space's owners switched the assistant to reading only since: nothing goes, and the buttons stay.
+    api.confirmationFailure = { status: 403, code: "forbidden", message: "Sample failure" };
+    await week.getByRole("button", { name: "Delete" }).click();
+    await expect(week.getByRole("alert")).toHaveText("Nothing was deleted: you, or your model, may no longer change this app here.");
+    await expect(week.getByRole("button", { name: "Delete" })).toBeEnabled();
+    await expect(week.getByRole("button", { name: "Cancel" })).toBeEnabled();
+
+    // Meanwhile the person cancelled it on their phone: the server says it was answered, and the card shows how.
+    api.confirmationFailure = null;
+    const entry = api.chats[PERSONAL_SPACE]![0]!.entries.find((candidate) => candidate.kind === "action" && candidate.confirmationId === "confirm-week");
+    Object.assign(entry!, { status: "declined", deleted: 0 });
+    await week.getByRole("button", { name: "Delete" }).click();
+    await expect(week.getByRole("status")).toHaveText("Kept: nothing was deleted.");
+    await expect(week.getByRole("button")).toHaveCount(0);
+    await expect(week.getByRole("alert")).toHaveCount(0);
+  });
+
+  test("an expired request says so, with nothing to answer", async ({ page, api }) => {
+    api.setSession(sessionWith("edit"));
+    api.model = MODEL;
+    deleteRequests(api, { status: "expired" });
+    await page.goto(`/chat?space=${PERSONAL_SPACE}&chat=chat-tidy`);
+    for (const name of ["Delete 7 entries from “Notes”?", "Delete 1 entry from “Notes”?"]) {
+      const card = page.getByRole("group", { name });
+      await expect(card.getByRole("status")).toHaveText("This request expired. Nothing was deleted.");
+      await expect(card.getByRole("button")).toHaveCount(0);
+    }
+  });
+});
+
 test.describe("the chat on a phone", () => {
   test.use(PHONE);
 
@@ -216,5 +331,33 @@ test.describe("the chat on a phone", () => {
     await expect(del).toHaveCSS("opacity", "1");
     await expect(list.getByRole("listitem").filter({ hasText: short }).locator("time")).toBeVisible();
     await expectNothingPastTheEdge(page);
+  });
+
+  test("a request to delete fits the screen, with long words in it and buttons large enough to tap, in both languages", async ({ page, api }) => {
+    for (const locale of ["en", "zh"] as const) {
+      api.setSession(sessionWith("edit", locale));
+      api.model = MODEL;
+      deleteRequests(api, {
+        appName: locale === "zh" ? "全家每月按人记录的开支明细与预算对照表" : "Spending of the whole family by month and by person",
+        preview: [
+          "https://example.com/a/very/long/address/that/someone/pasted/into/a/note/without/any/spaces/at/all",
+          "Supercalifragilisticexpialidocious-and-then-some-more-letters-without-a-break",
+          "午饭 · 12.50",
+          "A note of ordinary length",
+          "Another one",
+        ],
+      });
+      await page.goto(`/chat?space=${PERSONAL_SPACE}&chat=chat-tidy`);
+      const week = page.getByRole("group", { name: locale === "zh" ? /删除 7 条数据吗？$/ : /^Delete 7 entries from/ });
+      await week.scrollIntoViewIfNeeded();
+      await expect(week.getByText(locale === "zh" ? "还有 2 条" : "and 2 more")).toBeVisible();
+      await expectNothingPastTheEdge(page);
+      for (const name of locale === "zh" ? ["删除", "取消"] : ["Delete", "Cancel"]) {
+        expect((await week.getByRole("button", { name }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
+      }
+      await week.getByRole("button", { name: locale === "zh" ? "删除" : "Delete" }).tap();
+      await expect(week.getByRole("status")).toHaveText(locale === "zh" ? "已删除 7 条数据。" : "Deleted 7 entries.");
+      await expectNothingPastTheEdge(page);
+    }
   });
 });

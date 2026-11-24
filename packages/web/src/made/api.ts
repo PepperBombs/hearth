@@ -9,6 +9,7 @@ import {
   chatEventSchema,
   chatListSchema,
   chatSchema,
+  confirmationResultSchema,
   madeRestoreSchema,
   modelSettingsSchema,
   type CatalogApp,
@@ -17,6 +18,8 @@ import {
   type MemberAccess,
   type ChatRequest,
   type ChatSummary,
+  type ConfirmationDecision,
+  type ConfirmationResult,
   type MadeRestore,
   type MadeRow,
   type ModelSettings,
@@ -71,6 +74,27 @@ export async function readChat(spaceId: string, chatId: string, signal?: AbortSi
 /** DELETE /api/spaces/:spaceId/chats/:chatId. What the model made in apps stays. */
 export async function deleteChat(spaceId: string, chatId: string): Promise<void> {
   await request(`${chatsPath(spaceId)}/${encodeURIComponent(chatId)}`, { method: "DELETE" });
+}
+
+/**
+ * POST .../chats/:chatId/confirmations/:id: the person's answer to a
+ * request of their model's to delete rows. Resolves with where it stands
+ * now; a refusal (403, 404, 409) rejects, and leaves the request as it was.
+ */
+export async function answerDeleteRequest(
+  spaceId: string,
+  chatId: string,
+  confirmationId: string,
+  decision: ConfirmationDecision["decision"],
+): Promise<ConfirmationResult> {
+  const response = await request(`${chatsPath(spaceId)}/${encodeURIComponent(chatId)}/confirmations/${encodeURIComponent(confirmationId)}`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ decision } satisfies ConfirmationDecision),
+  });
+  const parsed = confirmationResultSchema.safeParse(await response.json().catch(() => undefined));
+  if (!parsed.success) throw new ApiRequestError("invalid_response", response.status, "The answer did not match the expected shape.");
+  return parsed.data;
 }
 
 /**

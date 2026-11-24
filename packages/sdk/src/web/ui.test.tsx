@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { Chip, Dialog, Field, IconButton, Input, Segmented, Switch } from "./index";
+import { Button, Chip, Dialog, Field, IconButton, Input, Segmented, Switch } from "./index";
 
 describe("Switch", () => {
   it("announces its state and reports the opposite one when pressed", () => {
@@ -39,6 +39,16 @@ describe("Chip", () => {
   it("is a toggle button", () => {
     render(<Chip pressed>Rust</Chip>);
     expect(screen.getByRole("button", { name: "Rust", pressed: true })).toBeTruthy();
+  });
+});
+
+describe("Button", () => {
+  it("draws the danger look in the colour of what goes wrong, and is a plain button", () => {
+    render(<Button variant="danger">Delete</Button>);
+    const button = screen.getByRole("button", { name: "Delete" });
+    expect(button.getAttribute("type")).toBe("button");
+    expect(button.className.split(" ")).toEqual(expect.arrayContaining(["bg-down", "border-down", "text-on-accent"]));
+    expect(button.className).not.toContain("bg-accent");
   });
 });
 

@@ -1,8 +1,9 @@
 /**
- * Migration 8: the chat's history (docs/platform.md, "The chat"), tested
- * as SQL. It must apply on a copy of real data, where the deploy tries each
- * release first, and the rules below are the ones the database itself
- * keeps, whatever the code above it does.
+ * Migration 8, the chat's history (docs/platform.md, "The chat"), and
+ * migration 9, the chat's requests to delete rows, tested as SQL. Each must
+ * apply on a copy of real data, where the deploy tries each release first,
+ * and the rules below are the ones the database itself keeps, whatever the
+ * code above it does.
  */
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -92,8 +93,8 @@ describe("migration 8 on a database that migration 7 made", () => {
     // The release with the chat's history starts on the same file.
     db = openDatabase(path);
     try {
-      expect(migrate(db).map((migration) => migration.id)).toEqual([8]);
-      expect(all(db, "SELECT id, name FROM migrations ORDER BY id")).toEqual(MIGRATIONS.map(({ id, name }) => ({ id, name })));
+      expect(migrate(db, upTo(8)).map((migration) => migration.id)).toEqual([8]);
+      expect(all(db, "SELECT id, name FROM migrations ORDER BY id")).toEqual(upTo(8).map(({ id, name }) => ({ id, name })));
       for (const [table, rows] of Object.entries(before)) {
         expect(all(db, `SELECT * FROM ${table} ORDER BY rowid`), table).toEqual(rows);
       }
@@ -119,6 +120,138 @@ describe("migration 8 on a database that migration 7 made", () => {
     releaseBefore(upgraded);
     migrate(upgraded);
     expect(schema(upgraded)).toEqual(schema(fresh));
+  });
+});
+
+/** A request of the model's to delete rows, as src/model/confirmations.ts keeps one. */
+function addRequest(
+  db: Db,
+  id: string,
+  chat: { chatId: string; spaceId: string; userId: string },
+  options: { appId?: string; rowIds?: string; status?: string; deleted?: number | null } = {},
+): void {
+  db.prepare(
+    `INSERT INTO chat_confirmations (id, chat_id, space_id, user_id, app_id, collection, row_ids, status, deleted, created_at, decided_at)
+     VALUES (?, ?, ?, ?, ?, 'items', ?, ?, ?, ?, NULL)`,
+  ).run(
+    id,
+    chat.chatId,
+    chat.spaceId,
+    chat.userId,
+    options.appId ?? "m-list",
+    options.rowIds ?? '["row-1"]',
+    options.status ?? "pending",
+    options.deleted ?? null,
+    NOW,
+  );
+}
+
+describe("migration 9 on a database that migration 8 made", () => {
+  it("applies with conversations in place, leaves them as they were and starts with no request", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "hearth-migrate-")), "hearth.db");
+    let db = openDatabase(path);
+    expect(migrate(db, upTo(8)).map((migration) => migration.id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    releaseBefore(db);
+    addChat(db, "c-1", "family", "u-lin");
+    addEntry(db, "c-1", 1, "family", "u-lin");
+    addEntry(db, "c-1", 2, "family", "u-lin", "action", '{"action":"row_added","appId":"m-list","appName":"List"}');
+    const before = Object.fromEntries(tables(db).filter((table) => table !== "migrations").map((table) => [table, all(db, `SELECT * FROM ${table} ORDER BY rowid`)]));
+    db.close();
+
+    // The release that asks before deleting starts on the same file.
+    db = openDatabase(path);
+    try {
+      expect(migrate(db).map((migration) => migration.id)).toEqual([9]);
+      expect(all(db, "SELECT id, name FROM migrations ORDER BY id")).toEqual(MIGRATIONS.map(({ id, name }) => ({ id, name })));
+      for (const [table, rows] of Object.entries(before)) {
+        expect(all(db, `SELECT * FROM ${table} ORDER BY rowid`), table).toEqual(rows);
+      }
+      expect(count(db, "chat_confirmations")).toBe(0);
+      expect(all(db, "PRAGMA foreign_key_check")).toEqual([]);
+      expect(db.pragma("integrity_check", { simple: true })).toBe("ok");
+
+      // A conversation from before can hold a request at once.
+      addRequest(db, "r-1", { chatId: "c-1", spaceId: "family", userId: "u-lin" });
+      expect(count(db, "chat_confirmations")).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("gives the same schema as a new database", () => {
+    const fresh = openDatabase(":memory:");
+    migrate(fresh);
+    const upgraded = openDatabase(":memory:");
+    migrate(upgraded, upTo(8));
+    releaseBefore(upgraded);
+    addChat(upgraded, "c-1", "family", "u-lin");
+    migrate(upgraded);
+    expect(schema(upgraded)).toEqual(schema(fresh));
+  });
+});
+
+describe("chat_confirmations", () => {
+  function world() {
+    const db = openDatabase(":memory:");
+    migrate(db);
+    releaseBefore(db);
+    addChat(db, "c-sam", "family", "u-sam");
+    addChat(db, "c-lin", "family", "u-lin");
+    return db;
+  }
+  const sams = { chatId: "c-sam", spaceId: "family", userId: "u-sam" };
+
+  it("belong to a conversation, with its own space and person, and to nothing else", () => {
+    const db = world();
+    addRequest(db, "r-1", sams);
+    // Lin's conversation is not Sam's; Sam's conversation is not in his personal space; c-none is no conversation.
+    expect(() => addRequest(db, "r-2", { ...sams, userId: "u-lin" })).toThrow(/FOREIGN KEY/);
+    expect(() => addRequest(db, "r-3", { ...sams, spaceId: "s-sam" })).toThrow(/FOREIGN KEY/);
+    expect(() => addRequest(db, "r-4", { ...sams, chatId: "c-none" })).toThrow(/FOREIGN KEY/);
+    expect(() => addRequest(db, "r-1", sams)).toThrow(/UNIQUE|PRIMARY KEY/);
+  });
+
+  it("accept only the statuses, lists of rows and counts the contract names", () => {
+    const db = world();
+    for (const [index, status] of ["pending", "confirmed", "declined", "expired"].entries()) addRequest(db, `r-${index}`, sams, { status });
+    expect(() => addRequest(db, "r-x", sams, { status: "done" })).toThrow(/CHECK/);
+    expect(() => addRequest(db, "r-y", sams, { rowIds: "not json" })).toThrow(/CHECK/);
+    expect(() => addRequest(db, "r-z", sams, { status: "confirmed", deleted: -1 })).toThrow(/CHECK/);
+  });
+
+  it("go with their conversation, and when their person leaves the space, and nothing else goes", () => {
+    const db = world();
+    addRequest(db, "r-sam", sams);
+    addRequest(db, "r-lin", { chatId: "c-lin", spaceId: "family", userId: "u-lin" });
+    db.prepare("DELETE FROM space_members WHERE space_id = 'family' AND user_id = 'u-lin'").run();
+    expect(all(db, "SELECT id FROM chat_confirmations")).toEqual([{ id: "r-sam" }]);
+    db.prepare("DELETE FROM chats WHERE id = 'c-sam'").run();
+    expect(count(db, "chat_confirmations")).toBe(0);
+    expect(count(db, "app_rows")).toBe(1);
+  });
+
+  it("outlive the app they name, and stay where they were asked when it moves", () => {
+    const db = world();
+    addRequest(db, "r-sam", sams);
+    // Moving the app to Sam's own space changes nothing about the request.
+    db.prepare("DELETE FROM app_rows WHERE app_id = 'm-list'").run();
+    db.prepare("UPDATE space_apps SET space_id = 's-sam' WHERE space_id = 'family' AND app_id = 'm-list'").run();
+    expect(all(db, "SELECT space_id AS spaceId, app_id AS appId FROM chat_confirmations")).toEqual([{ spaceId: "family", appId: "m-list" }]);
+    // Deleting it leaves the request, which the code marks expired.
+    db.prepare("DELETE FROM space_apps WHERE app_id = 'm-list'").run();
+    expect(count(db, "made_apps")).toBe(0);
+    expect(count(db, "chat_confirmations")).toBe(1);
+  });
+
+  it("can be read for one conversation, and for one app in a space, through an index", () => {
+    const db = world();
+    const plan = (sql: string) => (all(db, `EXPLAIN QUERY PLAN ${sql}`) as { detail: string }[]).map((step) => step.detail).join("\n");
+    expect(plan("SELECT id FROM chat_confirmations WHERE chat_id = 'c-sam' AND space_id = 'family' AND user_id = 'u-sam'")).toMatch(
+      /USING INDEX chat_confirmations_of_chat/,
+    );
+    expect(plan("SELECT id FROM chat_confirmations WHERE space_id = 'family' AND app_id = 'm-list' AND status = 'pending'")).toMatch(
+      /USING INDEX chat_confirmations_of_app/,
+    );
   });
 });
 

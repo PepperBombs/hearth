@@ -16,15 +16,21 @@
  * to write in stays at the bottom of it, above the tab bar on a phone. The
  * model's replies are drawn from Markdown (`components/markdown.tsx`, which
  * says what a reply may not do); what the person wrote stays their text.
+ *
+ * The model deletes nothing by itself (owner's decision 7): it asks, and the
+ * conversation shows a card with what would go, which the person confirms
+ * or declines (`DeleteRequestCard`). The server keeps where each request
+ * stands, so the card shows the answer after a reload and on another device.
  */
-import type { AppSummary, ChatEntry, ChatEvent, ChatFailure, ChatSummary, Space } from "@hearth/shared";
-import { Button, Dialog, DialogBody, IconButton, Segmented, buttonClass, chipClass } from "@hearth/sdk/web";
+import type { AppSummary, ChatEntry, ChatEvent, ChatFailure, ChatSummary, ConfirmationResult, Space } from "@hearth/shared";
+import { Button, Dialog, DialogBody, IconButton, Row, Rows, Segmented, buttonClass, chipClass } from "@hearth/sdk/web";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppWindow, ArrowUp, CircleAlert, History, MessagesSquare, PencilLine, Plus, Sparkles, Square, SquarePen, Trash2, Undo2 } from "lucide-react";
 import {
   startTransition,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -40,17 +46,33 @@ import { Card } from "../components/card";
 import { Markdown } from "../components/markdown";
 import { Page } from "../components/shell/page";
 import { setAssistantLevel } from "../groups/api";
+import { spaceAppsKey } from "../groups/queries";
 import type { PlainMessageKey } from "../i18n";
 import { cx } from "../lib/cx";
 import { dayGroup, formatListTime, type DayGroup } from "../lib/date";
 import { MadeAppFrame, notifyMadeAppChanged } from "../made/frame";
-import { MODEL_QUERY_KEY, deleteChat, fetchModelSettings, listChats, readChat, restoreVersion, streamChat } from "../made/api";
+import {
+  MODEL_QUERY_KEY,
+  answerDeleteRequest,
+  deleteChat,
+  fetchModelSettings,
+  listChats,
+  readChat,
+  restoreVersion,
+  streamChat,
+} from "../made/api";
 import { ApiRequestError } from "../session/api";
 import { useI18n } from "../session/preferences";
 import { SESSION_QUERY_KEY, useSession } from "../session/session";
 
 /** What the page shows: the kept entries, and two of its own, which are never kept. */
 type Entry = ChatEntry | { kind: "failure"; failure: "network" | "stopped"; detail: string };
+
+/** A thing the model did, as an entry. */
+type ActionEntry = Extract<ChatEntry, { kind: "action" }>;
+
+/** The entry an action event is kept as, with all it says. */
+const actionEntry = ({ type: _type, ...fields }: Extract<ChatEvent, { type: "action" }>): ActionEntry => ({ kind: "action", ...fields });
 
 const FAILURES: Record<ChatFailure | "network" | "stopped", PlainMessageKey | "chat.failModel"> = {
   no_model: "chat.failNoModel",
@@ -71,7 +93,7 @@ const ACTIONS = {
   row_updated: "chat.actionRowUpdated",
 } as const;
 
-/** The small icon beside each thing the model did. */
+/** The small icon beside each thing the model did. (A request to delete is a card of its own.) */
 const ACTION_ICONS = {
   app_created: AppWindow,
   app_updated: PencilLine,
@@ -314,19 +336,11 @@ export function Chat() {
       } else if (event.type === "text") add({ kind: "model", text: event.text });
       else if (event.type === "error") add({ kind: "failure", failure: event.failure, detail: event.detail });
       else if (event.type === "action") {
-        add({
-          kind: "action",
-          action: event.action,
-          appId: event.appId,
-          appName: event.appName,
-          ...(event.version === undefined ? {} : { version: event.version }),
-          ...(event.previous === undefined ? {} : { previous: event.previous }),
-          ...(event.restored === undefined ? {} : { restored: event.restored }),
-        });
+        add(actionEntry(event));
         // A new app, or a new version of one, comes with the session, and its page is drawn afresh;
-        // a changed row goes to every page of its app on screen.
+        // a changed row goes to every page of its app on screen. A request to delete changes nothing yet.
         if (event.action === "row_added" || event.action === "row_updated") notifyMadeAppChanged(event.appId);
-        else void queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY });
+        else if (event.action !== "delete_requested") void queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY });
       }
     };
     try {
@@ -355,6 +369,17 @@ export function Chat() {
       void queryClient.invalidateQueries({ queryKey: chatsQueryKey(sentSpace) });
     }
   };
+
+  /** The person answered a request to delete, here: its card shows the answer for the rest of the visit. */
+  const settle = (confirmationId: string, result: ConfirmationResult) =>
+    setShown((now) => ({
+      ...now,
+      entries: now.entries.map((entry) =>
+        entry.kind === "action" && entry.confirmationId === confirmationId ? { ...entry, status: result.status, deleted: result.deleted } : entry,
+      ),
+    }));
+  /** What a card needs to answer a request: the open conversation, once it has its ID. */
+  const where = chatId === undefined ? undefined : { spaceId, chatId, onSettled: settle };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -524,7 +549,7 @@ export function Chat() {
               {heard > 0 ? (
                 <div className="flex flex-col gap-5">
                   {entries.slice(0, heard).map((entry, index) => (
-                    <EntryView key={index} entry={entry} />
+                    <EntryView key={index} entry={entry} where={where} />
                   ))}
                 </div>
               ) : null}
@@ -543,7 +568,7 @@ export function Chat() {
                   </div>
                 ) : null}
                 {entries.slice(heard).map((entry, index) => (
-                  <EntryView key={heard + index} entry={entry} />
+                  <EntryView key={heard + index} entry={entry} where={where} />
                 ))}
                 {running ? <Working /> : null}
               </div>
@@ -907,7 +932,10 @@ function AllowHere({ space, compact = false }: { space: Space; compact?: boolean
   );
 }
 
-function EntryView({ entry }: { entry: Entry }) {
+/** Where an entry is, for a card that answers a request: the conversation, and what to do with the answer. */
+type EntryPlace = { spaceId: string; chatId: string; onSettled: (confirmationId: string, result: ConfirmationResult) => void };
+
+function EntryView({ entry, where }: { entry: Entry; where: EntryPlace | undefined }) {
   const { t } = useI18n();
   const session = useSession();
   const app = useMemo(
@@ -931,6 +959,7 @@ function EntryView({ entry }: { entry: Entry }) {
         </div>
       );
     case "action": {
+      if (entry.action === "delete_requested") return <DeleteRequestCard entry={entry} where={where} />;
       const Icon = ACTION_ICONS[entry.action];
       return (
         <div className="flex flex-col gap-2">
@@ -971,6 +1000,136 @@ function EntryView({ entry }: { entry: Entry }) {
       );
     }
   }
+}
+
+/** Why an answer to a request to delete was not taken; the request still waits. */
+type AnswerProblem = "forbidden" | "conflict" | "gone" | "failed";
+
+const ANSWER_PROBLEMS: Record<AnswerProblem, PlainMessageKey> = {
+  forbidden: "chat.deleteRequestForbidden",
+  conflict: "chat.deleteRequestConflict",
+  gone: "chat.deleteRequestGone",
+  failed: "chat.deleteRequestFailed",
+};
+
+/**
+ * A request of the model's to delete rows of an app (owner's decision 7):
+ * what would go, a few words of each of the first rows, and Delete or
+ * Cancel. Nothing goes until the person presses Delete, and the server
+ * checks again then. Once answered, here or anywhere else, the card says
+ * what became of it, and the buttons are gone. After a delete, every page
+ * of the app on screen reads its rows again.
+ */
+function DeleteRequestCard({ entry, where }: { entry: ActionEntry; where: EntryPlace | undefined }) {
+  const { t } = useI18n();
+  const queryClient = useQueryClient();
+  const titleId = useId();
+  const card = useRef<HTMLElement>(null);
+  const outcome = useRef<HTMLParagraphElement>(null);
+  /** Whether focus was in the card when it was answered: it goes to what the card says now, as the buttons go. */
+  const hadFocus = useRef(false);
+  const [state, setState] = useState<"idle" | "sending" | AnswerProblem>("idle");
+  const preview = entry.preview ?? [];
+  const count = entry.count ?? preview.length;
+  const more = count - preview.length;
+  const status = entry.status ?? "pending";
+  const confirmationId = entry.confirmationId;
+  const title =
+    count === 1 ? t("chat.deleteRequestOne", { app: entry.appName }) : t("chat.deleteRequestMany", { count, app: entry.appName });
+
+  useEffect(() => {
+    if (status === "pending" || !hadFocus.current) return;
+    hadFocus.current = false;
+    outcome.current?.focus();
+  }, [status]);
+
+  const answer = async (decision: "confirm" | "decline") => {
+    if (!where || confirmationId === undefined || state === "sending") return;
+    hadFocus.current = card.current?.contains(document.activeElement) ?? false;
+    setState("sending");
+    try {
+      const result = await answerDeleteRequest(where.spaceId, where.chatId, confirmationId, decision);
+      setState("idle");
+      where.onSettled(confirmationId, result);
+      if (result.status === "confirmed") {
+        notifyMadeAppChanged(entry.appId);
+        void queryClient.invalidateQueries({ queryKey: spaceAppsKey(where.spaceId) });
+      }
+    } catch (error) {
+      const status = error instanceof ApiRequestError ? error.status : 0;
+      if (status === 409) {
+        // Answered already, perhaps on another device: the conversation, read again, says how.
+        const now = await readChat(where.spaceId, where.chatId).then(
+          (chat) => chat.entries.find((other) => other.kind === "action" && other.confirmationId === confirmationId),
+          () => undefined,
+        );
+        if (now?.kind === "action" && now.status !== undefined && now.status !== "pending") {
+          setState("idle");
+          where.onSettled(confirmationId, { status: now.status, deleted: now.deleted ?? 0 });
+          return;
+        }
+      }
+      setState(status === 403 ? "forbidden" : status === 409 ? "conflict" : status === 404 ? "gone" : "failed");
+    }
+  };
+
+  const deleted = entry.deleted ?? 0;
+  const said =
+    status === "confirmed"
+      ? deleted === 0
+        ? t("chat.deleteRequestDoneNone")
+        : deleted === 1
+          ? t("chat.deleteRequestDoneOne")
+          : t("chat.deleteRequestDoneMany", { count: deleted })
+      : status === "declined"
+        ? t("chat.deleteRequestDeclined")
+        : status === "expired"
+          ? t("chat.deleteRequestExpired")
+          : null;
+  const sending = state === "sending";
+  const problem = state === "idle" || state === "sending" ? null : state;
+
+  return (
+    <Card ref={card} role="group" aria-labelledby={titleId} aria-busy={sending || undefined} className="gap-3">
+      <p id={titleId} className="flex items-start gap-2 font-medium text-fg">
+        <span aria-hidden="true" className="inline-flex size-6 flex-none items-center justify-center rounded-full bg-surface-2 text-down">
+          <Trash2 size={14} />
+        </span>
+        <span className="min-w-0 self-center [overflow-wrap:anywhere]">{title}</span>
+      </p>
+      {preview.length > 0 ? (
+        // What the rows hold, as they are: data, never translated.
+        <Rows className="rounded-ctl border border-line px-3">
+          {preview.map((text, index) => (
+            <Row key={index} className="text-sm text-fg-2">
+              {text}
+            </Row>
+          ))}
+        </Rows>
+      ) : null}
+      {more > 0 ? <p className="text-xs text-fg-3">{t("chat.deleteRequestMore", { count: more })}</p> : null}
+      {said !== null ? (
+        <p ref={outcome} tabIndex={-1} role="status" className={cx("rounded-ctl text-sm outline-none", status === "confirmed" ? "text-fg-2" : "text-fg-3")}>
+          {said}
+        </p>
+      ) : (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {problem ? (
+            <p role="alert" className="mr-auto basis-full text-sm text-down">
+              {t(ANSWER_PROBLEMS[problem])}
+            </p>
+          ) : null}
+          <Button size="sm" disabled={sending || !where} onClick={() => void answer("decline")}>
+            {t("chat.deleteRequestCancel")}
+          </Button>
+          <Button size="sm" variant="danger" disabled={sending || !where} onClick={() => void answer("confirm")}>
+            <Trash2 size={14} aria-hidden="true" />
+            {t("chat.deleteRequestConfirm")}
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
 }
 
 /**

@@ -5,12 +5,25 @@
  * what the page says when the server turns a message down. The whole web
  * app is drawn against a stand-in for the server.
  */
-import type { AppSummary, ChatEntry, ChatEvent, ChatSummary, Session } from "@hearth/shared";
+import type { AppSummary, ChatEntry, ChatEvent, ChatSummary, ConfirmationResult, Session } from "@hearth/shared";
 import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../app";
+
+/** The apps whose pages on screen were told to read their rows again, in order. */
+const notified = vi.hoisted(() => [] as string[]);
+vi.mock("../made/frame", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../made/frame")>();
+  return {
+    ...real,
+    notifyMadeAppChanged: (appId: string, source: Window | null = null) => {
+      notified.push(appId);
+      real.notifyMadeAppChanged(appId, source);
+    },
+  };
+});
 
 const PERSONAL = "space-personal";
 const FAMILY = "space-family";
@@ -69,6 +82,14 @@ class FakeServer {
   requests: string[] = [];
   bodies: unknown[] = [];
   apps: AppSummary[] = [NOTES];
+  /**
+   * Requests of the model's to delete, by ID: where each stands, which the
+   * conversation is given with, and what answering it does now (`refuse`,
+   * or else the answer it gets).
+   */
+  confirmations: Record<string, ConfirmationResult & { refuse?: { status: number; code: string } }> = {};
+  /** Holds the answer to a request to delete back until it settles. */
+  answerGate: Promise<void> | null = null;
   /** Whether the person has saved a model with its key, and how far the assistant may go in their own space. */
   hasKey = true;
   personalAssistant: "none" | "edit" = "edit";
@@ -102,6 +123,18 @@ class FakeServer {
       if (decodeURIComponent(assistant[1]!) === PERSONAL) this.personalAssistant = level;
       return new Response(null, { status: 204 });
     }
+    const answer = /^\/api\/spaces\/([^/]+)\/chats\/([^/]+)\/confirmations\/([^/]+)$/.exec(path);
+    if (answer && method === "POST") {
+      this.bodies.push(JSON.parse(String(init.body)));
+      const asked = this.confirmations[decodeURIComponent(answer[3]!)];
+      if (!asked) return json({ error: { code: "not_found", message: "Not found." } }, 404);
+      if (asked.refuse) return json({ error: { code: asked.refuse.code, message: "Sample refusal." } }, asked.refuse.status);
+      if (asked.status !== "pending") return json({ error: { code: "conflict", message: "Answered already." } }, 409);
+      const { decision } = JSON.parse(String(init.body)) as { decision: "confirm" | "decline" };
+      const result: ConfirmationResult = decision === "confirm" ? { status: "confirmed", deleted: asked.deleted } : { status: "declined", deleted: 0 };
+      this.confirmations[decodeURIComponent(answer[3]!)] = result;
+      return json(result);
+    }
     const list = /^\/api\/spaces\/([^/]+)\/chats$/.exec(path);
     if (list) return json({ chats: this.chats[decodeURIComponent(list[1]!)] ?? [] });
     const one = /^\/api\/spaces\/([^/]+)\/chats\/([^/]+)$/.exec(path);
@@ -113,7 +146,12 @@ class FakeServer {
         this.chats[spaceId] = this.chats[spaceId]!.filter((candidate) => candidate !== chat);
         return new Response(null, { status: 204 });
       }
-      return json({ chat, entries: this.entries[chat.id] ?? [] });
+      // Where each request to delete stands is read afresh, as the server does.
+      const entries = (this.entries[chat.id] ?? []).map((entry) => {
+        const now = entry.kind === "action" && entry.confirmationId ? this.confirmations[entry.confirmationId] : undefined;
+        return now ? { ...entry, status: now.status, deleted: now.deleted } : entry;
+      });
+      return json({ chat, entries });
     }
     if (path === "/api/chat" && method === "POST") {
       const body = JSON.parse(String(init.body)) as { spaceId: string; chatId?: string; message: string };
@@ -162,6 +200,7 @@ function Address() {
 function start(server: FakeServer, at: string | string[] = "/chat") {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init: RequestInit = {}) => {
     if (server.gate && String(input) === "/api/chat") await server.gate;
+    if (server.answerGate && String(input).includes("/confirmations/")) await server.answerGate;
     return server.answer(String(input), init);
   });
   const entries = Array.isArray(at) ? at : [at];
@@ -186,6 +225,7 @@ const searchOf = () => Object.fromEntries(new URL(where, "http://localhost").sea
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  notified.length = 0;
 });
 
 describe("the list of conversations", () => {
@@ -909,5 +949,187 @@ describe("reading back while a turn runs", () => {
     act(() => end());
     expect(await screen.findByRole("button", { name: "Send" })).toBeTruthy();
     expect(top).toBe(100);
+  });
+});
+
+describe("a request of the model's to delete", () => {
+  const LEDGER_PREVIEW = ["Lunch · 12.50", "Coffee · 3.20", "Bus · 2.80", "Books · 30", "Cinema · 11"];
+  const requested = (fields: Partial<Extract<ChatEntry, { kind: "action" }>> = {}): Extract<ChatEntry, { kind: "action" }> => ({
+    kind: "action",
+    action: "delete_requested",
+    appId: "m-notes",
+    appName: "Ledger",
+    confirmationId: "q-1",
+    collection: "entries",
+    count: 7,
+    preview: LEDGER_PREVIEW,
+    ...fields,
+  });
+  /** The conversation "Plan the week", holding the request. */
+  function withRequest(server: FakeServer, entry = requested(), result: ConfirmationResult = { status: "pending", deleted: 7 }) {
+    server.entries["c-recent"] = [{ kind: "user", text: "delete last week" }, entry];
+    server.confirmations[entry.confirmationId!] = result;
+  }
+  const card = (name: string | RegExp) => screen.findByRole("group", { name });
+
+  it("shows what would go, a few words of each row, with Delete and Cancel, and deletes nothing by itself", async () => {
+    const server = new FakeServer();
+    server.events = [
+      { type: "chat", chatId: "c-new", title: "delete last week" },
+      { type: "action", action: "delete_requested", appId: "m-notes", appName: "Ledger", confirmationId: "q-1", collection: "entries", count: 7, preview: LEDGER_PREVIEW, status: "pending" },
+      { type: "text", text: "I asked you first." },
+      { type: "done" },
+    ];
+    server.confirmations["q-1"] = { status: "pending", deleted: 7 };
+    start(server);
+    await listed();
+    send("delete last week");
+
+    const box = await card("Delete 7 entries from “Ledger”?");
+    expect(within(box).getAllByRole("listitem").map((item) => item.textContent)).toEqual(LEDGER_PREVIEW);
+    expect(within(box).getByText("and 2 more")).toBeTruthy();
+    expect(within(box).getByRole("button", { name: "Delete" })).toBeTruthy();
+    expect(within(box).getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(await screen.findByText("I asked you first.")).toBeTruthy();
+    // Nothing was answered, nothing changed: no page was told to read again.
+    expect(server.requests.filter((request) => request.includes("/confirmations/"))).toEqual([]);
+    expect(notified).toEqual([]);
+  });
+
+  it("deletes once the person confirms: the buttons wait while it is sent, then the card says how many went", async () => {
+    const server = new FakeServer();
+    withRequest(server);
+    let open = () => {};
+    server.answerGate = new Promise((resolve) => (open = resolve));
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+
+    const box = await card("Delete 7 entries from “Ledger”?");
+    const remove = within(box).getByRole("button", { name: "Delete" }) as HTMLButtonElement;
+    remove.focus();
+    fireEvent.click(remove);
+    await waitFor(() => expect(remove.disabled).toBe(true));
+    expect((within(box).getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(box.getAttribute("aria-busy")).toBe("true");
+    open();
+
+    const said = await within(box).findByRole("status");
+    expect(said.textContent).toBe("Deleted 7 entries.");
+    expect(within(box).queryByRole("button")).toBeNull();
+    // The buttons went: focus goes to what the card says now.
+    await waitFor(() => expect(document.activeElement).toBe(said));
+    expect(server.requests).toContain(`POST /api/spaces/${PERSONAL}/chats/c-recent/confirmations/q-1`);
+    expect(server.bodies.at(-1)).toEqual({ decision: "confirm" });
+    // The app's pages on screen read their rows again.
+    expect(notified).toEqual(["m-notes"]);
+  });
+
+  it("keeps everything when the person cancels", async () => {
+    const server = new FakeServer();
+    withRequest(server, requested({ count: 1, preview: ["Lunch · 12.50"] }), { status: "pending", deleted: 1 });
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+
+    const box = await card("Delete 1 entry from “Ledger”?");
+    expect(within(box).queryByText(/more/)).toBeNull();
+    fireEvent.click(within(box).getByRole("button", { name: "Cancel" }));
+    expect((await within(box).findByRole("status")).textContent).toBe("Kept: nothing was deleted.");
+    expect(within(box).queryByRole("button")).toBeNull();
+    expect(server.bodies.at(-1)).toEqual({ decision: "decline" });
+    expect(notified).toEqual([]);
+  });
+
+  it("shows a request kept from before as it stands now, after a reload or on another device", async () => {
+    const server = new FakeServer();
+    server.entries["c-recent"] = [
+      requested({ confirmationId: "q-done", count: 3 }),
+      requested({ confirmationId: "q-one", count: 1, preview: ["Lunch"] }),
+      requested({ confirmationId: "q-gone", count: 2 }),
+      requested({ confirmationId: "q-no", count: 2 }),
+      requested({ confirmationId: "q-old", count: 2 }),
+      requested({ confirmationId: "q-wait", count: 2 }),
+    ];
+    server.confirmations = {
+      "q-done": { status: "confirmed", deleted: 3 },
+      "q-one": { status: "confirmed", deleted: 1 },
+      "q-gone": { status: "confirmed", deleted: 0 },
+      "q-no": { status: "declined", deleted: 0 },
+      "q-old": { status: "expired", deleted: 0 },
+      "q-wait": { status: "pending", deleted: 2 },
+    };
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+
+    const cards = await screen.findAllByRole("group", { name: /^Delete \d+ entr(y|ies) from “Ledger”\?$/ });
+    expect(cards.map((one) => within(one).queryByRole("status")?.textContent ?? "buttons")).toEqual([
+      "Deleted 3 entries.",
+      "Deleted 1 entry.",
+      "Nothing was deleted: those entries were gone already.",
+      "Kept: nothing was deleted.",
+      "This request expired. Nothing was deleted.",
+      "buttons",
+    ]);
+    expect(cards.slice(0, 5).every((one) => within(one).queryByRole("button") === null)).toBe(true);
+    expect(within(cards[5]!).getByRole("button", { name: "Delete" })).toBeTruthy();
+  });
+
+  it("says the request expired when the server finds it too old as it is answered", async () => {
+    const server = new FakeServer();
+    withRequest(server);
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+    const box = await card("Delete 7 entries from “Ledger”?");
+    server.confirmations["q-1"] = { status: "pending", deleted: 0 };
+    // The stand-in answers as the server does for a request past its 24 hours.
+    server.answer = ((original) => (path: string, init: RequestInit) =>
+      path.includes("/confirmations/")
+        ? new Response(JSON.stringify({ status: "expired", deleted: 0 }), { status: 200, headers: { "Content-Type": "application/json" } })
+        : original(path, init))(server.answer.bind(server));
+    fireEvent.click(within(box).getByRole("button", { name: "Delete" }));
+    expect((await within(box).findByRole("status")).textContent).toBe("This request expired. Nothing was deleted.");
+    expect(notified).toEqual([]);
+  });
+
+  it("says why an answer was not taken, and keeps the buttons: access lost, the app changed, the request gone, no connection", async () => {
+    const server = new FakeServer();
+    withRequest(server);
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+    const box = await card("Delete 7 entries from “Ledger”?");
+    const tries: Array<[{ status: number; code: string }, string]> = [
+      [{ status: 403, code: "forbidden" }, "Nothing was deleted: you, or your model, may no longer change this app here."],
+      [{ status: 409, code: "conflict" }, "Nothing was deleted: the app has changed since. Ask your model again."],
+      [{ status: 404, code: "not_found" }, "This request is gone. Nothing was deleted."],
+      [{ status: 500, code: "internal" }, "Your answer could not be sent. Try again."],
+    ];
+    for (const [refuse, message] of tries) {
+      server.confirmations["q-1"] = { status: "pending", deleted: 7, refuse };
+      fireEvent.click(within(box).getByRole("button", { name: "Delete" }));
+      expect((await within(box).findByRole("alert")).textContent).toBe(message);
+      expect((within(box).getByRole("button", { name: "Delete" }) as HTMLButtonElement).disabled).toBe(false);
+    }
+    expect(within(box).queryByRole("status")).toBeNull();
+    expect(notified).toEqual([]);
+  });
+
+  it("shows the answer given elsewhere when the server says it was answered already", async () => {
+    const server = new FakeServer();
+    withRequest(server);
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+    const box = await card("Delete 7 entries from “Ledger”?");
+    // Meanwhile it was declined on another device.
+    server.confirmations["q-1"] = { status: "declined", deleted: 0 };
+    fireEvent.click(within(box).getByRole("button", { name: "Delete" }));
+    expect((await within(box).findByRole("status")).textContent).toBe("Kept: nothing was deleted.");
+    expect(within(box).queryByRole("alert")).toBeNull();
+    expect(within(box).queryByRole("button")).toBeNull();
+  });
+
+  it("speaks Chinese, the rows' own words left as they are", async () => {
+    const server = new FakeServer();
+    server.locale = "zh";
+    withRequest(server, requested({ appName: "账本" }));
+    start(server, `/chat?space=${PERSONAL}&chat=c-recent`);
+    const box = await card("要从「账本」删除 7 条数据吗？");
+    expect(within(box).getByText("还有 2 条")).toBeTruthy();
+    expect(within(box).getByText("Lunch · 12.50")).toBeTruthy();
+    expect(within(box).getByRole("button", { name: "取消" })).toBeTruthy();
+    fireEvent.click(within(box).getByRole("button", { name: "删除" }));
+    expect((await within(box).findByRole("status")).textContent).toBe("已删除 7 条数据。");
   });
 });

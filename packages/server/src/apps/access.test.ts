@@ -292,8 +292,23 @@ describe("GET /api/spaces/:spaceId/apps", () => {
           memberAccess: "view",
           members: { [world.lin.id]: "edit", [world.kim.id]: "none" },
           assistant: true,
+          name: { en: "Checklist", zh: "清单" },
+          icon: "list-checks",
+          color: "teal",
         },
-        { id: JOURNAL_APP, hasCode: true, removedAt: NOW, rowCount: 0, memberAccess: "none", members: {}, assistant: true },
+        // A removed app is named and drawn as well, so that its owners can bring it back or delete it.
+        {
+          id: JOURNAL_APP,
+          hasCode: true,
+          removedAt: NOW,
+          rowCount: 0,
+          memberAccess: "none",
+          members: {},
+          assistant: true,
+          name: { en: "Journal", zh: "日记" },
+          icon: "notebook-text",
+          color: "purple",
+        },
         { id: "retired", hasCode: false, removedAt: null, rowCount: 0, memberAccess: "edit", members: {}, assistant: false },
       ],
       members: [
@@ -322,7 +337,20 @@ describe("GET /api/spaces/:spaceId/apps", () => {
   it("works for a personal space too, whose one member is its owner", async () => {
     makeApp(world.db, world.linsSpace, CHECKLIST, world.lin.id, { removedAt: NOW });
     expect(await listOf(LIN, world.linsSpace)).toEqual({
-      apps: [{ id: CHECKLIST, hasCode: true, removedAt: NOW, rowCount: 0, memberAccess: "none", members: {}, assistant: true }],
+      apps: [
+        {
+          id: CHECKLIST,
+          hasCode: true,
+          removedAt: NOW,
+          rowCount: 0,
+          memberAccess: "none",
+          members: {},
+          assistant: true,
+          name: { en: "Checklist", zh: "清单" },
+          icon: "list-checks",
+          color: "teal",
+        },
+      ],
       members: [{ id: world.lin.id, name: "lin", role: "owner", email: LIN, canAddApps: false }],
       invitations: [],
     });

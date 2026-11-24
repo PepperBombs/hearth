@@ -143,7 +143,9 @@ answer, such as a whole app's page, outlasts any proxy's timeout.
   for a connector for Claude that the owner removed in November 2026: the
   chat does what it did.
 - Its tools: `create_app` (a manifest and a page), `list_rows`, `add_row`
-  and `update_row` on the made apps of the space. Every input is checked
+  and `update_row` on the made apps of the space, the three that change an
+  app (below), and `delete_rows`, which deletes nothing but asks the person
+  ("Deleting", below). Every input is checked
   before anything runs; every outcome, refusals included, goes back to the
   model so that it can tell the person or try again. At most 10 steps per
   message.
@@ -168,7 +170,8 @@ The owner chose this in November 2026, as recommended.
   belongs to its space: choosing another space starts a new one there.
 - **What is kept,** in the order it happened: the person's messages, what
   the model said in each step, each change it made (an app made, changed or
-  taken back to a version, a row added or changed) and why a turn failed.
+  taken back to a version, a row added or changed, a request to delete
+  rows) and why a turn failed.
   An opened conversation shows them as they were, with the app drawn, and
   Undo on a change while the app is still at the version that change
   made. The page's own notes, that the network failed or that the person
@@ -189,9 +192,10 @@ The owner chose this in November 2026, as recommended.
   nothing more is kept.
 - **What the model is given.** The server builds it from what is kept, and
   the browser sends only the new message: what the person and the model
-  said, as plain text, without the changes or the failures; the newest
-  within 40,000 characters, starting with something the person said, and
-  texts of one side in a row joined into one message.
+  said, as plain text, without the changes or the failures, but with a
+  note of each answer to a request of its own to delete ("Deleting",
+  below); the newest within 40,000 characters, starting with something the
+  person said, and texts of one side in a row joined into one message.
 - **The routes.** `GET /api/spaces/:spaceId/chats` lists the person's
   conversations there, `GET` and `DELETE .../chats/:chatId` read and
   delete one, and `POST /api/chat` takes `{ spaceId, chatId?, message }`:
@@ -205,8 +209,7 @@ The owner chose this in November 2026, as recommended.
 
 The owner chose (decision 7, as recommended): what the model adds and
 changes it does at once, shows in the conversation, and can be undone;
-what it deletes it asks about first (not built yet: the chat deletes
-nothing).
+what it deletes it asks about first ("Deleting", below).
 
 - **Versions.** Every change to an app is a new version
   (`made_app_versions`, migration 6); the newest 30 are kept. Going back
@@ -229,6 +232,55 @@ nothing).
   with a note of what changed) and `restore_app_version`. Each change shows
   in the conversation with an Undo button, which brings back the version
   before it (`POST .../versions/:version/restore`).
+
+## Deleting
+
+Decision 7's second half, built in November 2026: the model never deletes
+by itself, and deleting a whole app is never the model's to do.
+
+- **Rows, from the chat.** The model's one way to delete is `delete_rows`
+  (an app, a collection and 1 to 50 row IDs, read with `list_rows` first).
+  It checks what a change needs now (the space lets an assistant change
+  things, the person and the assistant for them may edit the app, the rows
+  are there), deletes nothing, and keeps a request waiting
+  (`chat_confirmations`, migration 9, beside the conversation, every
+  statement scoped by space and person; its SQL is in
+  `src/model/confirmations.ts`). The model is told that nothing is deleted
+  yet. The conversation shows the request as a card: "Delete 3 entries
+  from “Ledger”?", a few words of each of the first five rows (their own
+  content, never translated) and "and N more", with Delete and Cancel.
+- **The person's answer.** Only the person whose conversation it is
+  answers (`POST /api/spaces/:spaceId/chats/:chatId/confirmations/:id`,
+  `{ decision: "confirm" | "decline" }`; 404 for anyone else, as for the
+  conversation, and 409 once it was answered). Delete checks everything
+  again at that moment, since access may have changed (403, and the
+  request keeps waiting), and deletes the rows still there through the
+  store, skipping those gone since; Cancel deletes nothing. A request older
+  than 24 hours, or whose app was deleted or moved meanwhile, expires
+  instead, whatever the answer. The card then says what happened in place
+  of its buttons ("Deleted 3 entries.", "Kept: nothing was deleted.",
+  "This request expired."), read from the table whenever the conversation
+  is read, so after a reload and on any other device too; after a delete,
+  the app's pages on screen read their rows again.
+- **The model is told** with the person's next message: a note in Hearth's
+  words on the person's side, before that message, such as `[Hearth: the
+  person confirmed deleting 1 entry from "Ledger" (collection "items"). Do
+  not ask again.]`, or that they declined, or that the request expired.
+- **An app, for good,** is deleted only on the Apps page, by an owner of
+  its space: "Delete permanently", from an app's Remove dialog or from
+  Removed apps. The dialog says how many entries go, for everyone in which
+  space, and that it cannot be undone, and wants the app's name typed. The
+  server wants it too (`DELETE /api/spaces/:spaceId/apps/:appId/data` with
+  `{ confirm }`: the name in either language, spaces around it not
+  counting; 400 otherwise). In one transaction it deletes the app's rows
+  and settings through the store, everyone's access, switches and pins, its
+  versions, the app and its entry, and its waiting requests expire.
+- **Removed apps.** Removing an app keeps its data, and its space's owners
+  see it on the Apps page under "Removed apps", with its icon, its name and
+  how many entries it holds (the owners' list gives all three), to bring
+  back (`PUT /api/spaces/:spaceId/apps/:appId`, where who else may use it
+  starts afresh) or to delete for good. A built-in app also comes back by
+  adding it again.
 
 ## Built-in apps
 
@@ -317,14 +369,22 @@ over both protocols, and an assistant that is off or may only read.
 `src/model/chats.test.ts` holds the kept conversation: privacy in a group
 and across spaces, order, the limits, one at a time, a delete while it
 answers, and what the model is given; `src/db/chats-schema.test.ts` holds
-migration 8 on a database migration 7 made. `HEARTH_MODEL_STANDIN` (dev
+migration 8 on a database migration 7 made, and migration 9 on one
+migration 8 made. `src/model/confirmations.test.ts` holds deleting from the
+chat: someone else's conversation or request, a member without edit,
+answering twice, access lost or rows deleted before the answer, expiry,
+Cancel and what the model is told, and deleting an app for good: by whom,
+with which name, and that nothing of it is left in any table while other
+apps keep theirs.
+`e2e/deleting.spec.ts` does both in a browser against the real server,
+whose stand-in model (`e2e/model-stand-in.ts`) asks to delete the row a
+message names. `HEARTH_MODEL_STANDIN` (dev
 mode only) sends every chat to a stand-in, for trying the web app without
 a real model.
 
 ## Not built yet
 
-- **Deleting from the chat**, rows or apps, with the person's confirmation
-  first (decision 7). Undoing a row the model added or changed.
+- **Undoing a row the model added or changed.**
 - **The center**: publishing an app, finding others', installing a copy and
   changing it to fit.
 - **Developers' path** (answer 3): uploading an app written by hand.
