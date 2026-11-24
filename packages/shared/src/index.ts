@@ -109,6 +109,23 @@ export const spaceSchema = z.object({
 export type Space = z.infer<typeof spaceSchema>;
 
 /**
+ * Where a copy of a published app came from (docs/center.md). `listingId`
+ * is the published app's ID, missing once it is unpublished. `by` is its
+ * publisher's name, sent only to a viewer who is a member of the group it
+ * is published to, with `mine` when that viewer is its publisher.
+ * `untouched` is sent while nobody has changed the copy, which is then not
+ * moved into a group. Where an app is published is not here: the publish
+ * dialog reads it from GET .../publish.
+ */
+export const appSourceSchema = z.object({
+  listingId: z.string().optional(),
+  by: z.string().optional(),
+  mine: z.boolean().optional(),
+  untouched: z.boolean().optional(),
+});
+export type AppSource = z.infer<typeof appSourceSchema>;
+
+/**
  * One app as a person sees it in one space. Apps the person has no access
  * to are not listed at all, nor are apps that were removed from the space
  * or that the server holds no app for.
@@ -141,6 +158,8 @@ export const appSummarySchema = z.object({
   template: z.string().optional(),
   /** A made app's settings, declared as an SDK manifest declares them, for the settings dialog. */
   settings: z.record(z.string(), z.unknown()).optional(),
+  /** For a copy of a published app (docs/center.md): where it came from. */
+  source: appSourceSchema.optional(),
 });
 export type AppSummary = z.infer<typeof appSummarySchema>;
 
@@ -752,3 +771,164 @@ export type CatalogApp = z.infer<typeof catalogAppSchema>;
 export const addFromCatalogRequestSchema = z.strictObject({ memberAccess: memberAccessSchema.optional() });
 export type AddFromCatalogRequest = z.infer<typeof addFromCatalogRequestSchema>;
 
+
+// ---------------------------------------------------------------------------
+// The app center (docs/center.md): apps published to a group, and copies of them
+// ---------------------------------------------------------------------------
+
+/** How long the note of a publish ("what changed") is at most. */
+export const MAX_PUBLISH_NOTE = 200;
+
+/** How many apps one person may have published to one group at once. */
+export const MAX_LISTINGS_PER_GROUP = 50;
+
+/** How many published apps GET /api/center gives at most, the newest first. */
+export const MAX_CENTER_LISTINGS = 500;
+
+/** A collection of a published app, as the center and the publish dialog show it: its name and its fields' names. */
+export const listingCollectionSchema = z.object({ name: z.string(), fields: z.array(z.string()) });
+export type ListingCollection = z.infer<typeof listingCollectionSchema>;
+
+/**
+ * GET /api/center: one app published to a group the person is in. Its name
+ * and description are its maker's words, never translated, in both fields
+ * alike, or a built-in app's in both languages. `publishedBy` names the
+ * publisher, whom the person shares that group with; no email address is
+ * ever sent. `mine` is true for the person's own; `canUnpublish` for those
+ * and, for an owner of the group, every one there.
+ */
+export const centerListingSchema = z.object({
+  id: z.string(),
+  /** The group it is published to. */
+  spaceId: z.string(),
+  name: z.object({ en: z.string(), zh: z.string() }),
+  description: z.object({ en: z.string(), zh: z.string() }),
+  icon: z.string(),
+  color: z.string(),
+  collections: z.array(listingCollectionSchema),
+  publishedBy: z.object({ id: z.string(), name: z.string() }),
+  /** 1 when first published, one more each time it is published again. */
+  revision: z.number().int().positive(),
+  /** What changed, in the publisher's words; "" for nothing said. */
+  note: z.string(),
+  updatedAt: z.string(),
+  mine: z.boolean(),
+  canUnpublish: z.boolean(),
+});
+export type CenterListing = z.infer<typeof centerListingSchema>;
+
+/**
+ * GET /api/center: the published apps of every group the person is in,
+ * newest first, at most MAX_CENTER_LISTINGS. Which of the person's spaces
+ * hold a copy already the web app reads from the session
+ * (`AppSummary.source.listingId`), not from here.
+ */
+export const centerSchema = z.object({ listings: z.array(centerListingSchema) });
+export type Center = z.infer<typeof centerSchema>;
+
+/**
+ * Why an app cannot be published, as a code the publish dialog words in
+ * the person's language:
+ * - "invalid": its manifest or page no longer passes the checks (`detail`
+ *   says what, in the checker's English, as the chat shows it);
+ * - "network": it names hosts, which no published app may;
+ * - "unchanged_copy": it is a copy nobody changed, of a built-in app or of
+ *   a published one: someone else's app as they shipped or shared it;
+ * - "email": the email address of the publisher, or of someone they share
+ *   a space with, is in it (`where` says where, never whose);
+ * - "too_many": the person has MAX_LISTINGS_PER_GROUP apps published to
+ *   that group (`spaceId`) already.
+ */
+export const PUBLISH_PROBLEM_CODES = ["invalid", "network", "unchanged_copy", "email", "too_many"] as const;
+export const publishProblemCodeSchema = z.enum(PUBLISH_PROBLEM_CODES);
+export type PublishProblemCode = z.infer<typeof publishProblemCodeSchema>;
+
+/** The part of a published app a problem was found in. `line` counts the page's lines from 1. */
+export const PUBLISH_PARTS = ["name", "description", "instructions", "collections", "settings", "page"] as const;
+export const publishPlaceSchema = z.object({
+  part: z.enum(PUBLISH_PARTS),
+  line: z.number().int().positive().optional(),
+});
+export type PublishPlace = z.infer<typeof publishPlaceSchema>;
+
+export const publishProblemSchema = z.object({
+  code: publishProblemCodeSchema,
+  /** For "email". */
+  where: publishPlaceSchema.optional(),
+  /** For "invalid". */
+  detail: z.string().optional(),
+  /** For "too_many": the group. */
+  spaceId: z.string().optional(),
+});
+export type PublishProblem = z.infer<typeof publishProblemSchema>;
+
+/** One place an app is published to, as its publish dialog lists it. */
+export const appListingSchema = z.object({
+  id: z.string(),
+  spaceId: z.string(),
+  revision: z.number().int().positive(),
+  note: z.string(),
+  updatedAt: z.string(),
+  canUnpublish: z.boolean(),
+});
+export type AppListing = z.infer<typeof appListingSchema>;
+
+/**
+ * GET /api/spaces/:spaceId/apps/:appId/publish, for those who may publish
+ * the app, an owner of its space (404 for an app the person cannot see, as
+ * for one that does not exist; 403 for one they see but may not publish): exactly
+ * what would leave (`app`: its settings as declared, with their defaults;
+ * its instructions in full; the size of its page in bytes), the groups it
+ * may go to, the groups the person is in where it is published already,
+ * and every problem that would refuse it. What never leaves (rows, setting
+ * values, conversations, versions) is not here at all.
+ */
+export const publishReviewSchema = z.object({
+  app: z.object({
+    name: z.object({ en: z.string(), zh: z.string() }),
+    description: z.object({ en: z.string(), zh: z.string() }),
+    icon: z.string(),
+    color: z.string(),
+    collections: z.array(listingCollectionSchema),
+    settings: z.record(z.string(), z.unknown()),
+    instructions: z.string(),
+    pageBytes: z.number().int().nonnegative(),
+  }),
+  groups: z.array(z.object({ id: z.string(), name: z.string() })),
+  listings: z.array(appListingSchema),
+  problems: z.array(publishProblemSchema),
+});
+export type PublishReview = z.infer<typeof publishReviewSchema>;
+
+/**
+ * POST /api/spaces/:spaceId/apps/:appId/publish: publish the app to a group
+ * the person is in, or publish it there again, which replaces what was
+ * published and adds 1 to the revision: 201 when it was not published
+ * there yet, 200 when it was. A problem refuses it, 400
+ * `invalid_request` (409 `conflict` for "too_many"), with an English
+ * message: the dialog words the problems from GET .../publish instead.
+ */
+export const publishRequestSchema = z.strictObject({
+  /** The group. */
+  to: z.string().min(1),
+  /** What changed, in the publisher's words. */
+  note: z.string().trim().max(MAX_PUBLISH_NOTE).optional(),
+});
+export type PublishRequest = z.infer<typeof publishRequestSchema>;
+
+export const publishResultSchema = z.object({ id: z.string(), revision: z.number().int().positive() });
+export type PublishResult = z.infer<typeof publishResultSchema>;
+
+/**
+ * POST /api/spaces/:spaceId/center/:id: add a copy of a published app to the
+ * group it is published to or to the person's personal space (404 for any
+ * other, and for a published app outside the person's groups), for someone
+ * who may add apps there. A space that holds a copy of it already answers
+ * 409 `conflict`; one whose copy was removed gets it back, with its data
+ * (`restored`). `memberAccess` as when adding any app: "none" when left out.
+ */
+export const addCopyRequestSchema = z.strictObject({ memberAccess: memberAccessSchema.optional() });
+export type AddCopyRequest = z.infer<typeof addCopyRequestSchema>;
+
+export const addCopyResultSchema = z.object({ appId: z.string(), restored: z.boolean() });
+export type AddCopyResult = z.infer<typeof addCopyResultSchema>;

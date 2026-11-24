@@ -208,6 +208,20 @@ Notes for whoever changes this part, people and agents alike. They are read when
   an owner there gets an `edit` exception, as when adding, and the app is
   included for the assistant under that space's level. A target with an
   entry for the app, removed or not, is 409: nothing is ever merged.
+- The app center's table, `published_apps` (migration 10, docs/center.md),
+  is named in `src/center/published.ts` alone, every statement there names
+  a group (its own `space_id`, or `LISTED`, the person's groups), and a
+  test reads the source for both (`src/center/published.test.ts`). It goes
+  with its publisher's membership of the group, by cascade, and sets
+  `made_apps.origin` of its copies to NULL.
+- Publishing (`src/center/publish.ts`) is for an owner of the app's space
+  (`publishableApp` in `src/made/apps.ts`); its email check looks only for
+  the addresses the publisher may already see, their own and those of the
+  members of spaces they own (`emailsAround` in `src/db/people.ts`), never
+  every address on the server: the review says where an address is, so it
+  would otherwise confirm an address the person guessed. Publishing again
+  someone else's listing counts against the person's 50 in that group,
+  since it makes them its publisher.
 - Server tests that need a group mostly insert it with SQL (`family()` in
   `src/apps/test-world.ts`), and their apps with `makeApp` there, a made
   app written straight into the database; `src/groups/routes.test.ts`
@@ -216,3 +230,8 @@ Notes for whoever changes this part, people and agents alike. They are read when
 - Request schemas in `packages/shared` refuse unknown properties
   (`z.strictObject`); answers such as the session do not, so that a browser
   holding an older web app survives a newer server.
+- A copy of a published app (docs/center.md) is an ordinary made app whose
+  `made_apps.origin_hash` is set; the rest of the server learns of it from
+  the registry (`RegisteredApp.copy`), never from `made_apps` itself, and
+  `moveApp` refuses to move an untouched one into a group.
+- Every statement about `published_apps` is in `src/center/published.ts`, and each names a group; who sees a listing is `LISTED` there alone, and who may use a copy is still `VISIBLE` alone. `src/center/published.test.ts` reads the server's source for both. A listing goes with its publisher's membership of the group, by its key to `space_members`, so leaving a group needs no code for it.

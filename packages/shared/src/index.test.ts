@@ -2,6 +2,8 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   API_ERROR_CODES,
   addAppRequestSchema,
+  addCopyRequestSchema,
+  addCopyResultSchema,
   addMemberRequestSchema,
   addMemberResponseSchema,
   apiErrorSchema,
@@ -17,11 +19,14 @@ import {
   appSettingsPatchSchema,
   appSettingsSchema,
   appSummarySchema,
+  centerSchema,
   createSpaceRequestSchema,
   deleteAppDataRequestSchema,
   leaveGroupRequestSchema,
   memberPatchSchema,
   moveAppRequestSchema,
+  publishRequestSchema,
+  publishReviewSchema,
   sessionSchema,
   spaceAppsSchema,
   spacePatchSchema,
@@ -173,6 +178,8 @@ describe("request bodies", () => {
       [assistantLevelRequestSchema, { level: "view" }],
       [appPrefsPatchSchema, { pinned: true }],
       [appSettingsPatchSchema, { user: { hideDone: true } }],
+      [publishRequestSchema, { to: "family" }],
+      [addCopyRequestSchema, { memberAccess: "view" }],
     ];
     for (const [schema, body] of cases) {
       expect(accepts(schema, body), JSON.stringify(body)).toBe(true);
@@ -371,6 +378,51 @@ describe("what the owners of a space see", () => {
     expect(accepts(spaceAppsSchema, withApp({ rowCount: 1.5 }))).toBe(false);
     expect(accepts(spaceAppsSchema, withApp({ memberAccess: "all" }))).toBe(false);
     expect(accepts(spaceAppsSchema, withApp({ members: { "user-2": null } }))).toBe(false);
+  });
+});
+
+describe("the app center", () => {
+  it("publishes to a group with a trimmed note of at most 200 characters", () => {
+    expect(publishRequestSchema.parse({ to: "family", note: "  Bigger buttons " })).toEqual({ to: "family", note: "Bigger buttons" });
+    expect(accepts(publishRequestSchema, { to: "family", note: "x".repeat(200) })).toBe(true);
+    expect(accepts(publishRequestSchema, { to: "family", note: "x".repeat(201) })).toBe(false);
+    expect(accepts(publishRequestSchema, { to: "" })).toBe(false);
+    expect(accepts(publishRequestSchema, { note: "Bigger buttons" })).toBe(false);
+  });
+
+  it("reads a copy's source, the center and the review as the server sends them", () => {
+    expect(appSummarySchema.parse({ ...app, made: true, source: { listingId: "p-0123456789", by: "Lin" } }).source).toEqual({
+      listingId: "p-0123456789",
+      by: "Lin",
+    });
+    expect(appSummarySchema.parse({ ...app, source: {} }).source).toEqual({});
+    const listing = {
+      id: "p-0123456789",
+      spaceId: "family",
+      name: { en: "Ledger", zh: "Ledger" },
+      description: { en: "", zh: "" },
+      icon: "wallet",
+      color: "green",
+      collections: [{ name: "entries", fields: ["amount", "note"] }],
+      publishedBy: { id: "u-lin", name: "Lin" },
+      revision: 2,
+      note: "Bigger buttons",
+      updatedAt: "2026-11-24T00:00:00.000Z",
+      mine: false,
+      canUnpublish: true,
+    };
+    expect(accepts(centerSchema, { listings: [listing] })).toBe(true);
+    expect(accepts(centerSchema, { listings: [{ ...listing, revision: 0 }] })).toBe(false);
+    const review = {
+      app: { ...listing, settings: {}, instructions: "", pageBytes: 1200 },
+      groups: [{ id: "family", name: "Family" }],
+      listings: [{ id: listing.id, spaceId: "family", revision: 2, note: "", updatedAt: listing.updatedAt, canUnpublish: true }],
+      problems: [{ code: "email", where: { part: "page", line: 212 } }, { code: "too_many", spaceId: "family" }],
+    };
+    expect(accepts(publishReviewSchema, review)).toBe(true);
+    expect(accepts(publishReviewSchema, { ...review, problems: [{ code: "private" }] })).toBe(false);
+    expect(accepts(publishReviewSchema, { ...review, problems: [{ code: "email", where: { part: "page", line: 0 } }] })).toBe(false);
+    expect(addCopyResultSchema.parse({ appId: "m-0123456789", restored: false })).toEqual({ appId: "m-0123456789", restored: false });
   });
 });
 

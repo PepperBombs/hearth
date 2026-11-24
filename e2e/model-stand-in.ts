@@ -20,6 +20,16 @@
  * When no row holds it, it says "Found nothing called " and the text; when
  * a tool is refused, "Could not ask: " and why.
  *
+ * To "make " and a name, it makes an app of that name (create_app): a
+ * ledger whose page lists its entries (`LEDGER`), and says "Made " and the
+ * name, or "Could not make: " and why.
+ *
+ * To "Change “<name>”: call it <new name>", as the chat link of a copy
+ * fills the box and the person finishes it (docs/center.md), it reads the
+ * app of that name the system prompt lists (read_app), renames it
+ * (update_app, with the rest of its manifest and its page as they were),
+ * and says "Renamed <name> to <new name>", or "Could not rename: " and why.
+ *
  * Run with Node, which strips the types: `node e2e/model-stand-in.ts <port>`.
  */
 import { createServer } from "node:http";
@@ -39,6 +49,41 @@ type Place = { appId: string; collection: string };
 
 const LIST_CALL = "stand-in-list-";
 const DELETE_CALL = "stand-in-delete";
+const MAKE_CALL = "stand-in-make";
+const READ_CALL = "stand-in-read";
+const RENAME_CALL = "stand-in-rename";
+
+/**
+ * The app "make " makes, under the name asked for: one collection of
+ * entries, instructions for whoever changes it, and a page that lists the
+ * entries, oldest first, and draws them again when they change.
+ */
+const LEDGER = {
+  description: "What we spend, one entry at a time.",
+  icon: "wallet",
+  color: "green",
+  size: "wide",
+  collections: { entries: { fields: { item: { type: "text", required: true }, amount: { type: "number" } } } },
+  instructions: "Amounts are in euros.",
+};
+const LEDGER_PAGE = `<!doctype html>
+<html><body>
+<p id="empty">No entries yet.</p>
+<ul id="entries" aria-label="Entries"></ul>
+<script>
+async function draw() {
+  const rows = await hearth.list("entries");
+  document.getElementById("empty").hidden = rows.length > 0;
+  document.getElementById("entries").replaceChildren(...rows.map((row) => {
+    const item = document.createElement("li");
+    item.textContent = row.amount === undefined ? row.item : row.item + ": " + row.amount;
+    return item;
+  }));
+}
+hearth.onChange(draw);
+draw();
+</script>
+</body></html>`;
 
 /** The text of the last message of the person's, as the server sent it. */
 function lastUserText(messages: readonly Message[]): string {
@@ -47,18 +92,43 @@ function lastUserText(messages: readonly Message[]): string {
 }
 
 /**
- * What the person asked to delete, or null for any other message. Their own
- * words are what is left of the message once Hearth's notes before it,
- * joined to it with a blank line, are taken away.
+ * The person's own words: what is left of their message once Hearth's notes
+ * before it, joined to it with a blank line, are taken away.
  */
-function deleteTarget(text: string): string | null {
-  const own = text
+function ownWords(text: string): string {
+  return text
     .split("\n\n")
     .filter((part) => !part.startsWith("[Hearth: "))
     .join("\n\n")
     .trim();
-  const match = /^delete (.+)$/i.exec(own);
+}
+
+/** What the person asked to delete, or null for any other message. */
+function deleteTarget(text: string): string | null {
+  const match = /^delete (.+)$/i.exec(ownWords(text));
   return match?.[1]?.trim() || null;
+}
+
+/** The name of the app the person asked to make, or null for any other message. */
+function makeTarget(text: string): string | null {
+  const match = /^make (.+)$/i.exec(ownWords(text));
+  return match?.[1]?.trim() || null;
+}
+
+/** The app the person asked to rename, and its new name, or null for any other message. */
+function renameTarget(text: string): { from: string; to: string } | null {
+  const match = /^Change “(.+?)”: call it (.+)$/.exec(ownWords(text));
+  return match ? { from: match[1]!.trim(), to: match[2]!.trim() } : null;
+}
+
+/** The ID of the app the system prompt lists under a name, in one language or two ("- appId <id>, version <n>: <name>..."). */
+function appNamed(messages: readonly Message[], name: string): string | null {
+  const system = messages.find((message) => message.role === "system");
+  for (const line of (typeof system?.content === "string" ? system.content : "").split("\n")) {
+    const app = /^- appId (\S+), version \d+: (.*)$/.exec(line);
+    if (app && (app[2]!.startsWith(JSON.stringify(name)) || app[2]!.startsWith(`{"en":${JSON.stringify(name)}`))) return app[1]!;
+  }
+  return null;
 }
 
 /** Every collection of every app the system prompt lists: "- appId <id>, version ..." and its "    - <collection> { ... }" lines. */
@@ -122,9 +192,49 @@ function findRow(calls: readonly ToolCall[], results: Map<string, string>, wante
   return null;
 }
 
+/** Makes an app of the name asked for, in two steps of one turn. */
+function make(messages: readonly Message[], name: string): Reply {
+  if (messages.at(-1)?.role === "user") {
+    return { role: "assistant", content: "", tool_calls: [call(MAKE_CALL, "create_app", { manifest: { name, ...LEDGER }, html: LEDGER_PAGE })] };
+  }
+  const answer = toolResults(messages).get(MAKE_CALL) ?? "";
+  return say(answer.includes('"appId"') ? `Made ${name}` : `Could not make: ${answer}`);
+}
+
+/** Renames the app of a name, in three steps of one turn: read it, change it, say so. */
+function rename(messages: readonly Message[], { from, to }: { from: string; to: string }): Reply {
+  if (messages.at(-1)?.role === "user") {
+    const appId = appNamed(messages, from);
+    if (appId === null) return say(`Could not rename: no app is called ${from}`);
+    return { role: "assistant", content: "", tool_calls: [call(READ_CALL, "read_app", { appId })] };
+  }
+  const results = toolResults(messages);
+  const read = results.get(READ_CALL);
+  if (read !== undefined) {
+    let app: { appId?: unknown; manifest?: Record<string, unknown> };
+    try {
+      app = JSON.parse(read) as typeof app;
+    } catch {
+      return say(`Could not rename: ${read}`);
+    }
+    if (typeof app.appId !== "string" || !app.manifest) return say(`Could not rename: ${read}`);
+    return {
+      role: "assistant",
+      content: "",
+      tool_calls: [call(RENAME_CALL, "update_app", { appId: app.appId, manifest: { ...app.manifest, name: to }, note: `Renamed to ${to}` })],
+    };
+  }
+  const answer = results.get(RENAME_CALL) ?? "";
+  return say(answer.includes('"version"') ? `Renamed ${from} to ${to}` : `Could not rename: ${answer}`);
+}
+
 /** The stand-in's next message in the conversation the server sent. */
 function reply(messages: readonly Message[]): Reply {
   const text = lastUserText(messages);
+  const making = makeTarget(text);
+  if (making !== null) return make(messages, making);
+  const renaming = renameTarget(text);
+  if (renaming !== null) return rename(messages, renaming);
   const wanted = deleteTarget(text);
   const last = messages.at(-1);
   if (wanted === null) return say(`Noted: ${text}`);

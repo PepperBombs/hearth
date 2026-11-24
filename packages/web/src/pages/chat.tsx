@@ -12,6 +12,11 @@
  * before. Leaving the open conversation (another one, a new one, another
  * space, another page) stops a turn that is still running.
  *
+ * `/chat?space=<id>&app=<id>` (docs/center.md, "The chat link") puts
+ * "Change “Ledger”: " in the box, for an app of that space the session
+ * lists, and then drops `app` from the address: it is sent by no one, and
+ * the person finishes the sentence.
+ *
  * The page fills the screen: the conversation scrolls by itself, and the box
  * to write in stays at the bottom of it, above the tab bar on a phone. The
  * model's replies are drawn from Markdown (`components/markdown.tsx`, which
@@ -47,7 +52,7 @@ import { Markdown } from "../components/markdown";
 import { Page } from "../components/shell/page";
 import { setAssistantLevel } from "../groups/api";
 import { spaceAppsKey } from "../groups/queries";
-import type { PlainMessageKey } from "../i18n";
+import { pickLocalized, type PlainMessageKey } from "../i18n";
 import { cx } from "../lib/cx";
 import { dayGroup, formatListTime, type DayGroup } from "../lib/date";
 import { MadeAppFrame, notifyMadeAppChanged } from "../made/frame";
@@ -153,7 +158,7 @@ const isGone = (error: unknown) => error instanceof ApiRequestError && error.sta
 
 export function Chat() {
   const session = useSession();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const queryClient = useQueryClient();
   const [search, setSearch] = useSearchParams();
   const model = useQuery({ queryKey: MODEL_QUERY_KEY, queryFn: ({ signal }) => fetchModelSettings(signal) });
@@ -184,6 +189,8 @@ export function Chat() {
   /** Whether the conversation was scrolled to its end, the last time it moved: then it stays there as it grows. */
   const atEnd = useRef(true);
   const input = useRef<HTMLTextAreaElement>(null);
+  /** The box was filled from the address, and takes the focus once it may be written in. */
+  const focusBox = useRef(false);
 
   const chats = useQuery({
     queryKey: chatsQueryKey(spaceId),
@@ -301,6 +308,29 @@ export function Chat() {
   }, [fit]);
 
   const ready = model.data?.hasKey === true && space !== undefined && space.assistant !== "none" && !needsLoad;
+
+  // "Change it in the chat" on an app: the box begins the sentence, and the address forgets the app, so that
+  // nothing fills the box again. An app the space does not hold (the address made up, or the app gone) fills nothing.
+  const aboutApp = search.get("app");
+  useEffect(() => {
+    if (aboutApp === null) return;
+    const app = session.apps.find((candidate) => candidate.id === aboutApp && candidate.spaceId === spaceId);
+    if (app) {
+      setDraft(t("chat.changeApp", { app: pickLocalized(app.name, locale) }));
+      focusBox.current = true;
+    }
+    const next = new URLSearchParams(search);
+    next.delete("app");
+    setSearch(next, { replace: true });
+  }, [aboutApp, session.apps, spaceId, search, setSearch, t, locale]);
+  // The box is off until the model's settings are read: it takes the focus then, with the cursor after the text.
+  useEffect(() => {
+    const box = input.current;
+    if (!ready || !focusBox.current || !box) return;
+    focusBox.current = false;
+    box.focus();
+    box.setSelectionRange(box.value.length, box.value.length);
+  }, [ready, draft]);
 
   const send = async (text: string) => {
     if (!space || !ready || text.trim() === "" || running) return;

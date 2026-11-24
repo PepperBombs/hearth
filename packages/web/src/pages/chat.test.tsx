@@ -456,6 +456,38 @@ describe("changing the space", () => {
   });
 });
 
+describe("the link from an app (docs/center.md, \"The chat link\")", () => {
+  const textarea = () => document.querySelector("textarea")!;
+
+  it("begins a message about the app in the box, sends nothing, and drops the app from the address", async () => {
+    const server = new FakeServer();
+    start(server, ["/apps", `/chat?space=${PERSONAL}&app=m-notes`]);
+    await waitFor(() => expect(textarea().value).toBe("Change “Notes”: "));
+    await waitFor(() => expect(searchOf()).toEqual({ space: PERSONAL }));
+    // Ready to finish the sentence: the focus in the box, the cursor after the text.
+    await waitFor(() => expect(document.activeElement).toBe(textarea()));
+    expect(textarea().selectionStart).toBe("Change “Notes”: ".length);
+    expect(server.requests.some((request) => request.startsWith("POST"))).toBe(false);
+    // In place of the address with the app, so Back leaves the chat.
+    act(() => back());
+    await waitFor(() => expect(where).toBe("/apps"));
+  });
+
+  it("names the app in the person's language", async () => {
+    const server = new FakeServer();
+    server.locale = "zh";
+    start(server, `/chat?space=${PERSONAL}&app=m-notes`);
+    await waitFor(() => expect(textarea().value).toBe("修改「笔记」："));
+  });
+
+  it("fills nothing for an app the space does not hold", async () => {
+    const server = new FakeServer();
+    start(server, `/chat?space=${FAMILY}&app=m-notes`);
+    await waitFor(() => expect(searchOf()).toEqual({ space: FAMILY }));
+    expect(textarea().value).toBe("");
+  });
+});
+
 describe("leaving a conversation while it answers", () => {
   it("stops the turn, and nothing of it shows in the conversation opened next", async () => {
     const server = new FakeServer();

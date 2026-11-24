@@ -22,13 +22,17 @@
  * (`model`), their conversations in each space (`chats`), read, listed and
  * deleted, a message, which its own made-up model answers with "Noted: "
  * and the message, and the person's answer to a request of the model's to
- * delete rows, kept in that request's entry. All names and addresses are
- * made up.
+ * delete rows, kept in that request's entry. And the app center
+ * (docs/center.md): the apps published to the person's groups (`center`),
+ * listed and unpublished, a copy of one added to a space, and what an app's
+ * publish dialog reads and sends (`publishReview`). All names and
+ * addresses are made up.
  */
 import { expect, test as base, type FrameLocator, type Page, type Route } from "@playwright/test";
 import type { Setting } from "../packages/sdk/src/index.ts";
 import {
   addAppRequestSchema,
+  addCopyRequestSchema,
   addFromCatalogRequestSchema,
   addMemberRequestSchema,
   appAccessRequestSchema,
@@ -36,6 +40,7 @@ import {
   appSettingsPatchSchema,
   appSettingsSchema,
   catalogAppSchema,
+  centerSchema,
   chatListSchema,
   chatRequestSchema,
   chatSchema,
@@ -48,6 +53,8 @@ import {
   modelSettingsSchema,
   moveAppRequestSchema,
   preferencesPatchSchema,
+  publishRequestSchema,
+  publishReviewSchema,
   sessionSchema,
   spaceAppsSchema,
   spacePatchSchema,
@@ -56,6 +63,7 @@ import {
   type AppSettings,
   type AppSummary,
   type CatalogApp,
+  type CenterListing,
   type Chat,
   type ChatEvent,
   type ChatEntry,
@@ -63,6 +71,7 @@ import {
   type InstalledApp,
   type ModelSettings,
   type PreferencesPatch,
+  type PublishReview,
   type Session,
   type SettingValue,
   type SpaceApps,
@@ -343,6 +352,22 @@ export class FakeApi {
   /** The built-in apps GET /api/catalog lists, which the Add dialog offers: every one the stand-in ships, unless a test says otherwise. */
   catalog: BuiltInId[] = [...BUILT_IN_IDS];
   /**
+   * The apps published to the person's groups, as GET /api/center lists
+   * them (checked against the contract), the newest first. None unless a
+   * test says otherwise. Unpublishing one takes it out.
+   */
+  center: CenterListing[] = [];
+  /** Every DELETE /api/center/:id, as its path, whether or not it was taken. */
+  readonly centerChanges: string[] = [];
+  /**
+   * What GET .../apps/:appId/publish answers for any app (checked against
+   * the contract); while it is null the route answers 404. POST .../publish
+   * publishes to a group it lists, revision 1 there or one more than its
+   * listing's, and is recorded in `publishes` with its body.
+   */
+  publishReview: PublishReview | null = null;
+  readonly publishes: string[] = [];
+  /**
    * What was saved of each app's settings, by app ID: the values the space
    * shares and the person's own. GET .../settings answers every setting the
    * app declares, with its default where nothing was saved, as the server
@@ -441,6 +466,43 @@ export class FakeApi {
     // The apps shipped with Hearth (docs/platform.md, "Built-in apps"), as this stand-in ships them.
     if (path === "/api/catalog" && method === "GET") {
       return route.fulfill({ json: catalogAppSchema.array().parse(this.catalog.map(catalogApp)) });
+    }
+
+    // The app center: an app can be unpublished by its publisher or an owner of its group (`canUnpublish`).
+    if (path === "/api/center" && method === "GET") {
+      return route.fulfill({ json: centerSchema.parse({ listings: this.center }) });
+    }
+    const listing = /^\/api\/center\/([^/]+)$/.exec(path);
+    if (listing && method === "DELETE") {
+      this.centerChanges.push(path);
+      const found = this.center.find((entry) => entry.id === listing[1]);
+      if (!found) return fail({ status: 404, code: "not_found", message: "Sample failure" });
+      if (!found.canUnpublish) return fail({ status: 403, code: "forbidden", message: "Sample failure" });
+      this.center = this.center.filter((entry) => entry !== found);
+      return route.fulfill({ status: 204 });
+    }
+
+    const publishing = /^\/api\/spaces\/[^/]+\/apps\/[^/]+\/publish$/.exec(path);
+    if (publishing && this.publishReview) {
+      const review = this.publishReview;
+      if (method === "GET") return route.fulfill({ json: publishReviewSchema.parse(review) });
+      if (method === "POST") {
+        this.publishes.push(`POST ${path} ${JSON.stringify(body ?? null)}`);
+        const parsed = publishRequestSchema.safeParse(body);
+        if (!parsed.success || !review.groups.some((group) => group.id === parsed.data.to)) {
+          return fail({ status: 404, code: "not_found", message: "Sample failure" });
+        }
+        const listed = review.listings.find((entry) => entry.spaceId === parsed.data.to);
+        return route.fulfill({ status: listed ? 200 : 201, json: { id: listed?.id ?? "p-published1", revision: (listed?.revision ?? 0) + 1 } });
+      }
+    }
+
+    const copied = /^\/api\/spaces\/([^/]+)\/center\/([^/]+)$/.exec(path);
+    if (copied && method === "POST") {
+      const [, spaceId = "", listingId = ""] = copied;
+      this.appChanges.push(`POST ${path} ${JSON.stringify(body ?? null)}`);
+      if (this.appFailure) return fail(this.appFailure);
+      return answer(this.addCopy(spaceId, listingId, body));
     }
 
     const fromCatalog = /^\/api\/spaces\/([^/]+)\/catalog\/([^/]+)$/.exec(path);
@@ -592,6 +654,42 @@ export class FakeApi {
     const members = owner ? {} : { [this.current.user.id]: "edit" as const };
     const added = builtInApp(template, spaceId, { id: appId });
     owners?.apps.push({ id: appId, template, hasCode: true, removedAt: null, rowCount: 0, memberAccess, members, assistant: true, ...shownAs(added) });
+    this.setSession({ ...this.current, apps: [...this.current.apps, added] });
+    return { status: 201, json: { appId, restored: false } };
+  }
+
+  /**
+   * POST /api/spaces/:spaceId/center/:id, as the server answers it for a new
+   * copy: to the group the app is published to or the person's personal
+   * space, for whoever may add apps there, once per space. The copy is a
+   * made app of the space's own with the listing's name, icon and colour,
+   * version 1 and no entries. Bringing back a removed copy is the real
+   * server's to test.
+   */
+  private addCopy(spaceId: string, listingId: string, body: unknown): { json: unknown; status: number } | Failure {
+    const refuse = (status: number, code: ApiErrorCode): Failure => ({ status, code, message: "Sample failure" });
+    const parsed = addCopyRequestSchema.safeParse(body);
+    if (!parsed.success) return refuse(400, "invalid_request");
+    const listing = this.center.find((entry) => entry.id === listingId);
+    const space = this.current.spaces.find((candidate) => candidate.id === spaceId);
+    if (!listing || !space || (space.id !== listing.spaceId && space.kind !== "personal")) return refuse(404, "not_found");
+    if (!space.canAddApps) return refuse(403, "forbidden");
+    if (this.current.apps.some((candidate) => candidate.spaceId === spaceId && candidate.source?.listingId === listingId)) return refuse(409, "conflict");
+    const taken = new Set(this.current.apps.map((candidate) => candidate.id));
+    let n = 1;
+    while (taken.has(`m-copy-${n}`)) n += 1;
+    const appId = `m-copy-${n}`;
+    const by = this.current.spaces.some((candidate) => candidate.id === listing.spaceId)
+      ? { by: listing.publishedBy.name, ...(listing.mine ? { mine: true } : {}) }
+      : {};
+    // As it was shared, until the chat changes it, which the stand-in does not.
+    const added = app(appId, spaceId, listing.name.en, listing.name.zh, listing.description.en, listing.description.zh, listing.icon, listing.color, {
+      source: { listingId, ...by, untouched: true },
+    });
+    const owner = space.role === "owner";
+    const members = owner ? {} : { [this.current.user.id]: "edit" as const };
+    const memberAccess = parsed.data.memberAccess ?? "none";
+    this.groups[spaceId]?.apps.push({ id: appId, hasCode: true, removedAt: null, rowCount: 0, memberAccess, members, assistant: true, ...shownAs(added) });
     this.setSession({ ...this.current, apps: [...this.current.apps, added] });
     return { status: 201, json: { appId, restored: false } };
   }

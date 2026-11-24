@@ -43,7 +43,15 @@ export function dayGroup(date: Date, now: Date): DayGroup {
 export function formatListTime(date: Date, now: Date, locale: Locale): string {
   const tag = INTL[locale];
   if (daysBetween(date, now) <= 0) return new Intl.DateTimeFormat(tag, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date);
-  return new Intl.DateTimeFormat(tag, {
+  return formatDay(date, now, locale);
+}
+
+/**
+ * A day, with the year when it is not this one, on the reader's clock:
+ * "Nov 3", "11月3日", "Nov 3, 2025".
+ */
+export function formatDay(date: Date, now: Date, locale: Locale): string {
+  return new Intl.DateTimeFormat(INTL[locale], {
     month: "short",
     day: "numeric",
     ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),

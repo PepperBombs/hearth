@@ -27,6 +27,12 @@ export type RegisteredApp = {
   template?: string;
   /** The one space it lives in: it cannot be added to another. */
   madeIn: string;
+  /**
+   * For a copy of a published app (docs/center.md): the listing it came
+   * from, missing once that is unpublished, and whether it is still as it
+   * was shared.
+   */
+  copy?: { listingId?: string; untouched: boolean };
 };
 
 export type Registry = {

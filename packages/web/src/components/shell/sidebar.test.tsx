@@ -91,6 +91,27 @@ describe("the sidebar", () => {
     expect(current(within(sidebar()).getByRole("link", { name: "Apps" }))).toBe(false);
   });
 
+  it("leads to the app center, and the phone's Apps tab stays lit there", () => {
+    renderShell();
+    const tabs = () => screen.getByRole("navigation", { name: "Tabs" });
+    const center = within(sidebar()).getByRole("link", { name: "App center" });
+    expect(center.getAttribute("href")).toBe("/center");
+    expect(current(within(tabs()).getByRole("link", { name: "Apps" }))).toBe(false);
+
+    fireEvent.click(center);
+    expect(screen.getByTestId("where").textContent).toBe("/center");
+    expect(current(within(sidebar()).getByRole("link", { name: "App center" }))).toBe(true);
+    expect(current(within(sidebar()).getByRole("link", { name: "Apps" }))).toBe(false);
+    // No fifth tab: the center is reached from the Apps page, and Apps is lit while it is open.
+    expect(within(tabs()).getAllByRole("link").map((link) => link.textContent)).toEqual(["Home", "Apps", "Me"]);
+    expect(current(within(tabs()).getByRole("link", { name: "Apps" }))).toBe(true);
+
+    fireEvent.click(within(tabs()).getByRole("link", { name: "Home" }));
+    expect(current(within(tabs()).getByRole("link", { name: "Apps" }))).toBe(false);
+    fireEvent.click(within(sidebar()).getByRole("link", { name: "Grocery" }));
+    expect(current(within(tabs()).getByRole("link", { name: "Apps" }))).toBe(true);
+  });
+
   it("says a space has no apps only when it has none switched on", () => {
     renderShell();
     const section = (name: string) => within(sidebar()).getByRole("region", { name });
@@ -111,6 +132,7 @@ describe("the sidebar", () => {
     renderShell({ ...session, user: { ...session.user, locale: "zh" } });
     const nav = screen.getByRole("navigation", { name: "主导航" });
     expect(within(nav).getByRole("link", { name: "应用" }).getAttribute("href")).toBe("/apps");
+    expect(within(nav).getByRole("link", { name: "应用中心" }).getAttribute("href")).toBe("/center");
     expect(within(within(nav).getByRole("region", { name: "Work" })).getByText("还没有应用")).toBeTruthy();
   });
 });

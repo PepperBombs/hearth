@@ -28,7 +28,16 @@ Notes for whoever changes this part, people and agents alike. They are read when
   test sets one), their conversations in each space (`chats`: listed, read
   and deleted, 404 for a space or conversation not theirs) and
   `POST /api/chat`, whose made-up model answers "Noted: " and the message,
-  keeping both and recording the request in `chatRequests`. The person's
+  keeping both and recording the request in `chatRequests`. It lists the
+  app center from `center` (none unless a test sets some, checked against
+  the contract) and unpublishes with `DELETE /api/center/:id` (404 when
+  unknown, 403 without `canUnpublish`), recording the path in
+  `centerChanges`. `POST .../center/:id` adds a new copy (`m-copy-1`, …)
+  with the listing's `source`, recorded in `appChanges`; bringing back a
+  removed copy is left to the real server. An app's publish dialog reads
+  `publishReview` (404 while it is null, for any app); `POST .../publish`
+  to one of its groups answers revision 1 there, or one more than its
+  listing's, and is recorded in `publishes`. The person's
   answer to a request of the model's to delete
   (`POST .../confirmations/:id`) is recorded in `confirmationRequests` and
   kept in that request's entry of `chats`, so a reload shows it; a test
@@ -70,15 +79,23 @@ Notes for whoever changes this part, people and agents alike. They are read when
   "delete " and a text, to which it reads the rows of every app the system
   prompt lists (`list_rows`), asks to delete the first row one of whose
   fields is that text (`delete_rows`) and says "Asked before deleting "
-  and the text. A test may save any OpenAI-compatible model
+  and the text. To "make " and a name it makes an app of that name
+  (`create_app`, a ledger whose page lists its `entries`) and says "Made "
+  and the name; to "Change “<name>”: call it <new name>", the chat link of
+  a copy finished by the person, it renames the app the system prompt lists
+  under that name (`read_app`, then `update_app`) and says "Renamed <name>
+  to <new name>". A test may save any OpenAI-compatible model
   in Settings (`https://api.example.com/v1`, a made-up key): nothing reaches
   that host.
 - The tests against the real server are `real-server.spec.ts`,
-  `chat-history.spec.ts` and `deleting.spec.ts` (`REAL_SERVER_TESTS`); they
+  `chat-history.spec.ts`, `deleting.spec.ts` and `center.spec.ts`
+  (`REAL_SERVER_TESTS`); they
   share the owner's preferences, model and spaces, so the "server" project runs them in one
   worker, one file after another. A test there that changes the owner's
   model, the assistant's switch of a space or its conversations puts them
-  back when it ends.
+  back when it ends. A made app's page draws what it read when it opened:
+  a row written through the API after that shows once the page is
+  reloaded, since `hearth.onChange` answers changes made in this browser.
 - Playwright's `serviceWorkers: "block"` (the default in `playwright.config.ts`) runs a script in every frame that reads `navigator.serviceWorker`, which a made app's sandboxed frame refuses with a page error. A test that draws a made app and collects page errors allows service workers (`test.use({ serviceWorkers: "allow" })`), so that every error it collects is a real one.
 - A made app's page lives in an iframe: reach it with `sandbox(page, appId)` (`e2e/fixtures.ts`), which is `page.frameLocator('iframe[data-made-app="<id>"]')`. A grocery card keeps only what is still to buy, so an item ticked there leaves it, at once when nothing else is left and before its tick is saved: read the server's rows after it with `expect.poll`.
 - A fetch of an app's page that the server answers with an error, such as a 502 for a host that failed, is logged by the browser as a console error ("Failed to load resource"): a test that collects console errors expects that line.

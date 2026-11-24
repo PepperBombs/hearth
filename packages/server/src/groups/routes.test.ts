@@ -436,7 +436,7 @@ describe("leaving a group nobody else is in", () => {
   const rowsIn = (table: string, spaceId: string) =>
     (world.db.prepare(`SELECT count(*) AS n FROM ${table} WHERE space_id = ?`).get(spaceId) as { n: number }).n;
 
-  /** One app's rows, settings, exception, switch, job and a conversation about it with a waiting request. */
+  /** One app's rows, settings, exception, switch, job, a conversation about it with a waiting request, and its listing in the app center. */
   function fill(spaceId: string, appId: string, userId: string, key: string) {
     const db = world.db;
     grant(db, spaceId, appId, userId, "edit", userId);
@@ -467,6 +467,12 @@ describe("leaving a group nobody else is in", () => {
       `INSERT INTO chat_confirmations (id, chat_id, space_id, user_id, app_id, collection, row_ids, status, created_at)
        VALUES (?, ?, ?, ?, ?, 'items', ?, 'pending', ?)`,
     ).run(`confirm-${key}`, `chat-${key}`, spaceId, userId, appId, JSON.stringify([`row-${key}`]), NOW);
+    // The app published to the space (docs/center.md), once per app, whoever fills it again.
+    db.prepare(
+      `INSERT OR IGNORE INTO published_apps
+         (id, space_id, created_by, source_space_id, source_app_id, manifest, html, hash, revision, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, '{}', '<p>Sample</p>', 'sample', 1, '', ?, ?)`,
+    ).run(`p-${key}`, spaceId, userId, spaceId, appId, NOW, NOW);
   }
 
   beforeEach(async () => {

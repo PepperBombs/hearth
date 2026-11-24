@@ -29,7 +29,7 @@ import {
  *   a failure. This is where almost every test lives.
  *
  * - "server" runs the few tests in e2e/real-server.spec.ts,
- *   e2e/chat-history.spec.ts and e2e/deleting.spec.ts against the real
+ *   e2e/chat-history.spec.ts, e2e/deleting.spec.ts and e2e/center.spec.ts against the real
  *   server, built and started here with sign-in switched off
  *   (HEARTH_AUTH=dev), serving the same built web app. Three copies run: one that treats every
  *   request as the owner, one as a member of the owner's family and one as a
@@ -48,7 +48,7 @@ import {
 const reuseExistingServer = !process.env.CI;
 
 /** The tests that run against the real server. */
-const REAL_SERVER_TESTS = /(real-server|chat-history|deleting)\.spec\.ts$/;
+const REAL_SERVER_TESTS = /(real-server|chat-history|deleting|center)\.spec\.ts$/;
 
 export default defineConfig({
   testDir: "./e2e",

@@ -131,6 +131,29 @@ export function listSpacesForUser(db: Db, userId: string): Space[] {
   }));
 }
 
+/**
+ * The email addresses a person may already see: their own, and those of the
+ * members of every space they own (`listMemberDetails` shows those to owners
+ * alone). These are the people whose addresses a model is likely to have
+ * written into an app of theirs, which publishing refuses (docs/center.md).
+ * Nobody else's: the check says where an address is, so it would tell a
+ * plain member the address of a fellow member, which Hearth never shows
+ * them, and a check against every address would tell anyone who is on the
+ * server.
+ */
+export function emailsAround(db: Db, userId: string): string[] {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT u.email
+         FROM space_members mine
+         JOIN space_members m ON m.space_id = mine.space_id
+         JOIN users u ON u.id = m.user_id
+        WHERE mine.user_id = ? AND (m.user_id = mine.user_id OR mine.role = 'owner')`,
+    )
+    .all(userId) as { email: string }[];
+  return rows.map((row) => row.email);
+}
+
 /** A person's place in one space, and what kind of space it is. */
 export type Membership = { role: SpaceRole; canAddApps: 0 | 1; kind: SpaceKind };
 

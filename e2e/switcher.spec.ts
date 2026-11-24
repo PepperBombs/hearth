@@ -11,7 +11,7 @@ test.describe("quick switcher", () => {
     await expect(dialog).toBeVisible();
     const input = dialog.getByRole("combobox");
     await expect(input).toBeFocused();
-    await expect(dialog.getByRole("option")).toHaveText([/Dashboard/, /Apps/, /Settings/, /Switch to dark mode/, /Use the device theme/, /中文/]);
+    await expect(dialog.getByRole("option")).toHaveText([/Dashboard/, /Apps/, /App center/, /Settings/, /Switch to dark mode/, /Use the device theme/, /中文/]);
 
     await page.keyboard.type("sett");
     await expect(dialog.getByRole("option")).toHaveText([/Settings/]);
@@ -158,7 +158,8 @@ test.describe("quick switcher", () => {
     await page.keyboard.press("Control+K");
     await expect(page.getByRole("dialog", { name: "快速切换" }).getByRole("option")).toHaveText([
       /仪表盘/,
-      /应用/,
+      /^应用打开/,
+      /应用中心/,
       /设置/,
       /切换到浅色模式/,
       /主题跟随系统/,

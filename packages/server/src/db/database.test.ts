@@ -65,6 +65,7 @@ describe("migrate", () => {
       "made_app_versions",
       "made_apps",
       "migrations",
+      "published_apps",
       "space_apps",
       "space_invitations",
       "space_members",

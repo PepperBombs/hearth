@@ -15,6 +15,9 @@
  *   restart. In a group the person adding is asked who else may use it,
  *   "only me for now" first (owner's decision 1). Moving an app into a
  *   group asks the same.
+ * - "App center" in the header, and "More apps in the app center" in the Add
+ *   dialog and where it says there is nothing to add, lead to the apps
+ *   published to the person's groups (docs/center.md).
  * - A built-in app the space had and removed kept its data, and adding it
  *   again brings that back (owner's decision 2). Only an owner can, and for
  *   an owner the dialog reads the owners' list first and says so, with how
@@ -32,11 +35,12 @@
  *   entries go and that it cannot be undone; the server checks the name
  *   again. The model in the chat never deletes an app.
  */
-import { ArchiveRestore, ArrowRightLeft, ChevronRight, LayoutGrid, Pin, Plus, RefreshCw, Trash2, UserRound, Users } from "lucide-react";
+import { ArchiveRestore, ArrowRightLeft, ChevronRight, LayoutGrid, Pin, Plus, RefreshCw, Store, Trash2, UserRound, Users } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router";
 import type { AppSummary, CatalogApp, InstalledApp, Localized, MemberAccess, Space } from "@hearth/shared";
-import { Button, Dialog, DialogBody, EmptyState, IconButton, Input, Row, Rows, Switch, Tag } from "@hearth/sdk/web";
+import { Button, Dialog, DialogBody, EmptyState, IconButton, Input, Row, Rows, Switch, Tag, buttonClass } from "@hearth/sdk/web";
+import { CHOICE, RADIO, WhoCanUse } from "../apps/add-parts";
 import { useSpaceApps } from "../groups/queries";
 import {
   AppSettingsButton,
@@ -80,7 +84,16 @@ export function Apps() {
   ];
 
   return (
-    <Page title={t("apps.title")}>
+    <Page
+      title={t("apps.title")}
+      actions={
+        // The other way to get an app, besides the chat: the apps published to the person's groups (docs/center.md).
+        <Link to="/center" className={buttonClass({ size: "sm" })}>
+          <Store size={14} aria-hidden="true" />
+          {t("nav.center")}
+        </Link>
+      }
+    >
       <div className="flex max-w-[760px] flex-col gap-4">
         {session.apps.length === 0 ? (
           <Card className="min-h-[200px] justify-center">
@@ -308,10 +321,14 @@ function MoveForm({ app, from, targets, onClose, onMoved, title }: MoveDialogPro
   const { t } = useI18n();
   const name = useId();
   const move = useMoveApp();
-  const [chosenId, setChosenId] = useState(targets[0]?.id ?? "");
+  // A copy nobody changed stays where it was shared: never into a group (docs/center.md, decision 3).
+  // Those groups are shown, turned off, with why and what to do instead.
+  const closed = (space: Space) => space.kind === "group" && app.source?.untouched === true;
+  const open = targets.filter((space) => !closed(space));
+  const [chosenId, setChosenId] = useState(open[0]?.id ?? "");
   const [memberAccess, setMemberAccess] = useState<MemberAccess>("none");
   // The session is loaded again while the dialog is open; a space it no longer offers is not chosen.
-  const chosen = targets.find((space) => space.id === chosenId) ?? targets[0];
+  const chosen = open.find((space) => space.id === chosenId) ?? open[0];
   const group = chosen?.kind === "group";
 
   const submit = (event: FormEvent) => {
@@ -341,10 +358,11 @@ function MoveForm({ app, from, targets, onClose, onMoved, title }: MoveDialogPro
           <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("apps.moveTo")}</legend>
           {targets.map((space) => {
             const personal = space.kind === "personal";
+            const off = closed(space);
             return (
               <label
                 key={space.id}
-                className="flex min-w-0 cursor-pointer items-center gap-2.5 rounded-ctl border border-line px-2.5 py-2 has-checked:border-accent has-checked:bg-accent-soft"
+                className={cx(CHOICE, off && "opacity-60")}
               >
                 <input
                   type="radio"
@@ -352,6 +370,7 @@ function MoveForm({ app, from, targets, onClose, onMoved, title }: MoveDialogPro
                   value={space.id}
                   className={RADIO}
                   checked={chosen?.id === space.id}
+                  disabled={off}
                   onChange={() => setChosenId(space.id)}
                 />
                 {personal ? (
@@ -361,30 +380,21 @@ function MoveForm({ app, from, targets, onClose, onMoved, title }: MoveDialogPro
                 )}
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="clip font-medium">{personal ? t("nav.personal") : space.name}</span>
-                  <span className="text-xs text-fg-3">{personal ? t("apps.onlyYou") : t("apps.shared")}</span>
+                  <span className="text-xs text-fg-3">
+                    {off ? t("apps.moveCopyClosed") : personal ? t("apps.onlyYou") : t("apps.shared")}
+                  </span>
                 </span>
               </label>
             );
           })}
         </fieldset>
+        {open.length < targets.length ? (
+          <p className="text-fg-2">
+            <LinkedText text={t("apps.moveCopyStays")} to="/center" />
+          </p>
+        ) : null}
         {group ? (
-          <fieldset className="flex min-w-0 flex-col gap-1.5">
-            <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("apps.addWho")}</legend>
-            {ACCESS_CHOICES.map((choice) => (
-              <label key={choice.value} className="flex min-h-7 cursor-pointer items-center gap-2.5 max-md:min-h-11">
-                <input
-                  type="radio"
-                  name={`${name}-access`}
-                  value={choice.value}
-                  className={RADIO}
-                  checked={memberAccess === choice.value}
-                  onChange={() => setMemberAccess(choice.value)}
-                />
-                <span>{t(choice.label)}</span>
-              </label>
-            ))}
-            <p className="text-xs text-fg-3">{t("apps.addWhoHint")}</p>
-          </fieldset>
+          <WhoCanUse name={name} value={memberAccess} onChange={setMemberAccess} />
         ) : null}
         <p className="text-fg-2">{t("apps.moveBody")}</p>
         {from.kind === "group" ? <p className="text-fg-2">{t("apps.moveOthers")}</p> : null}
@@ -605,23 +615,7 @@ function BringBackForm({ space, entry, onClose, onBack, title }: BringBackProps 
         <h2 className="text-md font-semibold">{title}</h2>
         <p className="text-fg-2">{comes}</p>
         {group ? (
-          <fieldset className="flex min-w-0 flex-col gap-1.5">
-            <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("apps.addWho")}</legend>
-            {ACCESS_CHOICES.map((choice) => (
-              <label key={choice.value} className="flex min-h-7 cursor-pointer items-center gap-2.5 max-md:min-h-11">
-                <input
-                  type="radio"
-                  name={`${name}-access`}
-                  value={choice.value}
-                  className={RADIO}
-                  checked={memberAccess === choice.value}
-                  onChange={() => setMemberAccess(choice.value)}
-                />
-                <span>{t(choice.label)}</span>
-              </label>
-            ))}
-            <p className="text-xs text-fg-3">{t("apps.addWhoHint")}</p>
-          </fieldset>
+          <WhoCanUse name={name} value={memberAccess} onChange={setMemberAccess} />
         ) : null}
         {failure ? (
           <p role="status" className="text-xs text-down">
@@ -815,21 +809,18 @@ function AddApp({ space }: { space: Space }) {
           </Button>
         </div>
       ) : none ? (
-        <p className="text-xs text-fg-3">
-          <LinkedText text={t(none)} to="/chat" />
-        </p>
+        <div className="flex flex-col gap-1 text-xs text-fg-3">
+          <p>
+            <LinkedText text={t(none)} to="/chat" />
+          </p>
+          <p>
+            <LinkedText text={t("apps.moreInCenter")} to="/center" />
+          </p>
+        </div>
       ) : null}
     </CardFooter>
   );
 }
-
-const ACCESS_CHOICES: ReadonlyArray<{ value: MemberAccess; label: PlainMessageKey }> = [
-  { value: "none", label: "apps.accessNone" },
-  { value: "view", label: "apps.accessView" },
-  { value: "edit", label: "apps.accessEdit" },
-];
-
-const RADIO = "size-4 flex-none accent-accent";
 
 function AddAppDialog(props: { space: Space; addable: CatalogApp[]; open: boolean; onClose: () => void }) {
   const { t } = useI18n();
@@ -899,7 +890,7 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
             return (
               <label
                 key={app.id}
-                className="flex min-w-0 cursor-pointer items-center gap-2.5 rounded-ctl border border-line px-2.5 py-2 has-checked:border-accent has-checked:bg-accent-soft"
+                className={CHOICE}
               >
                 <input
                   type="radio"
@@ -924,24 +915,11 @@ function AddAppForm({ space, addable, onClose, title }: { space: Space; addable:
             );
           })}
         </fieldset>
+        <p className="text-xs text-fg-3">
+          <LinkedText text={t("apps.moreInCenter")} to="/center" />
+        </p>
         {group ? (
-          <fieldset className="flex min-w-0 flex-col gap-1.5">
-            <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("apps.addWho")}</legend>
-            {ACCESS_CHOICES.map((choice) => (
-              <label key={choice.value} className="flex min-h-7 cursor-pointer items-center gap-2.5 max-md:min-h-11">
-                <input
-                  type="radio"
-                  name={`${name}-access`}
-                  value={choice.value}
-                  className={RADIO}
-                  checked={memberAccess === choice.value}
-                  onChange={() => setMemberAccess(choice.value)}
-                />
-                <span>{t(choice.label)}</span>
-              </label>
-            ))}
-            <p className="text-xs text-fg-3">{t("apps.addWhoHint")}</p>
-          </fieldset>
+          <WhoCanUse name={name} value={memberAccess} onChange={setMemberAccess} />
         ) : null}
         {owner && list.isError && !known ? (
           <div role="alert" className="flex flex-wrap items-center gap-2">

@@ -386,4 +386,46 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX chat_confirmations_of_app ON chat_confirmations (space_id, app_id, status);
     `,
   },
+  {
+    // The app center (docs/center.md): apps published to a group, and the copies made of them.
+    // The SQL about published_apps is in src/center/published.ts, the SQL about copies in
+    // src/made/apps.ts.
+    id: 10,
+    name: "published-apps",
+    sql: `
+      -- An app published to a group (docs/center.md): a snapshot of its manifest and page.
+      -- It goes when its publisher leaves the group or is removed from it, and when
+      -- the group is deleted, by the key to space_members, as chats do.
+      CREATE TABLE published_apps (
+        id              TEXT PRIMARY KEY,              -- 'p-' and 10 of [a-z0-9]
+        space_id        TEXT NOT NULL,                 -- the group it is published to
+        created_by      TEXT NOT NULL,                 -- the publisher
+        source_space_id TEXT NOT NULL,                 -- where it was last published from, no key:
+        source_app_id   TEXT NOT NULL,                 --   the source may move or go
+        manifest        TEXT NOT NULL CHECK (json_valid(manifest)),
+        html            TEXT NOT NULL,
+        hash            TEXT NOT NULL,                 -- templateHash(manifest, html)
+        revision        INTEGER NOT NULL CHECK (revision >= 1),
+        note            TEXT NOT NULL CHECK (length(note) <= 200),   -- what changed, '' for none
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        -- A made app's ID is unique on the server and kept when it moves, so one app has one
+        -- listing per group, wherever it lives now.
+        UNIQUE (space_id, source_app_id),
+        FOREIGN KEY (space_id, created_by) REFERENCES space_members (space_id, user_id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE INDEX published_apps_of_source ON published_apps (source_app_id);
+
+      -- The published app a made app was copied from, NULL once it is unpublished.
+      ALTER TABLE made_apps ADD COLUMN origin TEXT REFERENCES published_apps (id) ON DELETE SET NULL;
+      -- So that unpublishing finds the copies to set NULL without reading every made app.
+      CREATE INDEX made_apps_by_origin ON made_apps (origin);
+      -- The hash of the snapshot it was copied from (or last updated to). It stays when the
+      -- listing goes, so a copy is still known as one.
+      ALTER TABLE made_apps ADD COLUMN origin_hash TEXT;
+      -- The revision it was copied from (or last updated to).
+      ALTER TABLE made_apps ADD COLUMN origin_revision INTEGER;
+    `,
+  },
 ];
