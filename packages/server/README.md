@@ -169,7 +169,7 @@ app.
 | `PATCH /api/spaces/:spaceId` | yes | Renames a group: `{ name? }`. Owners only. Answers `204`. |
 | `POST /api/spaces/:spaceId/members` | yes | Adds someone by address: `{ email, role?, canAddApps? }`. Answers `{ outcome: "added" }` for someone on the server, `{ outcome: "invited" }` for anyone else. Owners only. |
 | `PATCH /api/spaces/:spaceId/members/:userId` | yes | A member's `role` or `canAddApps`. Owners only. Answers `204`. |
-| `DELETE /api/spaces/:spaceId/members/:userId` | yes | Removes a member: an owner removing anyone, or anyone leaving. Answers `204`. |
+| `DELETE /api/spaces/:spaceId/members/:userId` | yes | Removes a member: an owner removing anyone, or anyone leaving. Takes an optional `{ confirm }`: when the caller is the group's only member, leaving deletes the group, and `confirm` must be its name (trimmed), else `409` `confirm_required`. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/invitations` | yes | Takes back an invitation: `{ email }`. Owners only. Answers `204`. |
 | `GET /api/spaces/:spaceId/apps` | yes | The owners' list: every app the space has (removed ones and those the server holds no app for included) with its row count, what members get, the exceptions and `assistant`, whether an assistant may use it here, and for an app the server holds its `name` in both languages, `icon` and `color`, so that a removed one can be drawn; everyone in the space with their address and right to add apps; the invitations. Owners only. |
 | `PUT /api/spaces/:spaceId/apps/:appId/access` | yes | Who can use the app: `{ memberAccess?, members?, assistant? }`, exceptions by user ID, `null` removing one; `assistant: false` leaves the app out of what an assistant may use in the space. Owners only. Answers `204`. |
@@ -487,6 +487,18 @@ immediate transaction.
   `normaliseEmail`.
 - A group keeps at least one owner: the database refuses to remove or
   demote the last one, and that is answered with `409`.
+- Its only member may leave, which deletes the group for good
+  (`deleteGroup`): its apps' rows, settings, versions, access, switches and
+  pins, everyone's conversations there, and its pending invitations (an
+  address whose last invitation that was is no longer let onto the server).
+  The request must carry `{ confirm }`, the group's name, trimmed and case
+  for case; without it, or with another text, `409` `confirm_required`, and
+  nothing changes. `400` for a body that is not that shape. Someone leaving
+  who sends a name while anyone else is in the group (someone joined since
+  they were told leaving deletes it) gets `409` `conflict`, and nothing
+  changes: a deletion they confirmed never becomes a plain leave.
+- The session tells a group's owners how many invitations it has pending
+  (`pendingInvitations`); members and personal spaces get none.
 - Removing someone deletes their exceptions, switches, pins and own
   settings in the group's apps (the database cascades). The rows they
   wrote stay: they belong to the group.

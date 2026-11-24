@@ -99,6 +99,12 @@ export const spaceSchema = z.object({
    * "The chat").
    */
   assistant: memberAccessSchema,
+  /**
+   * How many people are invited to the group and have not arrived yet. Only
+   * for a group's owners, who see who they are; left out for a member and
+   * for a personal space.
+   */
+  pendingInvitations: z.number().int().nonnegative().optional(),
 });
 export type Space = z.infer<typeof spaceSchema>;
 
@@ -178,6 +184,11 @@ export const API_ERROR_CODES = [
   "not_found",
   /** The request is well formed but cannot be carried out as things stand, for example moving an app to a space that already has it. */
   "conflict",
+  /**
+   * Leaving a group whose only member is the person leaving deletes the
+   * group, and the request did not carry its name to confirm that.
+   */
+  "confirm_required",
   "internal",
 ] as const;
 export const apiErrorSchema = z.object({
@@ -265,13 +276,36 @@ export type AddMemberResponse = z.infer<typeof addMemberResponseSchema>;
  * owner. Answers 204 with no body.
  *
  * DELETE on the same address (an owner, or the member themselves, which is
- * leaving the group) has no body and answers 204. The last owner cannot be
- * removed or leave (409 `conflict`), and nobody leaves their personal space.
+ * leaving the group) answers 204 with no body; see `leaveGroupRequestSchema`
+ * for its body.
  */
 export const memberPatchSchema = z
   .strictObject({ role: spaceRoleSchema, canAddApps: z.boolean() })
   .partial();
 export type MemberPatch = z.infer<typeof memberPatchSchema>;
+
+/**
+ * DELETE /api/spaces/:spaceId/members/:userId: remove a member, or leave
+ * (the address names the person asking). The body may be left out.
+ *
+ * - The last owner cannot be removed, nor leave while anyone else is in the
+ *   group (409 `conflict`): someone else must be made an owner first.
+ * - Nobody leaves their personal space (409 `conflict`).
+ * - When the person leaving is the group's only member, leaving deletes the
+ *   group for good, with everything in it: its apps with their rows,
+ *   settings and versions, everyone's conversations there, and its pending
+ *   invitations (an address whose last invitation that was is no longer let
+ *   onto the server). `confirm` must then be the group's name as the
+ *   session gives it; spaces around either do not count. Without it, or
+ *   with another text, the answer is 409 `confirm_required` and nothing
+ *   changes.
+ * - Someone leaving who sends a `confirm` that is not empty, while anyone
+ *   else is in the group, is refused (409 `conflict`) and nothing changes:
+ *   they were told leaving deletes the group, and someone has joined since.
+ *   Removing someone else ignores `confirm`.
+ */
+export const leaveGroupRequestSchema = z.strictObject({ confirm: z.string().max(200).optional() });
+export type LeaveGroupRequest = z.infer<typeof leaveGroupRequestSchema>;
 
 /**
  * DELETE /api/spaces/:spaceId/invitations: take back the invitation of

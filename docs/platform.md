@@ -185,7 +185,9 @@ The owner chose this in November 2026, as recommended.
   A message is up to 20,000 characters.
 - **Deleting.** Only the person deletes a conversation, after a
   confirmation; what the model made stays. A person's conversations in a
-  space also go when they leave it or are removed from it.
+  space also go when they leave it or are removed from it, and when the
+  group goes: its only member leaving deletes it, with everything in it,
+  after typing its name.
 - **One at a time.** A conversation answers one message at a time: a
   second, from another window or tab, is refused while the first runs. A
   conversation deleted while it answers stops at its next step, and

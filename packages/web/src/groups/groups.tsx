@@ -7,15 +7,18 @@
  * A group's card shows its people to everyone in it. Its owners also rename
  * it, add people and manage them (./people.tsx), and decide who can use
  * each app (./access-table.tsx). Anyone may leave a group; its last owner
- * cannot, so that a group always keeps one (owner's decision 3).
+ * cannot while others are in it, so that a group always keeps one (owner's
+ * decision 3). Its only member can: leaving then deletes the group and
+ * everything in it, once they have typed its name.
  */
 import { createSpaceRequestSchema, spacePatchSchema, type Space } from "@hearth/shared";
 import { Button, Dialog, DialogBody, Field, Input } from "@hearth/sdk/web";
 import { LogOut, Plus, RefreshCw, Users } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { Card, CardFooter, CardHeader } from "../components/card";
 import { LinkedText } from "../components/linked-text";
 import { failureCode } from "../session/api";
+import type { PlainMessageKey } from "../i18n";
 import { useI18n } from "../session/preferences";
 import { useSession } from "../session/session";
 import { AccessTable } from "./access-table";
@@ -23,33 +26,52 @@ import { createGroup, removeMember, renameGroup } from "./api";
 import { People } from "./people";
 import { useGroupChange, useSpaceApps } from "./queries";
 
+/** What the Groups card says after a group was created, or deleted by its only member leaving. */
+type GroupsNotice = { kind: "created" | "deleted"; group: string };
+
 export function GroupsSection() {
   const session = useSession();
   const groups = session.spaces.filter((space) => space.kind === "group");
+  const [notice, setNotice] = useState<GroupsNotice | null>(null);
   return (
     <>
       {groups.map((space) => (
-        <GroupCard key={space.id} space={space} />
+        <GroupCard key={space.id} space={space} onDeleted={() => setNotice({ kind: "deleted", group: space.name })} />
       ))}
-      {session.canCreateGroups || groups.length === 0 ? <GroupsCard canCreate={session.canCreateGroups} /> : null}
+      {session.canCreateGroups || groups.length === 0 || notice?.kind === "deleted" ? (
+        <GroupsCard canCreate={session.canCreateGroups} notice={notice} onCreated={(space) => setNotice({ kind: "created", group: space.name })} />
+      ) : null}
     </>
   );
 }
 
-/** What a group is, and for those the server lets, the button that creates one. */
-function GroupsCard({ canCreate }: { canCreate: boolean }) {
+/**
+ * What a group is, and for those the server lets, the button that creates
+ * one. It also says which group was just created or deleted; a deleted
+ * group's card is gone with the dialog that deleted it, so the note takes
+ * the focus.
+ */
+function GroupsCard({ canCreate, notice, onCreated }: { canCreate: boolean; notice: GroupsNotice | null; onCreated: (space: Space) => void }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  const [created, setCreated] = useState<string | null>(null);
+  const deletedNote = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (notice?.kind === "deleted") deletedNote.current?.focus();
+  }, [notice]);
   return (
     <Card aria-label={t("groups.title")}>
       <CardHeader icon={<Users size={16} aria-hidden="true" />} title={t("groups.title")} />
       <p className="text-fg-2">{canCreate ? t("groups.intro") : t("groups.introNone")}</p>
+      {notice?.kind === "deleted" ? (
+        <p ref={deletedNote} tabIndex={-1} role="status" className="text-xs text-fg-2 [overflow-wrap:anywhere] focus:outline-none">
+          {t("groups.deleted", { group: notice.group })}
+        </p>
+      ) : null}
       {canCreate ? (
         <CardFooter className="flex flex-col items-start gap-2">
-          {created ? (
-            <p role="status" className="text-xs text-fg-2">
-              {t("groups.created", { group: created })}
+          {notice?.kind === "created" ? (
+            <p role="status" className="text-xs text-fg-2 [overflow-wrap:anywhere]">
+              {t("groups.created", { group: notice.group })}
             </p>
           ) : null}
           <Button size="sm" aria-haspopup="dialog" onClick={() => setOpen(true)}>
@@ -57,7 +79,7 @@ function GroupsCard({ canCreate }: { canCreate: boolean }) {
             {t("groups.create")}
           </Button>
           <Dialog open={open} onClose={() => setOpen(false)} label={t("groups.create")}>
-            <CreateGroupForm onClose={() => setOpen(false)} onCreated={(space) => setCreated(space.name)} />
+            <CreateGroupForm onClose={() => setOpen(false)} onCreated={onCreated} />
           </Dialog>
         </CardFooter>
       ) : null}
@@ -109,7 +131,7 @@ function CreateGroupForm({ onClose, onCreated }: { onClose: () => void; onCreate
   );
 }
 
-function GroupCard({ space }: { space: Space }) {
+function GroupCard({ space, onDeleted }: { space: Space; onDeleted: () => void }) {
   const { t } = useI18n();
   const owner = space.role === "owner";
   const list = useSpaceApps(space);
@@ -148,7 +170,7 @@ function GroupCard({ space }: { space: Space }) {
             </div>
           )
         ) : null}
-        <LeaveGroup space={space} />
+        <LeaveGroup space={space} onDeleted={onDeleted} />
       </div>
     </Card>
   );
@@ -221,18 +243,45 @@ function GroupName({ space }: { space: Space }) {
   );
 }
 
-/** Leaving, after asking. The group's last owner is told to make someone else an owner first. */
-function LeaveGroup({ space }: { space: Space }) {
+/**
+ * Leaving, after asking. The group's last owner is told to make someone else
+ * an owner first. Its only member may leave too, which deletes the group:
+ * the dialog then says what goes and wants the group's name typed.
+ *
+ * The session is not loaded again on its own, so the dialog can open in the
+ * wrong one of its two forms: someone joined, or everyone else left. The
+ * server then refuses, the session is loaded again, and the dialog changes
+ * form in place: the earlier refusal is dropped, which named a mistake the
+ * person did not make, and a note says what changed.
+ */
+function LeaveGroup({ space, onDeleted }: { space: Space; onDeleted: () => void }) {
   const { t } = useI18n();
   const session = useSession();
   const [open, setOpen] = useState(false);
-  const leave = useGroupChange(space.id, () => removeMember(space.id, session.user.id));
-  const title = t("groups.leaveTitle", { group: space.name });
+  // Whoever is alone in a group is its owner: the server keeps one.
+  const alone = space.members.length === 1;
+  // Once the group is deleted its owners' list answers 404: only the session is loaded again then.
+  const leave = useGroupChange(alone ? null : space.id, (confirm: string | undefined) =>
+    removeMember(space.id, session.user.id, confirm === undefined ? undefined : { confirm }),
+  );
+  const [changed, setChanged] = useState<PlainMessageKey | null>(null);
+  const wasAlone = useRef(alone);
+  // Before the screen is drawn, so that the refusal never shows under the other form.
+  useLayoutEffect(() => {
+    if (wasAlone.current === alone) return;
+    wasAlone.current = alone;
+    // Also detaches a request still settling, whose refusal would otherwise arrive after this.
+    leave.reset();
+    setChanged(open ? (alone ? "groups.nowAlone" : "groups.notAlone") : null);
+    // Only a change of form counts; `leave` and `open` are read as they are then.
+  }, [alone]);
+  const title = alone ? t("groups.deleteTitle", { group: space.name }) : t("groups.leaveTitle", { group: space.name });
   const close = () => {
     leave.reset();
+    setChanged(null);
     setOpen(false);
   };
-  const problem = leave.error ? (failureCode(leave.error) === "conflict" ? t("groups.lastOwner") : t("groups.leaveFailed")) : null;
+  const leaveFailure = leave.error ? failureCode(leave.error) : null;
 
   return (
     <div className="flex border-t border-line pt-4">
@@ -241,22 +290,149 @@ function LeaveGroup({ space }: { space: Space }) {
         {t("groups.leave")}
       </Button>
       <Dialog open={open} onClose={close} label={title}>
-        <DialogBody>
-          <h2 className="text-md font-semibold">{title}</h2>
-          <p className="text-fg-2">{t("groups.leaveBody")}</p>
-          {problem ? (
-            <p role="status" className="text-xs text-down">
-              {problem}
-            </p>
-          ) : null}
-          <div className="flex justify-end gap-2">
-            <Button onClick={close}>{t("groups.cancel")}</Button>
-            <Button variant="primary" disabled={leave.isPending} onClick={() => leave.mutate(undefined, { onSuccess: close })}>
-              {t("groups.leaveConfirm")}
-            </Button>
-          </div>
-        </DialogBody>
+        {alone ? (
+          <DeleteGroupForm space={space} title={title} leave={leave} changed={changed} onClose={close} onDeleted={onDeleted} />
+        ) : (
+          <DialogBody>
+            <h2 className="text-md font-semibold [overflow-wrap:anywhere]">{title}</h2>
+            {changed ? (
+              <p role="status" className="font-medium text-fg">
+                {t(changed)}
+              </p>
+            ) : null}
+            <p className="text-fg-2">{t("groups.leaveBody")}</p>
+            {leaveFailure ? (
+              <p role="status" className="text-xs text-down">
+                {t(
+                  leaveFailure === "conflict"
+                    ? "groups.lastOwner"
+                    : leaveFailure === "confirm_required"
+                      ? "groups.nowAlone"
+                      : "groups.leaveFailed",
+                )}
+              </p>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <Button onClick={close}>{t("groups.cancel")}</Button>
+              <Button variant="primary" disabled={leave.isPending} onClick={() => leave.mutate(undefined, { onSuccess: close })}>
+                {t("groups.leaveConfirm")}
+              </Button>
+            </div>
+          </DialogBody>
+        )}
       </Dialog>
     </div>
+  );
+}
+
+type LeaveChange = ReturnType<typeof useGroupChange<string | undefined>>;
+
+/**
+ * The only member leaving, which deletes the group: says what goes with it
+ * (its apps, removed ones too, with all their data; the person's
+ * conversations there; its pending invitations) and that it cannot be
+ * undone, and wants the group's name typed. The server checks the name again.
+ * Mounted each time the dialog opens, so that the box starts empty.
+ */
+type DeleteGroupProps = {
+  space: Space;
+  title: string;
+  leave: LeaveChange;
+  /** Why the dialog changed to this form while open (`groups.nowAlone`), if it did. */
+  changed: PlainMessageKey | null;
+  onClose: () => void;
+  onDeleted: () => void;
+};
+
+function DeleteGroupForm({ space, title, leave, changed, onClose, onDeleted }: DeleteGroupProps) {
+  const { t } = useI18n();
+  const boxId = useId();
+  const list = useSpaceApps(space);
+  const [typed, setTyped] = useState("");
+  // How many apps go: the owners' list counts removed ones too. Until it is known, nothing is deleted.
+  const apps = list.data?.apps.length;
+  const invitations = space.pendingInvitations ?? 0;
+  const name = space.name.trim();
+  const matches = name !== "" && typed.trim() === name;
+  const ready = matches && apps !== undefined && !leave.isPending;
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!ready) return;
+    // Settles once the session is loaded again, which has taken the group's card, and this dialog, away.
+    leave.mutateAsync(typed.trim()).then(onDeleted, () => undefined);
+  };
+
+  const failure = leave.error ? failureCode(leave.error) : null;
+  const problem: PlainMessageKey | null =
+    failure === null
+      ? null
+      : failure === "confirm_required"
+        ? "groups.deleteMismatch"
+        : failure === "conflict"
+          ? // Sent with the name, this is refused only when someone else is in the group now.
+            "groups.notAlone"
+          : failure === "not_found"
+            ? "groups.deleteGone"
+            : "groups.deleteFailed";
+
+  return (
+    <form onSubmit={submit} className="flex max-h-[calc(100dvh-34px)] flex-col">
+      <DialogBody className="min-h-0 overflow-y-auto">
+        <h2 className="text-md font-semibold [overflow-wrap:anywhere]">{title}</h2>
+        {changed ? (
+          <p role="status" className="font-medium text-fg">
+            {t(changed)}
+          </p>
+        ) : null}
+        {apps !== undefined ? (
+          <div className="flex flex-col gap-2 text-fg-2">
+            <p>{t("groups.deleteIntro")}</p>
+            <ul className="list-disc pl-5">
+              {apps > 0 ? <li>{apps === 1 ? t("groups.deleteAppsOne") : t("groups.deleteAppsMany", { count: apps })}</li> : null}
+              <li>{t("groups.deleteChats")}</li>
+              {invitations > 0 ? (
+                <li>{invitations === 1 ? t("groups.deleteInvitationsOne") : t("groups.deleteInvitationsMany", { count: invitations })}</li>
+              ) : null}
+            </ul>
+            <p>{t("groups.deleteUndone")}</p>
+          </div>
+        ) : list.isError ? (
+          <div role="alert" className="flex flex-wrap items-center gap-2">
+            <p className="text-xs text-down">{t("groups.deleteCheckFailed")}</p>
+            <Button size="sm" onClick={() => void list.refetch()}>
+              <RefreshCw size={14} aria-hidden="true" />
+              {t("groups.retry")}
+            </Button>
+          </div>
+        ) : (
+          <p className="text-fg-3">{t("groups.deleteCounting")}</p>
+        )}
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={boxId} className="font-medium [overflow-wrap:anywhere]">
+            {t("groups.deleteType", { group: name })}
+          </label>
+          <Input
+            id={boxId}
+            value={typed}
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            onChange={(event) => setTyped(event.target.value)}
+          />
+        </div>
+        {problem ? (
+          <p role="status" className="text-xs text-down">
+            {t(problem)}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button onClick={onClose}>{t("groups.cancel")}</Button>
+          <Button type="submit" variant="danger" disabled={!ready}>
+            {t("groups.deleteConfirm")}
+          </Button>
+        </div>
+      </DialogBody>
+    </form>
   );
 }

@@ -18,7 +18,11 @@ Notes for whoever changes this part, people and agents alike. They are read when
   keeps the apps it removed, with their names, icons and colours: one drawn
   from the session until then is kept in `groups` from the first removal; it also keeps groups (the owners' list of each in
   `groups`, the people it knows in `people`, `ownAFamily` for a ready
-  family) and records their changes in `groupChanges`. The owners' list of
+  family) and records their changes in `groupChanges`. Its only member
+  leaving deletes a group, as the server does, once `confirm` is its name
+  (else 409 `confirm_required`), and anyone else leaving with a name gets
+  409 `conflict`; the session gives a group's owners
+  `pendingInvitations` from `groups`. The owners' list of
   a space it was given none for, a personal one included, is drawn from the
   session. For the chat it answers the person's model (`model`, null until a
   test sets one), their conversations in each space (`chats`: listed, read
@@ -34,9 +38,10 @@ Notes for whoever changes this part, people and agents alike. They are read when
   Deleting an app for good (`DELETE .../data`) wants its name, which the
   owners' list gives (`name.en`), not its ID.
   A test there that changes them puts them back, or works in a group of its
-  own, before it removes the app. Nothing deletes a space, so a group a test
-  creates stays for the tests after it: give it a name of its own and do not
-  count groups.
+  own, before it removes the app. A group a test creates stays for the tests
+  after it unless its only member leaves it, which deletes it with the typed
+  name (`deleting.spec.ts`): give it a name of its own and do not count
+  groups.
 - A phone test checks that nothing reaches past the screen's edge with
   `expectNothingPastTheEdge` (`e2e/fixtures.ts`), never with the document's
   width: the shell clips and the content area scrolls by itself, so the

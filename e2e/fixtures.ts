@@ -12,7 +12,9 @@
  * kept; removing an app, moving one to another space, and each person's
  * switch and pin. And it keeps groups: creating one, renaming it, adding,
  * changing and removing people, invitations, the owners' list of a group
- * and who can use each app (`groups`, `people`). The owners' list of a
+ * and who can use each app (`groups`, `people`), and its only member
+ * leaving it, which deletes it once its name is sent. The session tells a
+ * group's owners how many invitations it has pending. The owners' list of a
  * space no test set up, a personal one included, is drawn from the
  * session. The space's removed apps stay in it, with their names, icons
  * and entry counts, and are brought back or deleted for good there (after
@@ -41,6 +43,7 @@ import {
   confirmationResultSchema,
   createSpaceRequestSchema,
   deleteAppDataRequestSchema,
+  leaveGroupRequestSchema,
   memberPatchSchema,
   modelSettingsSchema,
   moveAppRequestSchema,
@@ -423,7 +426,7 @@ export class FakeApi {
     if (path === "/api/session" && method === "GET") {
       this.sessionRequests += 1;
       if (this.sessionFailure) return fail(this.sessionFailure);
-      return route.fulfill({ json: this.current });
+      return route.fulfill({ json: this.sessionWithCounts() });
     }
 
     if (path === "/api/me" && method === "PATCH") {
@@ -852,7 +855,17 @@ export class FakeApi {
       return {};
     }
     if (part === "members" && id && method === "DELETE") {
+      const parsed = leaveGroupRequestSchema.safeParse(body ?? {});
+      if (!parsed.success) return refuse(400, "invalid_request");
       if (!target) return refuse(404, "not_found");
+      // Its only member leaving deletes the group, once they have sent its name; spaces around it do not count.
+      if (target.id === me.id && space.members.length === 1) {
+        if (parsed.data.confirm?.trim() !== space.name.trim()) return refuse(409, "confirm_required");
+        this.deleteGroup(spaceId);
+        return {};
+      }
+      // A name sent by someone leaving asks to delete the group, which others are in now.
+      if (target.id === me.id && (parsed.data.confirm?.trim() ?? "") !== "") return refuse(409, "conflict");
       if (lastOwner) return refuse(409, "conflict");
       details.members = details.members.filter((member) => member.id !== target.id);
       changeSpace((members) => members.filter((member) => member.id !== target.id));
@@ -871,6 +884,36 @@ export class FakeApi {
       return {};
     }
     return refuse(404, "not_found");
+  }
+
+  /**
+   * The session as GET /api/session answers it: each group the person owns
+   * says how many invitations it has pending, from its owners' list, as the
+   * server tells owners alone.
+   */
+  private sessionWithCounts(): Session {
+    return {
+      ...this.current,
+      spaces: this.current.spaces.map((space) => {
+        const details = this.groups[space.id];
+        return space.kind === "group" && space.role === "owner" && details ? { ...space, pendingInvitations: details.invitations.length } : space;
+      }),
+    };
+  }
+
+  /** A group its only member left: it goes with everything in it, its apps, their settings, the person's conversations and its invitations. */
+  private deleteGroup(spaceId: string): void {
+    const apps = this.current.apps.filter((app) => app.spaceId === spaceId).map((app) => app.id);
+    delete this.groups[spaceId];
+    delete this.chats[spaceId];
+    for (const key of [...this.removedSummaries.keys()]) if (key.startsWith(`${spaceId}/`)) this.removedSummaries.delete(key);
+    // Settings are kept by app ID: those of an app no other space lists go with it.
+    for (const appId of apps) if (!this.current.apps.some((app) => app.id === appId && app.spaceId !== spaceId)) delete this.appSettings[appId];
+    this.setSession({
+      ...this.current,
+      spaces: this.current.spaces.filter((space) => space.id !== spaceId),
+      apps: this.current.apps.filter((app) => app.spaceId !== spaceId),
+    });
   }
 
   /** The owners' list of a space a test gave none: its apps as the session lists them, and its people. */

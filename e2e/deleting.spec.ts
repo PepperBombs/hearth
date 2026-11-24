@@ -7,8 +7,10 @@
  * so after a reload, and the model is told with the person's next message.
  * And on the Apps page an owner brings back an app the space removed, and
  * deletes another for good, after typing its name, with everything it held.
- * Each test works in a group of its own, which stays (nothing deletes a
- * space), and puts the owner's model back.
+ * And the only person in a group leaves it, after typing its name, which
+ * deletes the group with everything in it. Each test works in a group of its
+ * own and puts the owner's model back; the first two leave theirs, emptied,
+ * for the server's later tests.
  */
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
@@ -147,7 +149,7 @@ test("the model asks before it deletes: the owner confirms in the card and the e
     expect(await names()).toEqual([bread]);
     expect(problems).toEqual([]);
   } finally {
-    // The group stays (nothing deletes a space), without its app or conversations; the owner has no model again.
+    // The group stays, without its app or conversations; the owner has no model again.
     if (groupId) {
       for (const chat of ((await (await request.get(`/api/spaces/${groupId}/chats`)).json()) as { chats: { id: string }[] }).chats) {
         await request.delete(`/api/spaces/${groupId}/chats/${chat.id}`);
@@ -239,8 +241,67 @@ test("on the Apps page an owner brings back a removed app, and deletes apps for 
     expect(await rowsOf(request, groupId, again, "items")).toEqual([]);
     expect(problems).toEqual([]);
   } finally {
-    // The group stays (nothing deletes a space), with nothing in it.
+    // The group stays, with nothing in it.
     if (groupId) await deleteEveryApp(request, groupId);
   }
   expect((await sessionOf(request)).apps.filter((app) => app.spaceId === groupId)).toEqual([]);
+});
+
+test("the only person in a group leaves it once they have typed its name, and the group goes with everything in it", async ({ page, request }) => {
+  test.setTimeout(60_000);
+  const stamp = Date.now().toString(36);
+  const groupName = `Leaving ${stamp}`;
+  const problems = watchForProblems(page);
+  let groupId = "";
+
+  try {
+    // A group of the owner's alone, with the grocery list and an item on it, and someone invited who has not arrived.
+    groupId = await newGroup(request, groupName);
+    const appId = await addBuiltIn(request, groupId, "grocery");
+    expect((await request.post(`/api/spaces/${groupId}/apps/${appId}/rows/items`, { data: { data: { name: `Milk ${stamp}`, aisle: "", done: false } } })).status()).toBe(201);
+    expect((await request.post(`/api/spaces/${groupId}/members`, { data: { email: `invited-${stamp}@example.com` } })).status()).toBe(200);
+    const ownerId = ((await (await request.get("/api/session")).json()) as { user: { id: string } }).user.id;
+    const leave = `/api/spaces/${groupId}/members/${ownerId}`;
+
+    // The server wants the group's name, whatever the page does: without it, or with another, nothing goes.
+    for (const attempt of [await request.delete(leave), await request.delete(leave, { data: { confirm: groupName.toUpperCase() } })]) {
+      expect(attempt.status()).toBe(409);
+      expect(((await attempt.json()) as { error: { code: string } }).error.code).toBe("confirm_required");
+    }
+    expect((await request.delete(leave, { data: { confirm: groupName, also: true } })).status()).toBe(400);
+    expect(await rowsOf(request, groupId, appId, "items")).toHaveLength(1);
+    expect((await sessionOf(request)).spaces.map((space) => space.id)).toContain(groupId);
+
+    // In Settings, Leave asks to delete the group, says what goes, and wants its name typed.
+    await page.goto("/settings");
+    const card = page.getByRole("main").getByRole("region", { name: groupName });
+    await card.getByRole("button", { name: "Leave the group" }).click();
+    const dialog = page.getByRole("dialog", { name: `Leave and delete ${groupName}?` });
+    await expect(dialog.getByRole("listitem")).toHaveText(["its app, with all its data", "your conversations in it", "its pending invitation"]);
+    const confirm = dialog.getByRole("button", { name: "Leave and delete" });
+    await dialog.getByLabel(`Type “${groupName}” to confirm`).fill(groupName.slice(0, -1));
+    await expect(confirm).toBeDisabled();
+    await dialog.getByLabel(`Type “${groupName}” to confirm`).fill(groupName);
+    await confirm.click();
+    await expect(dialog).toBeHidden();
+    await expect(card).toHaveCount(0);
+    await expect(page.getByRole("main").getByRole("region", { name: "Groups" }).getByText(`${groupName} was deleted.`)).toBeFocused();
+
+    // Nothing of it is left: not in the session, and its owners' list and its rows are not there to read.
+    const now = await sessionOf(request);
+    expect(now.spaces.map((space) => space.id)).not.toContain(groupId);
+    expect(now.apps.filter((app) => app.spaceId === groupId)).toEqual([]);
+    expect((await request.get(`/api/spaces/${groupId}/apps`)).status()).toBe(404);
+    expect(await rowsOf(request, groupId, appId, "items")).toBeNull();
+    await page.reload();
+    await expect(page.getByRole("main").getByRole("region", { name: groupName })).toHaveCount(0);
+    expect(problems).toEqual([]);
+    groupId = "";
+  } finally {
+    // Should the test stop before the group went, it goes now.
+    if (groupId) {
+      const ownerId = ((await (await request.get("/api/session")).json()) as { user: { id: string } }).user.id;
+      await request.delete(`/api/spaces/${groupId}/members/${ownerId}`, { data: { confirm: groupName } });
+    }
+  }
 });

@@ -4,7 +4,8 @@
  * and A8, and the owner's decisions 3 and 4): creating and renaming a
  * group, adding someone who is on the server or inviting someone who is
  * not, changing a member's role and right to add apps, removing a member,
- * leaving, and taking an invitation back.
+ * leaving (which deletes a group nobody else is in), and taking an
+ * invitation back.
  */
 import {
   addMemberResponseSchema,
@@ -16,7 +17,7 @@ import {
   type Session,
 } from "@hearth/shared";
 import { beforeEach, describe, expect, it } from "vitest";
-import { family, grant, KIM, LIN, makeApp, NOA, NOW, SAM, setPrefs } from "../apps/test-world";
+import { family, grant, install, KIM, LIN, makeApp, NOA, NOW, SAM, setPrefs } from "../apps/test-world";
 import type { Config } from "../config";
 import { hasInvitation } from "../db/people";
 import { as, testApp, testConfig } from "../testing";
@@ -55,8 +56,8 @@ const addMember = (who: string, spaceId: string, body: unknown, on = app) =>
   call(who, "POST", `/api/spaces/${spaceId}/members`, body, on);
 const changeMember = (who: string, spaceId: string, memberId: string, body: unknown) =>
   call(who, "PATCH", `/api/spaces/${spaceId}/members/${memberId}`, body);
-const removeMember = (who: string, spaceId: string, memberId: string) =>
-  call(who, "DELETE", `/api/spaces/${spaceId}/members/${memberId}`);
+const removeMember = (who: string, spaceId: string, memberId: string, body?: unknown) =>
+  call(who, "DELETE", `/api/spaces/${spaceId}/members/${memberId}`, body);
 const withdraw = (who: string, spaceId: string, email: string) =>
   call(who, "DELETE", `/api/spaces/${spaceId}/invitations`, { email });
 
@@ -122,6 +123,7 @@ describe("creating a group", () => {
       canAddApps: true,
       members: [{ id: world.sam.id, name: world.sam.name, role: "owner" }],
       assistant: "none",
+      pendingInvitations: 0,
     });
     // Groups come after the personal space, oldest first.
     expect((await sessionOf(SAM)).spaces.map((entry) => entry.name)).toEqual(["", "Family", "Book club"]);
@@ -408,6 +410,197 @@ describe("removing a member, and leaving", () => {
   });
 });
 
+describe("leaving a group nobody else is in", () => {
+  const PAT = "pat@example.com";
+  const RIA = "ria@example.com";
+  let book: string;
+
+  /** Every table of the database, and the rows of each. */
+  const dump = () =>
+    Object.fromEntries(
+      (world.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map(
+        ({ name }) => [name, world.db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all() as Record<string, unknown>[]],
+      ),
+    );
+  /** The tables with a space_id column: everything that belongs to one space. */
+  const scopedTables = () =>
+    (
+      world.db
+        .prepare(
+          `SELECT m.name FROM sqlite_master m
+            WHERE m.type = 'table' AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) WHERE name = 'space_id')
+            ORDER BY m.name`,
+        )
+        .all() as { name: string }[]
+    ).map(({ name }) => name);
+  const rowsIn = (table: string, spaceId: string) =>
+    (world.db.prepare(`SELECT count(*) AS n FROM ${table} WHERE space_id = ?`).get(spaceId) as { n: number }).n;
+
+  /** One app's rows, settings, exception, switch, job and a conversation about it with a waiting request. */
+  function fill(spaceId: string, appId: string, userId: string, key: string) {
+    const db = world.db;
+    grant(db, spaceId, appId, userId, "edit", userId);
+    setPrefs(db, spaceId, appId, userId, { enabled: true, pinned: true });
+    db.prepare(
+      `INSERT INTO app_rows (id, space_id, app_id, collection, data, created_by, updated_by, created_at, updated_at)
+       VALUES (?, ?, ?, 'items', '{"name":"Milk","section":"","done":false}', ?, ?, ?, ?)`,
+    ).run(`row-${key}`, spaceId, appId, userId, userId, NOW, NOW);
+    // The space's settings and the job once per app, whoever fills it again.
+    const setting = db.prepare(
+      `INSERT OR IGNORE INTO app_settings (space_id, app_id, user_id, data, created_by, updated_by, updated_at)
+       VALUES (?, ?, ?, '{}', ?, ?, ?)`,
+    );
+    setting.run(spaceId, appId, null, userId, userId, NOW);
+    setting.run(spaceId, appId, userId, userId, userId, NOW);
+    db.prepare("INSERT OR IGNORE INTO app_jobs (space_id, app_id, job, next_run_at) VALUES (?, ?, 'refresh', ?)").run(spaceId, appId, NOW);
+    db.prepare("INSERT INTO chats (id, space_id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, 'Sample', ?, ?)").run(
+      `chat-${key}`,
+      spaceId,
+      userId,
+      NOW,
+      NOW,
+    );
+    db.prepare(
+      "INSERT INTO chat_entries (chat_id, seq, space_id, user_id, kind, data, created_at) VALUES (?, 1, ?, ?, 'user', '{\"text\":\"Hello\"}', ?)",
+    ).run(`chat-${key}`, spaceId, userId, NOW);
+    db.prepare(
+      `INSERT INTO chat_confirmations (id, chat_id, space_id, user_id, app_id, collection, row_ids, status, created_at)
+       VALUES (?, ?, ?, ?, ?, 'items', ?, 'pending', ?)`,
+    ).run(`confirm-${key}`, `chat-${key}`, spaceId, userId, appId, JSON.stringify([`row-${key}`]), NOW);
+  }
+
+  beforeEach(async () => {
+    // Sam alone in a book club with two apps, one of them removed, an install of no app, and
+    // two invitations: Pat's only one, and Ria's, who is invited to the family too.
+    book = ((await (await createGroup(SAM, { name: "Book club" })).json()) as { id: string }).id;
+    makeApp(world.db, book, "m-bookclub01", world.sam.id);
+    makeApp(world.db, book, "m-bookclub02", world.sam.id, { removedAt: NOW });
+    install(world.db, book, "grocery", world.sam.id);
+    fill(book, "m-bookclub01", world.sam.id, "b1");
+    fill(book, "m-bookclub02", world.sam.id, "b2");
+    fill(book, "grocery", world.sam.id, "b3");
+    await expectOutcome(await addMember(SAM, book, { email: PAT }), "invited");
+    await expectOutcome(await addMember(SAM, book, { email: RIA }), "invited");
+    await expectOutcome(await addMember(SAM, world.family, { email: RIA }), "invited");
+    // The family, which must not be touched, with the same of its own, and Lin's.
+    makeApp(world.db, world.family, "m-familyapp1", world.sam.id);
+    fill(world.family, "m-familyapp1", world.sam.id, "f1");
+    fill(world.family, "m-familyapp1", world.lin.id, "f2");
+  });
+
+  it("tells the session how many invitations wait, to the group's owners alone", async () => {
+    const sams = (await sessionOf(SAM)).spaces;
+    expect(sams.map((space) => [space.name, space.members.length, space.pendingInvitations])).toEqual([
+      ["", 1, undefined],
+      ["Family", 3, 1],
+      ["Book club", 1, 2],
+    ]);
+    expect((await sessionOf(LIN)).spaces.map((space) => space.pendingInvitations)).toEqual([undefined, undefined]);
+  });
+
+  it("asks for the group's name, and changes nothing without it", async () => {
+    for (const table of scopedTables()) expect(rowsIn(table, book), table).toBeGreaterThan(0);
+    const before = dump();
+    for (const body of [undefined, {}, { confirm: "" }, { confirm: "   " }, { confirm: "book club" }, { confirm: "Family" }, { confirm: "Book club!" }]) {
+      await expectError(await removeMember(SAM, book, world.sam.id, body), 409, "confirm_required");
+    }
+    await expectError(await removeMember(SAM, book, world.sam.id, { confirm: "x".repeat(201) }), 400, "invalid_request");
+    await expectError(await removeMember(SAM, book, world.sam.id, { confirm: "Book club", extra: 1 }), 400, "invalid_request");
+    await expectError(await removeMember(SAM, book, world.sam.id, "not json"), 400, "invalid_request");
+    expect(dump()).toEqual(before);
+    expect(errors).toEqual([]);
+  });
+
+  it("deletes the group and everything in it once its name is typed, and nothing else", async () => {
+    const bookApps = ["m-bookclub01", "m-bookclub02"];
+    const notTheBooks = (table: string, row: Record<string, unknown>) =>
+      !(
+        row["space_id"] === book ||
+        (table === "spaces" && row["id"] === book) ||
+        (table === "made_app_versions" && bookApps.includes(row["app_id"] as string)) ||
+        (table === "invitations" && row["email"] === PAT)
+      );
+    const before = dump();
+
+    await expectDone(await removeMember(SAM, book, world.sam.id, { confirm: "  Book club " }));
+
+    for (const table of scopedTables()) expect(rowsIn(table, book), table).toBe(0);
+    const after = dump();
+    expect(after["spaces"]?.some((row) => row["id"] === book)).toBe(false);
+    expect(after["made_app_versions"]?.filter((row) => bookApps.includes(row["app_id"] as string))).toEqual([]);
+    // Everything else is as it was: the family, its apps and people, and Ria's way in.
+    expect(after).toEqual(Object.fromEntries(Object.entries(before).map(([table, rows]) => [table, rows.filter((row) => notTheBooks(table, row))])));
+    expect(await spacesSeenBy(SAM)).toEqual(["personal: owner", "Family: owner"]);
+    await expectError(await call(SAM, "GET", `/api/spaces/${book}/apps/m-bookclub01/rows/items`), 404, "not_found");
+    await expectError(await removeMember(SAM, book, world.sam.id, { confirm: "Book club" }), 404, "not_found");
+    // Pat was let in by that invitation alone; Ria still has the family's.
+    expect(hasInvitation(world.db, PAT)).toBe(false);
+    await expectError(await call(PAT, "GET", "/api/session"), 403, "not_a_member");
+    expect(await spacesSeenBy(RIA)).toEqual(["personal: owner", "Family: member"]);
+    expect(errors).toEqual([]);
+  });
+
+  it("deletes a group once everyone else has left it", async () => {
+    await expectDone(await removeMember(LIN, world.family, world.lin.id));
+    await expectDone(await removeMember(SAM, world.family, world.kim.id));
+    await expectError(await removeMember(SAM, world.family, world.sam.id), 409, "confirm_required");
+    await expectDone(await removeMember(SAM, world.family, world.sam.id, { confirm: "Family" }));
+    expect(await spacesSeenBy(SAM)).toEqual(["personal: owner", "Book club: owner"]);
+    for (const table of scopedTables()) expect(rowsIn(table, world.family), table).toBe(0);
+  });
+
+  it("refuses the name while anyone else is in the group, and leaves without it", async () => {
+    const before = dump();
+    // The last owner, with others still in the group, cannot leave, name or no name.
+    await expectError(await removeMember(SAM, world.family, world.sam.id, { confirm: "Family" }), 409, "conflict");
+    expect(dump()).toEqual(before);
+    // Anyone else leaves as before without a name, and an empty one counts as none.
+    await expectDone(await removeMember(KIM, world.family, world.kim.id, { confirm: "  " }));
+    expect(familyMembers()).toEqual([`${SAM} owner`, `${LIN} member`]);
+    // A name sent asks to delete the group, which is not this person's alone: refused, even when it matches.
+    const withLin = dump();
+    for (const confirm of ["Family", "Not the name"]) {
+      await expectError(await removeMember(LIN, world.family, world.lin.id, { confirm }), 409, "conflict");
+    }
+    expect(dump()).toEqual(withLin);
+    // An owner removing the only other member leaves the group in place.
+    await expectDone(await removeMember(SAM, world.family, world.lin.id, { confirm: "Family" }));
+    expect(familyMembers()).toEqual([`${SAM} owner`]);
+    expect(await spacesSeenBy(SAM)).toEqual(["personal: owner", "Family: owner", "Book club: owner"]);
+  });
+
+  it("does not turn a confirmed deletion into a plain leave when an owner has arrived meanwhile", async () => {
+    const JO = "jo@example.com";
+    await expectOutcome(await addMember(SAM, book, { email: JO, role: "owner" }), "invited");
+    // Sam's screen still says Sam is alone and asks for the name; Jo signs in and joins as an owner.
+    expect(await spacesSeenBy(JO)).toEqual(["personal: owner", "Book club: owner"]);
+    const before = dump();
+    await expectError(await removeMember(SAM, book, world.sam.id, { confirm: "Book club" }), 409, "conflict");
+    // Nothing changed: the group, its data, and Sam in it.
+    expect(dump()).toEqual(before);
+    expect(await spacesSeenBy(SAM)).toEqual(["personal: owner", "Family: owner", "Book club: owner"]);
+    // Leaving without a name is the plain leave Sam can now be offered: the group stays with Jo.
+    await expectDone(await removeMember(SAM, book, world.sam.id));
+    expect(await spacesSeenBy(JO)).toEqual(["personal: owner", "Book club: owner"]);
+    expect(errors).toEqual([]);
+  });
+
+  it("never deletes a personal space", async () => {
+    const before = dump();
+    await expectError(await removeMember(SAM, world.samsSpace, world.sam.id), 409, "conflict");
+    await expectError(await removeMember(SAM, world.samsSpace, world.sam.id, { confirm: "" }), 409, "conflict");
+    expect(dump()).toEqual(before);
+  });
+
+  it("is refused to anyone outside the group, name or no name", async () => {
+    const before = dump();
+    await expectError(await removeMember(NOA, book, world.sam.id, { confirm: "Book club" }), 404, "not_found");
+    await expectError(await removeMember(NOA, book, world.noa.id, { confirm: "Book club" }), 404, "not_found");
+    await expectError(await removeMember(LIN, book, world.sam.id, { confirm: "Book club" }), 404, "not_found");
+    expect(dump()).toEqual(before);
+  });
+});
+
 describe("taking an invitation back", () => {
   const PAT = "pat@example.com";
 
@@ -443,6 +636,8 @@ it("logs nothing for the requests it turns down", async () => {
   await addMember(KIM, world.family, { email: NOA });
   await changeMember(SAM, world.family, world.sam.id, { role: "member" });
   await removeMember(SAM, world.family, world.sam.id);
+  const book = ((await (await createGroup(SAM, { name: "Book club" })).json()) as { id: string }).id;
+  await removeMember(SAM, book, world.sam.id, { confirm: "Family" });
   await withdraw(SAM, world.family, "pat@example.com");
   expect(errors).toEqual([]);
 });
