@@ -104,8 +104,9 @@ frame is given, and that address changes only with the theme, the
 language, the view or the app's version. A second `load` at the same
 address means the page navigated its frame away, or reloaded itself, so
 `MadeAppFrame` takes the frame off the screen and says "This app tried to
-leave its page and was stopped" in its place. The app stays stopped in that
-place, whatever the theme, language or view, until its next version (a
+leave its page and was stopped" in its place. That version of the app
+stays stopped wherever it is drawn, whatever the theme, language or view,
+and when the person leaves and comes back, until its next version (a
 change in the chat may be the fix) or until Hearth is loaded again. It
 applies to every app, the built-in ones too. An honest page trips it as
 well, so a page opens its links in a new tab and never reloads or leaves
@@ -363,8 +364,9 @@ their own and have it changed in the chat.
   wants the tick "I have checked that this holds nothing private". The
   server refuses an app that names hosts, an unchanged copy of a built-in
   or a published app, one that fails the manifest's checks, and one that
-  holds the email address of the publisher or of anyone they share a space
-  with; and more than 50 listings of one person in one group.
+  holds the email address of the publisher or of a member of a space they
+  own (the addresses Hearth already shows them, never a fellow member's to
+  a plain member); and more than 50 listings of one person in one group.
 - **A listing** (`published_apps`, migration 10, its SQL in
   `src/center/published.ts` alone, where `LISTED` decides who sees it) is a
   snapshot of the manifest and page, seen only by the members of its group.
@@ -382,8 +384,10 @@ their own and have it changed in the chat.
   in a group. A space holds one copy of a listing; adding it again brings a
   removed one back with its entries. "Change it in the chat" opens the chat
   with "Change “Ledger”: " in the box. A copy nobody changed cannot be
-  moved into a group or published. Its page says whose app it was, or that
-  it is no longer shared; it keeps working after its listing goes.
+  moved into a group or published; the Move dialog shows the groups turned
+  off for it and points to the app center. Its page says whose app it was
+  ("you" to its publisher), or that it is no longer shared; it keeps
+  working after its listing goes.
 - **The model** never publishes, unpublishes or adds a copy; a copy's
   instructions reach it labelled as written by someone else, granting
   nothing.

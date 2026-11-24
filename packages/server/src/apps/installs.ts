@@ -146,7 +146,14 @@ export function listAppsForUser(db: Db, registry: Registry, userId: string): App
       ...(app.template ? { template: app.template } : {}),
       ...(manifest.settings ? { settings: manifest.settings } : {}),
       // A copy of a published app; its publisher's name is added for members of its group (src/center).
-      ...(app.copy ? { source: app.copy.listingId === undefined ? {} : { listingId: app.copy.listingId } } : {}),
+      ...(app.copy
+        ? {
+            source: {
+              ...(app.copy.listingId === undefined ? {} : { listingId: app.copy.listingId }),
+              ...(app.copy.untouched ? { untouched: true } : {}),
+            },
+          }
+        : {}),
     });
   }
   return apps;

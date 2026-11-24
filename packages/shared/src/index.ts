@@ -112,12 +112,16 @@ export type Space = z.infer<typeof spaceSchema>;
  * Where a copy of a published app came from (docs/center.md). `listingId`
  * is the published app's ID, missing once it is unpublished. `by` is its
  * publisher's name, sent only to a viewer who is a member of the group it
- * is published to. Where an app is published is not here: the publish
+ * is published to, with `mine` when that viewer is its publisher.
+ * `untouched` is sent while nobody has changed the copy, which is then not
+ * moved into a group. Where an app is published is not here: the publish
  * dialog reads it from GET .../publish.
  */
 export const appSourceSchema = z.object({
   listingId: z.string().optional(),
   by: z.string().optional(),
+  mine: z.boolean().optional(),
+  untouched: z.boolean().optional(),
 });
 export type AppSource = z.infer<typeof appSourceSchema>;
 

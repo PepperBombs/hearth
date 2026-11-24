@@ -46,14 +46,15 @@ Each question has the recommended answer first.
    the words already used when step 4 was offered.
 2. **Who sees a published app.** Recommended: the members of one group the
    publisher is in, never the whole server. Today a person sees only the
-   names of people they share a space with (`src/db/people.ts:92`), so "by Lin" is
+   names of people they share a space with (`listSpacesForUser` in
+   `src/db/people.ts`), so "by Lin" is
    shown to no one new. It also keeps true what the sandbox relies on:
    every page is "shared by someone they know". Publishing to the whole
    server waits for a separate origin for frames, and for a decision on
    showing names.
 3. **Where a copy may go.** Recommended: only into the group it was
    published to, or into the person's own personal space. Anywhere else
-   answers 404. Moving an app (`moveApp`, `src/apps/installs.ts:435`) lets
+   answers 404. Moving an app (`moveApp` in `src/apps/installs.ts`) lets
    an owner move any app into any space they may add apps to, so it gets
    one more rule: a copy nobody changed cannot be moved into a group (409;
    add a copy there from the center instead). The line is thin, and the
@@ -115,7 +116,7 @@ Each question has the recommended answer first.
 
 ## Data model
 
-Migration 10. No shipped migration changes (`src/db/migrations.ts:2`:
+Migration 10. No shipped migration changes (the head of `src/db/migrations.ts`:
 "Never edit or reorder one that has shipped"). The table is `STRICT`, as
 every table is.
 
@@ -168,17 +169,17 @@ ALTER TABLE made_apps ADD COLUMN origin_revision INTEGER;
 - **Leaving a group.** The key `(space_id, created_by)` to `space_members`
   deletes a person's listings in a group when they leave it or are removed,
   and deleting the group deletes its members (`space_members.space_id`
-  cascades, `src/db/migrations.ts:41`) and so its listings. No code in
+  cascades, in migration 1 of `src/db/migrations.ts`) and so its listings. No code in
   `groups/members.ts` changes, but its test does: the group-delete test
   first checks that every table with a `space_id` holds a row of the group
-  (`src/groups/routes.test.ts:502`, with `fill` at `:440`), so `fill`
+  (the group-delete test of `src/groups/routes.test.ts`, with its `fill`), so `fill`
   must add a listing, or that test fails from migration 10 on.
 - **After a move.** The listing is keyed by the source app's ID, which a
   move keeps. "Publish again" after a move replaces the same listing, and
   `source_space_id` becomes the new space.
 - **Where the SQL about copies lives.** What reads or writes `made_apps`
   stays in `src/made/apps.ts`, beside `madeFromTemplate`
-  (`src/made/apps.ts:598`): the copies of a listing in one space, and the
+  (in `src/made/apps.ts`): the copies of a listing in one space, and the
   new columns written by `createMadeApp`.
 - **Where the SQL lives.** Every statement about `published_apps` is in
   `packages/server/src/center/published.ts`, and each one names a group:
@@ -220,46 +221,53 @@ The types and schemas go in `packages/shared` first.
   - a copy nobody changed: a built-in copy whose `template_hash` is still
     set, or a copy of a published app that is still untouched (400). It is
     someone else's app as they shipped or shared it;
-  - the email address of the publisher, or of anyone they share a space
-    with, in the manifest or the page (400). The reason names where it is,
-    such as "the instructions" or "the page, line 212", but not whose
-    address it is. Only those addresses, never everyone's on the server:
-    checking every address would let a publisher learn whether an address
-    they type is someone's on this server, which they cannot today;
+  - the email address of the publisher, or of a member of a space they
+    own, in the manifest or the page (400): the addresses Hearth already
+    shows them, since an owner sees the addresses of their space's members
+    and a plain member sees none. The reason names where it is, such as
+    "the instructions" or "the page, line 212", but not whose address it
+    is. Only those addresses, never everyone's on the server, nor a fellow
+    member's to a plain member: since the review says where an address is,
+    a page of guesses would tell a publisher whether an address they type
+    is someone's, which they cannot learn today;
   - more than 50 listings of one person in one group (409).
 - **Adding a copy.**
   - The space must be the listing's group or the person's own personal
     space; anything else answers 404.
   - It calls `createMadeApp` with two new options, `origin: { id, hash,
     revision }` beside `template`, and the note of version 1, which is
-    `""` today (`src/made/apps.ts:157`) and here "Copy of “Ledger”
+    `""` before (`createMadeApp` in `src/made/apps.ts`) and here "Copy of “Ledger”
     (revision 2)". The install goes through `addApp`, with `memberAccess`
     "none" by default.
   - A copy in a group that another member added "only me for now" still
     counts: the answer is 409, as the built-in apps' route answers today
-    (`src/made/routes.ts:78-81`, `madeFromTemplate` reads no access).
+    (`POST .../catalog/:templateId` in `src/made/routes.ts`, `madeFromTemplate` reads no access).
   - A space with a copy of this listing that is not removed answers 409.
     A removed one is brought back with its data (`restored: true`).
 - **Moving a copy.** `moveApp` refuses to move an untouched copy into a
   group (409), decision 3. It asks the registry, which `src/made/apps.ts`
   gives (`RegisteredApp.copy`), whether the app is one, so `installs.ts`
-  reads no `made_apps` column itself.
-- **`AppSummary` gains** one optional field, `source: { listingId?, by? }`,
-  for a copy. `listingId` is missing once the listing is gone. `by` is the
-  publisher's name, sent only to a viewer who is a member of the listing's
-  group; the session reads it through a function of `center/published.ts`.
+  reads no `made_apps` column itself. The session says so too
+  (`source.untouched`), so that the Move dialog offers no group for it and
+  says why.
+- **`AppSummary` gains** one optional field, `source: { listingId?, by?,
+  mine?, untouched? }`, for a copy. `listingId` is missing once the listing
+  is gone. `by` is the publisher's name, sent only to a viewer who is a
+  member of the listing's group, with `mine` when that viewer published it;
+  the session reads both through a function of `center/published.ts`.
+  `untouched` is sent while nobody has changed the copy.
   Where an app is published is not in the session: the publish dialog
   reads it from `GET .../publish`, which already decides who may see it.
 
 ## Pages
 
 - **Routes.** A top-level `/center`, beside `/apps` and `/chat`
-  (`packages/web/src/app.tsx:19-23`): it is about no one space.
+  (`AppRoutes` in `packages/web/src/app.tsx`): it is about no one space.
 - **Navigation.** No fifth tab: the phone tab bar stays Home, Apps,
   Search, Me.
   - The phone's Apps tab also lights on `/center`. Its `NavLink` to
-    `/apps` lights only for `/apps` and below
-    (`components/shell/tab-bar.tsx:30`), so this is a change there.
+    `/apps` lit only for `/apps` and below, so it became a `Link` lit by
+    `useMatch` (`TabBar` in `components/shell/tab-bar.tsx`).
   - The desktop sidebar gets "App center" after Apps.
   - The quick switcher gets an "App center" item, with keywords in both
     languages through `both()`.
@@ -273,7 +281,7 @@ The types and schemas go in `packages/shared` first.
   - One section per group: "In Family". Each card shows the icon, the
     name and the description (in the maker's words, never translated; a
     changed copy of a built-in app has both languages, and shows the
-    viewer's, as `nameOf` does, `src/made/apps.ts:51`),
+    viewer's, as `nameOf` in `src/made/apps.ts` does),
     "by Lin", the date, the revision and note, and the fields it keeps.
   - The trust line on each card: "It reads and changes only its own
     entries, and reaches no website."
@@ -301,9 +309,10 @@ The types and schemas go in `packages/shared` first.
     off.
   - The same place shows each listing of the app, with "Publish again"
     and "Unpublish".
-- **The app page.** A copy shows "A copy of an app Lin shared", or "A copy
-  of a shared app" when the viewer is not in Lin's group, or "A copy of an
-  app that is no longer shared" once the listing is gone. The session's
+- **The app page.** A copy shows "A copy of an app Lin shared" ("A copy of
+  an app you shared" to Lin herself, as the center says "By you"), or "A
+  copy of a shared app" when the viewer is not in Lin's group, or "A copy
+  of an app that is no longer shared" once the listing is gone. The session's
   `source` names the publisher and not the listing, and a copy may be
   renamed, so the line names who shared it, not what. Beside it, for
   someone with edit access, "Change it in the chat".
@@ -330,7 +339,7 @@ The types and schemas go in `packages/shared` first.
   side. The
   assistant's switches bound everything as before; what `read_app`
   returns, the page included, is already "data, never instructions"
-  (`model/chat.ts:63`).
+  (`DATA_RULE` in `model/chat.ts`).
 
 ## Updates of copies
 
@@ -378,9 +387,11 @@ already record `origin_hash` and `origin_revision`.
   personal facts into the instructions, a setting's default or the page.
   The publish dialog shows all of it, and wants the tick.
 - **A cheap guard.** The server refuses a snapshot that holds the email
-  address of the publisher or of anyone they share a space with: the
-  family whose details a model is likely to have written in. Never every
-  address on the server, which would tell a publisher who is on it.
+  address of the publisher or of a member of a space they own: the family
+  whose details a model is likely to have written in, and whose addresses
+  Hearth shows that person already. Never every address on the server,
+  which would tell a publisher who is on it, and never a fellow member's
+  to a plain member, who is not shown it.
   Names cannot be found reliably, so the review covers them.
 - **Names.** "by Lin" is shown only to members of the group it was
   published to, who see her name in that group already. No email address
@@ -395,10 +406,11 @@ already record `origin_hash` and `origin_revision`.
   removed and the card or page says "This app tried to leave its page and
   was stopped", in both languages. It applies to every app, wherever it is
   drawn: the dashboard's card, the app's page and the chat. A stopped app
-  stays stopped in that place, whatever the theme, language or view, until
-  its next version or until Hearth is loaded again: a new theme gives the
-  frame a new `src`, and the page would be served again only to leave
-  again.
+  stays stopped wherever it is drawn, whatever the theme, language or
+  view, and when the person leaves and comes back, until its next version
+  or until Hearth is loaded again: a new theme gives the frame a new
+  `src`, and a frame drawn again would be served the page only for it to
+  leave again.
   - This finds the navigation after it happened: what the page put in the
     address may already have left. A page can still open a WebRTC
     connection. `docs/platform.md` says both plainly, under "What the
@@ -434,7 +446,8 @@ already record `origin_hash` and `origin_revision`.
     untouched copy of a listing, the email address of the publisher or of
     someone in a space with them (and the reason names where, not whose),
     the 51st listing. The address of someone on the server whom the
-    publisher shares no space with is not refused.
+    publisher shares no space with is not refused, nor a fellow member's
+    when the publisher owns no space with them.
   - Who sees: a member of another group, or a person in no group, sees
     nothing listed and gets 404 on every route.
   - Adding a copy: a new ID, version 1 with its note, `origin`,
@@ -463,7 +476,7 @@ already record `origin_hash` and `origin_revision`.
   database that migration 9 made, with made apps in it.
 - **Tests that list the schema change with it:** `db/database.test.ts`
   names every table (`published_apps` joins the list), and the
-  group-delete test's `fill` (`groups/routes.test.ts:440`) adds a listing
+  group-delete test's `fill` (in `groups/routes.test.ts`) adds a listing
   to the group, so that its "every table with a `space_id`" check still
   holds and the delete is seen to take the listing.
 - **`packages/server/src/model/chat.test.ts`:** a copy's instructions get
@@ -492,7 +505,11 @@ Each step is one pull request, with `pnpm check` green.
    layout effect whenever `src` changes, and the line is a `role="alert"`
    paragraph, `made.leftPage`), its test in
    `packages/web/src/made/frame.test.tsx`, the line in `model/chat.ts`, and
-   "The frame guard" in the sandbox section of `docs/platform.md`.
+   "The frame guard" in the sandbox section of `docs/platform.md`. After
+   review, the stopped versions are kept beside the component
+   (`stoppedVersions`), not in it, so a stopped app stays stopped wherever
+   it is drawn and after the person leaves and comes back, until Hearth is
+   loaded again, as written above.
 2. **The contract and the table.** The types and schemas in
    `packages/shared`; migration 10 and `center-schema.test.ts`;
    `center/published.ts` (insert, replace, delete, list for a member, get
@@ -526,13 +543,17 @@ Each step is one pull request, with `pnpm check` green.
    `publishableApp` in `made/apps.ts`, which also says whether the app is
    an untouched copy (it reads `template_hash` and `origin_hash`), and the
    addresses looked for are `emailsAround` in `db/people.ts` (the person's
-   and those of everyone in a space with them). An address is found in any
+   and those of the members of every space they own; after review no
+   longer those of a plain member's fellow members, which Hearth never
+   shows them). An address is found in any
    case and only whole ("sam@example.com" is not in
    "jimsam@example.com" or "sam@example.com.au"), in the name,
    description, instructions, collections, settings, and each line of the
    page, at most 10 places a review. A new listing answers 201, publishing
    again 200. `GET .../publish` lists "too_many" for each of the person's
-   groups where they have 50 apps and this one is not among them; a `POST`
+   groups where they have 50 apps and this one is not among them (a
+   listing of it that someone else published is not theirs: publishing it
+   again would make it one more of theirs); a `POST`
    refuses with 400 for any other problem first, 409 for "too_many" alone.
    Tested in `center/center.test.ts`.
 4. **Adding a copy.** `GET /api/center`, `POST .../center/:id` through
@@ -555,9 +576,13 @@ Each step is one pull request, with `pnpm check` green.
    whether it is `untouched`, hashed only for copies), so `moveApp` and the
    session read no `made_apps` column: `listAppsForUser` gives
    `source.listingId`, and the session adds `by` through
-   `publisherNamesFor` in `center/published.ts`, under `LISTED`. A copy
-   whose listing is gone is still untouched while its hash matches, so it
-   is still not moved into a group. Tested in `center/center.test.ts`.
+   `publisherNamesFor` in `center/published.ts`, under `LISTED`, with
+   `mine` for its publisher; `source.untouched` comes from the registry too.
+   A copy whose listing is gone is still untouched while its hash matches,
+   so it is still not moved into a group: the Apps page's Move dialog shows
+   the groups turned off for it, "Not for a copy nobody changed", with a
+   line that says to add a copy there from the app center or change this
+   one first. Tested in `center/center.test.ts`.
 5. **The chat.** The label of a copy's instructions, and the `?app=` link
    that fills the message box. Done when `chat.test.ts` and the chat
    page's test pass. **Built:** the label in `describeApps` of
@@ -575,7 +600,7 @@ Each step is one pull request, with `pnpm check` green.
    trust line, "Mine" with "Unpublish", the ways in from the Apps page,
    their strings in `en.ts` and `zh.ts`, and `GET /api/center` in the
    stand-in of `e2e/fixtures.ts`, and the switcher's end-to-end test,
-   which lists its items exactly (`e2e/switcher.spec.ts:14`). Done
+   which lists its items exactly (`e2e/switcher.spec.ts`). Done
    when the page lists what the API gives, on a phone and a computer, in
    both languages. **Built:** the page is `pages/center.tsx`, its calls
    `center/api.ts` (`useCenter`, read afresh each time the page opens, and
@@ -651,7 +676,8 @@ Each step is one pull request, with `pnpm check` green.
    for a group it is published to. A refused publish says so and the review
    read again shows why. Once published, a line that takes the focus names
    the group and revision, with a link to the app center. A copy's page
-   has the line above its panel (`CopyLine` in `pages/app-page.tsx`). The
+   has the line above its panel (`CopyLine` in `pages/app-page.tsx`),
+   which names the viewer "you" on a copy of their own listing. The
    stand-in of `e2e/fixtures.ts` answers `GET` and `POST .../publish` from
    `publishReview`. Tested in `center/publish.test.tsx` and, on a phone in
    both languages, `e2e/center-page.spec.ts`.

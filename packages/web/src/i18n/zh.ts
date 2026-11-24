@@ -87,6 +87,8 @@ export const zh: Dictionary = {
   "apps.moveOthers": "在新空间里，谁能使用它将重新设定。这里不在那个空间里的人将无法再使用它，他们自己的相关设置也会被删除。",
   "apps.moveConfirm": "移动",
   "apps.moveFailed": "未能移动这个应用，请重试。",
+  "apps.moveCopyClosed": "未改动的副本不能移入",
+  "apps.moveCopyStays": "没人改动过的副本留在它被分享到的地方，不能移入群组。想在群组里用，可以从[应用中心]把副本添加到那里，或者先改动这个副本。",
   "apps.moveRefused": "这个应用不能移到那里。那个空间可能已经有它，或者保留着它以前的数据。",
   "apps.moved": "{app}已移到这里。",
   "apps.changeFailed": "这项更改未能保存，请重试。",
@@ -531,6 +533,7 @@ export const zh: Dictionary = {
   "publish.published": "已发布到{group}，第 {revision} 版。",
   "publish.publishedNote": "群组里的人可以在[应用中心]找到它，并添加副本。",
   "copy.by": "这是 {name} 分享的应用的副本",
+  "copy.byYou": "这是你分享的应用的副本",
   "copy.shared": "这是一个分享的应用的副本",
   "copy.noLongerShared": "这个副本来自一个已不再分享的应用",
 };

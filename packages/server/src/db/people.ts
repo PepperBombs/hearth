@@ -132,11 +132,14 @@ export function listSpacesForUser(db: Db, userId: string): Space[] {
 }
 
 /**
- * The email addresses of a person and of everyone they share a space with:
- * the people whose addresses a model is likely to have written into an app
- * of theirs, which publishing refuses (docs/center.md). Nobody else's: a
- * check against every address on the server would tell a publisher who is
- * on it.
+ * The email addresses a person may already see: their own, and those of the
+ * members of every space they own (`listMemberDetails` shows those to owners
+ * alone). These are the people whose addresses a model is likely to have
+ * written into an app of theirs, which publishing refuses (docs/center.md).
+ * Nobody else's: the check says where an address is, so it would tell a
+ * plain member the address of a fellow member, which Hearth never shows
+ * them, and a check against every address would tell anyone who is on the
+ * server.
  */
 export function emailsAround(db: Db, userId: string): string[] {
   const rows = db
@@ -145,7 +148,7 @@ export function emailsAround(db: Db, userId: string): string[] {
          FROM space_members mine
          JOIN space_members m ON m.space_id = mine.space_id
          JOIN users u ON u.id = m.user_id
-        WHERE mine.user_id = ?`,
+        WHERE mine.user_id = ? AND (m.user_id = mine.user_id OR mine.role = 'owner')`,
     )
     .all(userId) as { email: string }[];
   return rows.map((row) => row.email);

@@ -11,6 +11,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PreferencesProvider, usePreferences } from "../session/preferences";
 import { MadeAppFrame } from "./frame";
 
+/**
+ * A stopped app stays stopped for as long as this copy of Hearth is loaded,
+ * which here is the whole test file: each test draws an app of its own.
+ */
+const ledger = (id: string): AppSummary => ({ ...LEDGER, id });
+
 const LEDGER: AppSummary = {
   id: "m-aaaaaaaaaa",
   spaceId: "space-personal",
@@ -68,14 +74,15 @@ describe("the frame guard", () => {
   });
 
   it("counts again from a new address: another theme, language or version is a load of its own", () => {
-    const redraw = draw(LEDGER);
+    const app = ledger("m-bbbbbbbbbb");
+    const redraw = draw(app);
     load();
     act(() => preferences.setTheme("dark"));
     expect(frame()?.getAttribute("src")).toContain("theme=dark");
     load();
     act(() => preferences.setLocale("zh"));
     load();
-    redraw({ ...LEDGER, version: 2 });
+    redraw({ ...app, version: 2 });
     load();
     expect(frame()).not.toBeNull();
 
@@ -86,7 +93,8 @@ describe("the frame guard", () => {
   });
 
   it("keeps a stopped app stopped in another theme, and gives its next version a frame again", () => {
-    const redraw = draw(LEDGER);
+    const app = ledger("m-cccccccccc");
+    const redraw = draw(app);
     load();
     load();
     act(() => preferences.setTheme("dark"));
@@ -94,10 +102,54 @@ describe("the frame guard", () => {
     expect(screen.getByRole("alert").textContent).toBe(STOPPED);
 
     // A change in the chat makes a new version, which may well be the fix.
-    redraw({ ...LEDGER, version: 2 });
+    redraw({ ...app, version: 2 });
     expect(frame()?.getAttribute("src")).toContain("v=2");
     expect(screen.queryByRole("alert")).toBeNull();
     load();
     expect(frame()).not.toBeNull();
+  });
+
+  it("keeps a stopped app stopped after the person leaves and comes back, and wherever else it is drawn", () => {
+    const app = ledger("m-dddddddddd");
+    draw(app);
+    load();
+    load();
+    expect(screen.getByRole("alert").textContent).toBe(STOPPED);
+
+    // Leaving the dashboard takes the card away; coming back draws it afresh, and the page is not served again.
+    cleanup();
+    draw(app);
+    expect(frame()).toBeNull();
+    expect(screen.getByRole("alert").textContent).toBe(STOPPED);
+
+    // Its page, drawn in another place, is not served either; another app's is.
+    cleanup();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PreferencesProvider>
+          <MadeAppFrame app={app} view="page" />
+          <MadeAppFrame app={ledger("m-eeeeeeeeee")} />
+        </PreferencesProvider>
+      </QueryClientProvider>,
+    );
+    expect(document.querySelectorAll("iframe")).toHaveLength(1);
+    expect(document.querySelector("iframe")?.getAttribute("data-made-app")).toBe("m-eeeeeeeeee");
+    expect(screen.getByRole("alert").textContent).toBe(STOPPED);
+  });
+
+  it("takes every frame of a version off the screen when one of them leaves", () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PreferencesProvider>
+          <MadeAppFrame app={ledger("m-ffffffffff")} />
+          <MadeAppFrame app={ledger("m-ffffffffff")} view="page" />
+        </PreferencesProvider>
+      </QueryClientProvider>,
+    );
+    const first = document.querySelector("iframe") as HTMLIFrameElement;
+    fireEvent.load(first);
+    fireEvent.load(first);
+    expect(document.querySelectorAll("iframe")).toHaveLength(0);
+    expect(screen.getAllByRole("alert")).toHaveLength(2);
   });
 });

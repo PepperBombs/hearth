@@ -298,6 +298,12 @@ describe("a copy's page", () => {
     expect(await screen.findByText("A copy of a shared app")).toBeTruthy();
     cleanup();
 
+    // Its publisher's own copy names her as the app center does, "you", never by her own name.
+    start({ session: sessionFor([copy({ listingId: "p-ledger0001", by: "Lin Example", mine: true })]), at });
+    expect(await screen.findByText("A copy of an app you shared")).toBeTruthy();
+    expect(screen.queryByText(/Lin Example/)).toBeNull();
+    cleanup();
+
     start({ session: sessionFor([copy({})]), at });
     expect(await screen.findByText("A copy of an app that is no longer shared")).toBeTruthy();
     cleanup();
@@ -318,5 +324,9 @@ describe("a copy's page", () => {
     start({ session: sessionFor([copy({ listingId: "p-ledger0001", by: "Lin Example" })], { locale: "zh" }), at });
     expect(await screen.findByText("这是 Lin Example 分享的应用的副本")).toBeTruthy();
     expect(screen.getByRole("link", { name: "在对话里修改" })).toBeTruthy();
+    cleanup();
+
+    start({ session: sessionFor([copy({ listingId: "p-ledger0001", by: "Lin Example", mine: true })], { locale: "zh" }), at });
+    expect(await screen.findByText("这是你分享的应用的副本")).toBeTruthy();
   });
 });

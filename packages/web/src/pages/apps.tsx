@@ -321,10 +321,14 @@ function MoveForm({ app, from, targets, onClose, onMoved, title }: MoveDialogPro
   const { t } = useI18n();
   const name = useId();
   const move = useMoveApp();
-  const [chosenId, setChosenId] = useState(targets[0]?.id ?? "");
+  // A copy nobody changed stays where it was shared: never into a group (docs/center.md, decision 3).
+  // Those groups are shown, turned off, with why and what to do instead.
+  const closed = (space: Space) => space.kind === "group" && app.source?.untouched === true;
+  const open = targets.filter((space) => !closed(space));
+  const [chosenId, setChosenId] = useState(open[0]?.id ?? "");
   const [memberAccess, setMemberAccess] = useState<MemberAccess>("none");
   // The session is loaded again while the dialog is open; a space it no longer offers is not chosen.
-  const chosen = targets.find((space) => space.id === chosenId) ?? targets[0];
+  const chosen = open.find((space) => space.id === chosenId) ?? open[0];
   const group = chosen?.kind === "group";
 
   const submit = (event: FormEvent) => {
@@ -354,10 +358,11 @@ function MoveForm({ app, from, targets, onClose, onMoved, title }: MoveDialogPro
           <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("apps.moveTo")}</legend>
           {targets.map((space) => {
             const personal = space.kind === "personal";
+            const off = closed(space);
             return (
               <label
                 key={space.id}
-                className={CHOICE}
+                className={cx(CHOICE, off && "opacity-60")}
               >
                 <input
                   type="radio"
@@ -365,6 +370,7 @@ function MoveForm({ app, from, targets, onClose, onMoved, title }: MoveDialogPro
                   value={space.id}
                   className={RADIO}
                   checked={chosen?.id === space.id}
+                  disabled={off}
                   onChange={() => setChosenId(space.id)}
                 />
                 {personal ? (
@@ -374,12 +380,19 @@ function MoveForm({ app, from, targets, onClose, onMoved, title }: MoveDialogPro
                 )}
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="clip font-medium">{personal ? t("nav.personal") : space.name}</span>
-                  <span className="text-xs text-fg-3">{personal ? t("apps.onlyYou") : t("apps.shared")}</span>
+                  <span className="text-xs text-fg-3">
+                    {off ? t("apps.moveCopyClosed") : personal ? t("apps.onlyYou") : t("apps.shared")}
+                  </span>
                 </span>
               </label>
             );
           })}
         </fieldset>
+        {open.length < targets.length ? (
+          <p className="text-fg-2">
+            <LinkedText text={t("apps.moveCopyStays")} to="/center" />
+          </p>
+        ) : null}
         {group ? (
           <WhoCanUse name={name} value={memberAccess} onChange={setMemberAccess} />
         ) : null}

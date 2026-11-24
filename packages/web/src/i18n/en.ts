@@ -97,6 +97,9 @@ export const en = {
     "Who can use it starts afresh in the new space. Anyone here who is not in that space loses it, and their own settings for it are deleted.",
   "apps.moveConfirm": "Move",
   "apps.moveFailed": "The app could not be moved. Try again.",
+  "apps.moveCopyClosed": "Not for a copy nobody changed",
+  "apps.moveCopyStays":
+    "A copy nobody changed stays where it was shared, so it does not go into a group. To have it in a group, add a copy there from [the app center], or change this copy first.",
   "apps.moveRefused": "The app cannot be moved there. That space may have it already, or have kept its data from before.",
   "apps.moved": "{app} was moved here.",
   "apps.changeFailed": "That change could not be saved. Try again.",
@@ -556,6 +559,7 @@ export const en = {
   "publish.publishedNote": "The people of the group find it in [the app center], where they can add a copy.",
   // A copy's page (docs/center.md, "Pages").
   "copy.by": "A copy of an app {name} shared",
+  "copy.byYou": "A copy of an app you shared",
   "copy.shared": "A copy of a shared app",
   "copy.noLongerShared": "A copy of an app that is no longer shared",
 } as const;

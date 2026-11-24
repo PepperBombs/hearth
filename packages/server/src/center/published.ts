@@ -151,12 +151,15 @@ export function findListingFor(db: Db, request: { userId: string; id: string }):
   return row ? fromRow(row) : null;
 }
 
-/** The listing of an app in a group, by the app's ID wherever it lives now, or null: what publishing again replaces. */
-export function listingIdOf(db: Db, request: { spaceId: string; sourceAppId: string }): string | null {
+/**
+ * The listing of an app in a group, by the app's ID wherever it lives now,
+ * with who published it, or null: what publishing again replaces.
+ */
+export function listingOfApp(db: Db, request: { spaceId: string; sourceAppId: string }): { id: string; createdBy: string } | null {
   const row = db
-    .prepare("SELECT id FROM published_apps WHERE space_id = @spaceId AND source_app_id = @sourceAppId")
-    .get(request) as { id: string } | undefined;
-  return row?.id ?? null;
+    .prepare("SELECT id, created_by AS createdBy FROM published_apps WHERE space_id = @spaceId AND source_app_id = @sourceAppId")
+    .get(request) as { id: string; createdBy: string } | undefined;
+  return row ?? null;
 }
 
 /** How many apps a person has published to a group, against MAX_LISTINGS_PER_GROUP. */
@@ -185,17 +188,21 @@ export function listingsOfAppFor(db: Db, request: { userId: string; sourceAppId:
 
 /**
  * The publishers' names of these listings, by listing, for those in the
- * person's groups alone: what the session shows beside a copy ("by Lin").
- * A listing outside them, or gone, is missing from the answer.
+ * person's groups alone: what the session shows beside a copy ("by Lin"),
+ * and whether the person is that publisher ("an app you shared"). A
+ * listing outside them, or gone, is missing from the answer.
  */
-export function publisherNamesFor(db: Db, request: { userId: string; ids: readonly string[] }): Map<string, string> {
+export function publisherNamesFor(
+  db: Db,
+  request: { userId: string; ids: readonly string[] },
+): Map<string, { name: string; mine: boolean }> {
   if (request.ids.length === 0) return new Map();
   const rows = db
     .prepare(
-      `SELECT id, (SELECT u.name FROM users u WHERE u.id = p.created_by) AS name
+      `SELECT id, (SELECT u.name FROM users u WHERE u.id = p.created_by) AS name, p.created_by = @userId AS mine
          FROM published_apps p
         WHERE id IN (SELECT value FROM json_each(@ids)) AND ${LISTED}`,
     )
-    .all({ userId: request.userId, ids: JSON.stringify(request.ids) }) as { id: string; name: string }[];
-  return new Map(rows.map((row) => [row.id, row.name]));
+    .all({ userId: request.userId, ids: JSON.stringify(request.ids) }) as { id: string; name: string; mine: 0 | 1 }[];
+  return new Map(rows.map((row) => [row.id, { name: row.name, mine: row.mine === 1 }]));
 }

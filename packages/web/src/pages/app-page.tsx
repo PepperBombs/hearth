@@ -55,15 +55,22 @@ export function AppPage() {
 }
 
 /**
- * Where a copy came from: who published it, to a viewer in that group, or
- * that it is no longer shared. The session names the publisher, not the
+ * Where a copy came from: who published it, to a viewer in that group ("you"
+ * to its publisher, as the app center says "By you"), or that it is no
+ * longer shared. The session names the publisher, not the
  * published app, and the copy may have been renamed since, so the line
  * names who shared it and not what (docs/center.md, step 8).
  */
 function CopyLine({ app, source }: { app: AppSummary; source: NonNullable<AppSummary["source"]> }) {
   const { t } = useI18n();
   const said =
-    source.listingId === undefined ? t("copy.noLongerShared") : source.by !== undefined ? t("copy.by", { name: source.by }) : t("copy.shared");
+    source.listingId === undefined
+      ? t("copy.noLongerShared")
+      : source.mine === true
+        ? t("copy.byYou")
+        : source.by !== undefined
+          ? t("copy.by", { name: source.by })
+          : t("copy.shared");
   const chat = `/chat?${new URLSearchParams({ space: app.spaceId, app: app.id }).toString()}`;
   return (
     <p className="mb-3 flex max-w-[760px] flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-2" data-copy-line={app.id}>

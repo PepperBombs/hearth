@@ -679,9 +679,12 @@ export class FakeApi {
     let n = 1;
     while (taken.has(`m-copy-${n}`)) n += 1;
     const appId = `m-copy-${n}`;
-    const by = this.current.spaces.some((candidate) => candidate.id === listing.spaceId) ? { by: listing.publishedBy.name } : {};
+    const by = this.current.spaces.some((candidate) => candidate.id === listing.spaceId)
+      ? { by: listing.publishedBy.name, ...(listing.mine ? { mine: true } : {}) }
+      : {};
+    // As it was shared, until the chat changes it, which the stand-in does not.
     const added = app(appId, spaceId, listing.name.en, listing.name.zh, listing.description.en, listing.description.zh, listing.icon, listing.color, {
-      source: { listingId, ...by },
+      source: { listingId, ...by, untouched: true },
     });
     const owner = space.role === "owner";
     const members = owner ? {} : { [this.current.user.id]: "edit" as const };

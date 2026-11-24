@@ -28,7 +28,7 @@ import {
   deleteListing,
   findListingFor,
   insertListing,
-  listingIdOf,
+  listingOfApp,
   listingsOfAppFor,
   replaceListing,
 } from "./published";
@@ -76,10 +76,16 @@ function problemsOf(db: Db, userId: string, app: PublishSource): PublishProblem[
   return problems;
 }
 
-/** Whether the person has as many apps published to the group as they may, and this one is not among them. */
+/**
+ * Whether the person has as many apps published to the group as they may,
+ * and this one is not among them. A listing of this app that someone else
+ * published (another owner of a group's app) is not among them: publishing
+ * it again makes the person its publisher, one more of theirs.
+ */
 function tooMany(db: Db, request: { userId: string; spaceId: string; appId: string }): boolean {
+  const listing = listingOfApp(db, { spaceId: request.spaceId, sourceAppId: request.appId });
   return (
-    listingIdOf(db, { spaceId: request.spaceId, sourceAppId: request.appId }) === null &&
+    listing?.createdBy !== request.userId &&
     countListingsBy(db, { spaceId: request.spaceId, userId: request.userId }) >= MAX_LISTINGS_PER_GROUP
   );
 }
@@ -190,9 +196,9 @@ export function publishApp(
         note: request.note ?? "",
         now: new Date().toISOString(),
       };
-      const existing = listingIdOf(db, { spaceId: request.to, sourceAppId: request.appId });
+      const existing = listingOfApp(db, { spaceId: request.to, sourceAppId: request.appId });
       if (existing === null) return { ...insertListing(db, snapshot), created: true };
-      const replaced = replaceListing(db, { ...snapshot, id: existing });
+      const replaced = replaceListing(db, { ...snapshot, id: existing.id });
       // Found above, in this same transaction.
       if (!replaced) throw new Error("A listing found while publishing again was not there to replace.");
       return { ...replaced, created: false };

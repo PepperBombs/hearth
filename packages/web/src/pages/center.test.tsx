@@ -15,7 +15,7 @@ const PERSONAL = "space-personal";
 const FAMILY = "space-family";
 const CLUB = "space-club";
 
-function sessionFor(locale: "en" | "zh" = "en", apps: AppSummary[] = [], familyRole: "owner" | "member" = "owner"): Session {
+function sessionFor(locale: "en" | "zh" = "en", apps: AppSummary[] = [], familyRole: "owner" | "member" = "owner", groups = true): Session {
   const me = { id: "u1", email: "sam@example.com", name: "Sam Example", locale, theme: "light" as const };
   const member = (role: "owner" | "member") => [
     { id: me.id, name: me.name, role },
@@ -25,8 +25,12 @@ function sessionFor(locale: "en" | "zh" = "en", apps: AppSummary[] = [], familyR
     user: me,
     spaces: [
       { id: PERSONAL, kind: "personal", name: "", role: "owner", canAddApps: true, assistant: "none", members: [{ id: me.id, name: me.name, role: "owner" }] },
-      { id: FAMILY, kind: "group", name: "Family", role: familyRole, canAddApps: familyRole === "owner", assistant: "none", members: member(familyRole) },
-      { id: CLUB, kind: "group", name: "Book club", role: "member", canAddApps: false, assistant: "none", members: member("member") },
+      ...(groups
+        ? ([
+            { id: FAMILY, kind: "group", name: "Family", role: familyRole, canAddApps: familyRole === "owner", assistant: "none", members: member(familyRole) },
+            { id: CLUB, kind: "group", name: "Book club", role: "member", canAddApps: false, assistant: "none", members: member("member") },
+          ] as const)
+        : []),
     ],
     apps,
     canCreateGroups: false,
@@ -120,6 +124,8 @@ type StartOptions = {
   familyRole?: "owner" | "member";
   /** How POST .../center/:id is answered; by default a new copy, `m-copy1`, which the session then lists. */
   addCopy?: Answer;
+  /** False for a person in no group: the session lists their personal space alone. */
+  groups?: boolean;
 };
 
 /** Answers the session, the catalog, the center, unpublishing and adding a copy, and records every request with its body. */
@@ -132,7 +138,7 @@ function start(options: StartOptions = {}) {
     const method = init.method ?? "GET";
     const path = String(input);
     requests.push(`${method} ${path}`);
-    if (path === "/api/session") return json(sessionFor(options.locale, apps, options.familyRole));
+    if (path === "/api/session") return json(sessionFor(options.locale, apps, options.familyRole, options.groups));
     const copied = /^\/api\/spaces\/([^/]+)\/center\/([^/]+)$/.exec(path);
     if (copied && method === "POST") {
       requests[requests.length - 1] += ` ${String(init.body)}`;
@@ -227,6 +233,20 @@ describe("the app center", () => {
     start({ listings: [] });
     expect(await within(await section("In Family")).findByText("Nobody has published an app here yet.")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Mine" })).toBeNull();
+    cleanup();
+
+    // In no group, the center says where shared apps would be, with no section of any group and no "Mine".
+    start({ listings: [], groups: false });
+    expect(await screen.findByText("Apps that people share in a group are listed here. You are in no group yet.")).toBeTruthy();
+    expect(await section("From Hearth")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: /^In / })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Mine" })).toBeNull();
+    expect(screen.queryByText("Nobody has published an app here yet.")).toBeNull();
+    cleanup();
+
+    start({ listings: [], groups: false, locale: "zh" });
+    expect(await screen.findByText("群组里的人分享的应用会列在这里。你还没有加入任何群组。")).toBeTruthy();
+    expect(screen.queryByText(/Family|Book club/)).toBeNull();
   });
 
   it("unpublishes after asking, says so, and reads the center and the session again", async () => {

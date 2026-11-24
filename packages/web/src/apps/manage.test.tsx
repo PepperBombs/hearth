@@ -1239,6 +1239,49 @@ describe("moving an app to another space", () => {
     expect(within(await spaceCard("Personal")).getByRole("switch", { name: "Show Feed" })).toBeTruthy();
   });
 
+  it("keeps a copy nobody changed out of groups, and says why and what to do instead", async () => {
+    const server = new FakeServer();
+    // The family is the one other space here, so a group is all this copy could be moved to.
+    server.session = sessionWith([made(FEED, PERSONAL, { source: { listingId: "p-ledger0001", by: "Lin", untouched: true } })]);
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Move Feed" }));
+    const move = await dialog("Move Feed to another space");
+    const family = within(move).getByRole("radio", { name: /Family/ }) as HTMLInputElement;
+    expect(family.disabled).toBe(true);
+    expect(family.checked).toBe(false);
+    expect(within(move).getByText("Not for a copy nobody changed")).toBeTruthy();
+    expect(within(move).getByText(/A copy nobody changed stays where it was shared/)).toBeTruthy();
+    expect(within(move).getByRole("link", { name: "the app center" }).getAttribute("href")).toBe("/center");
+    expect(within(move).queryByRole("group", { name: "Who else can use it" })).toBeNull();
+    expect((within(move).getByRole("button", { name: "Move" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(move).getByRole("button", { name: "Move" }));
+    expect(server.changes).toEqual([]);
+    fireEvent.click(within(move).getByRole("button", { name: "Cancel" }));
+
+    // Changed, it is the person's own, and goes into a group like any app they made.
+    cleanup();
+    server.session = sessionWith([made(FEED, PERSONAL, { source: { listingId: "p-ledger0001", by: "Lin" } })]);
+    start(server);
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Move Feed" }));
+    const changed = await dialog("Move Feed to another space");
+    expect((within(changed).getByRole("radio", { name: /Family/ }) as HTMLInputElement).checked).toBe(true);
+    expect(within(changed).queryByText(/A copy nobody changed/)).toBeNull();
+  });
+
+  it("says in Chinese why a copy nobody changed stays out of groups", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(FEED, PERSONAL, { source: { untouched: true } })], { locale: "zh" });
+    start(server);
+
+    fireEvent.click(within(await spaceCard("个人")).getByRole("button", { name: /^移动/ }));
+    const move = await screen.findByRole("dialog");
+    expect((within(move).getByRole("radio", { name: /Family/ }) as HTMLInputElement).disabled).toBe(true);
+    expect(within(move).getByText("未改动的副本不能移入")).toBeTruthy();
+    expect(within(move).getByText(/没人改动过的副本留在它被分享到的地方/)).toBeTruthy();
+    expect(within(move).getByRole("link", { name: "应用中心" }).getAttribute("href")).toBe("/center");
+  });
+
   it("speaks Chinese", async () => {
     const server = new FakeServer();
     server.session = sessionWith([made(CHECKLIST, FAMILY)], { locale: "zh" });

@@ -11,10 +11,11 @@
  * It also guards the frame (docs/center.md, "Privacy and safety"): a page
  * may load once for each address this component gives the iframe. A second
  * `load` for the same address means the page navigated its frame somewhere
- * else, so the frame is taken off the screen and a line says why.
+ * else, so the frame is taken off the screen and a line says why, wherever
+ * that version of the app is drawn, until Hearth is loaded again.
  */
 import type { AppSummary } from "@hearth/shared";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { pickLocalized } from "../i18n";
 import { usePreferences } from "../session/preferences";
 import { addRow, fetchForApp, listRows, readSettings, removeRow, replaceRows, saveSettings, updateRow, type ListOptions } from "./api";
@@ -29,6 +30,28 @@ const listeners = new Map<string, Set<Listener>>();
  */
 export function notifyMadeAppChanged(appId: string, source: Window | null = null): void {
   for (const listener of listeners.get(appId) ?? []) listener(source);
+}
+
+/**
+ * The versions of apps the frame guard stopped, as `spaceId/appId@version`,
+ * for as long as this copy of Hearth is loaded: a stopped app stays stopped
+ * wherever it is drawn, and when the person leaves and comes back, since a
+ * frame drawn again would be served the page only for it to leave again.
+ */
+const stoppedVersions = new Set<string>();
+const stoppedListeners = new Set<() => void>();
+
+function stopVersion(version: string): void {
+  if (stoppedVersions.has(version)) return;
+  stoppedVersions.add(version);
+  for (const listener of stoppedListeners) listener();
+}
+
+function onStopped(listener: () => void): () => void {
+  stoppedListeners.add(listener);
+  return () => {
+    stoppedListeners.delete(listener);
+  };
 }
 
 /** The calls that change the app's data or settings, after which its other pages read again. */
@@ -106,17 +129,19 @@ export function MadeAppFrame({ app, view = "card", maxHeight = 560 }: { app: App
   // The frame guard. `loads` counts the iframe's loads since `src` last changed: the page Hearth served
   // loads once, and a second load for the same address is the page, or a link in it the person clicked,
   // navigating the frame away. What it put in the new address may already have left; what it reads of
-  // the app's data from now on does not, since the frame is gone. A stopped app stays stopped, in other
-  // themes, languages and views too, until its next version (a change in the chat) or a reload of Hearth.
+  // the app's data from now on does not, since the frame is gone. A stopped app stays stopped wherever it
+  // is drawn (card, page or chat), in other themes, languages and views too, and after the person leaves
+  // and comes back, until its next version (a change in the chat) or a reload of Hearth: `stoppedVersions`
+  // outlives this component.
   const loads = useRef(0);
   useLayoutEffect(() => {
     loads.current = 0;
   }, [src]);
   const version = `${app.spaceId}/${app.id}@${app.version ?? 1}`;
-  const [stopped, setStopped] = useState<string | null>(null);
+  const stopped = useSyncExternalStore(onStopped, () => stoppedVersions.has(version));
   const onLoad = () => {
     loads.current += 1;
-    if (loads.current > 1) setStopped(version);
+    if (loads.current > 1) stopVersion(version);
   };
 
   useEffect(() => {
@@ -158,7 +183,7 @@ export function MadeAppFrame({ app, view = "card", maxHeight = 560 }: { app: App
     };
   }, [app.id, onChanged]);
 
-  if (stopped === version) {
+  if (stopped) {
     return (
       <p role="alert" className="rounded-ctl bg-surface px-3 py-4 text-sm text-down" data-made-app-stopped={app.id}>
         {t("made.leftPage")}

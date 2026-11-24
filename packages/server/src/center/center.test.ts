@@ -203,28 +203,52 @@ describe("what refuses publishing", () => {
     expect((await w.publish(LIN, w.linsSpace, "m-copy000001")).status).toBe(201);
   });
 
-  it("is the email address of the publisher or of someone they share a space with, named by where and not whose", async () => {
+  it("is the email address of the publisher or of a member of a space they own, named by where and not whose", async () => {
     const w = world();
+    // Sam owns the family, so its members' addresses are his to see: Lin's is looked for in his app.
     const manifest = madeManifestSchema.parse({ ...CHECKLIST, instructions: "Ask LIN@Example.com before deleting." });
-    makeApp(w.db, w.linsSpace, "m-email00001", w.lin.id, {
+    makeApp(w.db, w.samsSpace, "m-email00001", w.sam.id, {
       manifest,
       html: "<!doctype html>\n<p>Hello</p>\n<p>Write to owner@example.com.</p>\n<p>not jimowner@example.com, nor owner@example.com.au</p>",
     });
-    expect((await w.review(LIN, w.linsSpace, "m-email00001")).problems).toEqual([
+    expect((await w.review(SAM, w.samsSpace, "m-email00001")).problems).toEqual([
       { code: "email", where: { part: "instructions" } },
       { code: "email", where: { part: "page", line: 3 } },
     ]);
-    const refused = await w.publish(LIN, w.linsSpace, "m-email00001");
+    const refused = await w.publish(SAM, w.samsSpace, "m-email00001");
     expect(refused.status).toBe(400);
     const message = await refused.text();
     expect(message).toMatch(/the instructions.*the page, line 3/);
     expect(message).not.toMatch(/example\.com/i);
 
-    // Noa shares no space with Lin: her address is not looked for, so its presence says nothing about her.
+    // Noa shares no space with Sam: her address is not looked for, so its presence says nothing about her.
     setPage(w.db, "m-email00001", "<!doctype html><p>noa@example.com</p>");
     w.db.prepare("UPDATE made_apps SET manifest = ? WHERE app_id = 'm-email00001'").run(JSON.stringify(CHECKLIST));
-    expect((await w.review(LIN, w.linsSpace, "m-email00001")).problems).toEqual([]);
-    expect((await w.publish(LIN, w.linsSpace, "m-email00001")).status).toBe(201);
+    expect((await w.review(SAM, w.samsSpace, "m-email00001")).problems).toEqual([]);
+    expect((await w.publish(SAM, w.samsSpace, "m-email00001")).status).toBe(201);
+  });
+
+  it("never tells a plain member whether an address is a fellow member's, which Hearth does not show them", async () => {
+    const w = world();
+    // Lin is a plain member of the family, and owns only her personal space: her own address is looked for,
+    // Sam's and Kim's are not, so guessing them line by line learns nothing.
+    makeApp(w.db, w.linsSpace, "m-email00002", w.lin.id, {
+      html: "<!doctype html>\n<p>lin@example.com</p>\n<p>owner@example.com</p>\n<p>kim@example.com</p>",
+    });
+    expect((await w.review(LIN, w.linsSpace, "m-email00002")).problems).toEqual([{ code: "email", where: { part: "page", line: 2 } }]);
+    const refused = await w.publish(LIN, w.linsSpace, "m-email00002");
+    expect(refused.status).toBe(400);
+    const message = await refused.text();
+    expect(message).toMatch(/the page, line 2\./);
+    expect(message).not.toMatch(/line [34]/);
+
+    // Once she owns the family, its members' addresses are shown to her there, and looked for.
+    w.db.prepare("UPDATE space_members SET role = 'owner' WHERE space_id = 'family' AND user_id = ?").run(w.lin.id);
+    expect((await w.review(LIN, w.linsSpace, "m-email00002")).problems).toEqual([
+      { code: "email", where: { part: "page", line: 2 } },
+      { code: "email", where: { part: "page", line: 3 } },
+      { code: "email", where: { part: "page", line: 4 } },
+    ]);
   });
 
   it(`is a ${MAX_LISTINGS_PER_GROUP + 1}st app of one person in one group, while publishing again still works`, async () => {
@@ -251,6 +275,33 @@ describe("what refuses publishing", () => {
     // Someone else's count is their own.
     makeApp(w.db, w.samsSpace, "m-samsapp001", w.sam.id);
     expect((await w.publish(SAM, w.samsSpace, "m-samsapp001")).status).toBe(201);
+  });
+
+  it(`counts publishing again someone else's listing as one more of the person's, past ${MAX_LISTINGS_PER_GROUP} refused`, async () => {
+    const w = world();
+    // The family's app, which Sam publishes; Lin, made an owner of the family too, has 50 apps there already.
+    makeApp(w.db, w.family, "m-family0001", w.sam.id);
+    expect((await w.publish(SAM, w.family, "m-family0001")).status).toBe(201);
+    w.db.prepare("UPDATE space_members SET role = 'owner' WHERE space_id = 'family' AND user_id = ?").run(w.lin.id);
+    for (let n = 0; n < MAX_LISTINGS_PER_GROUP; n++) {
+      insertListing(w.db, {
+        spaceId: "family",
+        userId: w.lin.id,
+        sourceSpaceId: w.linsSpace,
+        sourceAppId: `m-other${String(n).padStart(5, "0")}`,
+        manifest: CHECKLIST,
+        html: PAGE,
+        note: "",
+        now: NOW,
+      });
+    }
+    // Publishing it again would make her its publisher, her 51st.
+    expect((await w.review(LIN, w.family, "m-family0001")).problems).toEqual([{ code: "too_many", spaceId: "family" }]);
+    expect((await w.publish(LIN, w.family, "m-family0001")).status).toBe(409);
+    expect(listListingsFor(w.db, w.lin.id).filter((listing) => listing.createdBy === w.lin.id)).toHaveLength(MAX_LISTINGS_PER_GROUP);
+    // Sam, its publisher, still publishes it again.
+    expect((await w.review(SAM, w.family, "m-family0001")).problems).toEqual([]);
+    expect((await w.publish(SAM, w.family, "m-family0001")).status).toBe(200);
   });
 });
 
@@ -355,7 +406,8 @@ describe("adding a copy", () => {
     expect(await (await w.call(SAM, `/api/spaces/${w.samsSpace}/apps/${appId}/rows/items`)).json()).toEqual({ rows: [] });
     // In the session, a copy of Lin's, whom Sam shares the family with.
     const copy = (await w.appsOf(SAM)).find((app) => app.id === appId);
-    expect(copy).toMatchObject({ spaceId: w.samsSpace, made: true, version: 1, source: { listingId: id, by: "lin" } });
+    expect(copy).toMatchObject({ spaceId: w.samsSpace, made: true, version: 1, source: { listingId: id, by: "lin", untouched: true } });
+    expect(copy?.source).not.toHaveProperty("mine");
     expect(copy).not.toHaveProperty("template");
   });
 
@@ -458,7 +510,7 @@ describe("a copy, its listing and its source", () => {
     expect(stored(w.db, appId)).toMatchObject({ origin: null, originHash: templateHash(CHECKLIST, PAGE), originRevision: 1 });
     expect(((await (await w.call(SAM, rows)).json()) as { rows: { name: string }[] }).rows.map((row) => row.name)).toEqual(["Bread"]);
     expect((await w.call(SAM, `/api/spaces/${w.samsSpace}/apps/${appId}/frame`)).status).toBe(200);
-    expect((await w.appsOf(SAM)).find((app) => app.id === appId)?.source).toEqual({});
+    expect((await w.appsOf(SAM)).find((app) => app.id === appId)?.source).toEqual({ untouched: true });
     expect(w.errors).toEqual([]);
   });
 });
@@ -480,6 +532,17 @@ describe("the publisher's name beside a copy", () => {
     expect(await sourceFor(SAM)).toEqual({ listingId: id, by: "lin" });
     expect(await sourceFor(NOA)).toEqual({ listingId: id });
     expect(JSON.stringify(await w.appsOf(NOA))).not.toContain('"by"');
+  });
+
+  it("says when the viewer is the publisher, and whether the copy is still as it was shared", async () => {
+    const w = world();
+    const id = await w.published();
+    // Lin adds a copy of her own app: it is "an app you shared" to her.
+    const { appId } = (await (await w.addCopy(LIN, w.linsSpace, id)).json()) as { appId: string };
+    const source = async () => (await w.appsOf(LIN)).find((app: AppSummary) => app.id === appId)?.source;
+    expect(await source()).toEqual({ listingId: id, by: "lin", mine: true, untouched: true });
+    setPage(w.db, appId, `${PAGE} `);
+    expect(await source()).toEqual({ listingId: id, by: "lin", mine: true });
   });
 });
 

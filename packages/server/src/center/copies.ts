@@ -107,13 +107,15 @@ export function addCopy(
 /**
  * The session's apps, with the publisher's name added to each copy whose
  * listing is in one of the person's groups: "by Lin" is shown only to those
- * who share that group with Lin.
+ * who share that group with Lin. `mine` says the person is the publisher, so
+ * that their own copy reads "an app you shared".
  */
 export function withPublishers(db: Db, userId: string, apps: AppSummary[]): AppSummary[] {
   const ids = apps.flatMap((app) => (app.source?.listingId === undefined ? [] : [app.source.listingId]));
   const names = publisherNamesFor(db, { userId, ids: [...new Set(ids)] });
   return apps.map((app) => {
-    const by = app.source?.listingId === undefined ? undefined : names.get(app.source.listingId);
-    return by === undefined ? app : { ...app, source: { ...app.source, by } };
+    const publisher = app.source?.listingId === undefined ? undefined : names.get(app.source.listingId);
+    if (publisher === undefined) return app;
+    return { ...app, source: { ...app.source, by: publisher.name, ...(publisher.mine ? { mine: true } : {}) } };
   });
 }

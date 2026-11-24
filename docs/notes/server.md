@@ -216,8 +216,12 @@ Notes for whoever changes this part, people and agents alike. They are read when
   `made_apps.origin` of its copies to NULL.
 - Publishing (`src/center/publish.ts`) is for an owner of the app's space
   (`publishableApp` in `src/made/apps.ts`); its email check looks only for
-  the addresses of the publisher and of people they share a space with
-  (`emailsAround` in `src/db/people.ts`), never every address on the server.
+  the addresses the publisher may already see, their own and those of the
+  members of spaces they own (`emailsAround` in `src/db/people.ts`), never
+  every address on the server: the review says where an address is, so it
+  would otherwise confirm an address the person guessed. Publishing again
+  someone else's listing counts against the person's 50 in that group,
+  since it makes them its publisher.
 - Server tests that need a group mostly insert it with SQL (`family()` in
   `src/apps/test-world.ts`), and their apps with `makeApp` there, a made
   app written straight into the database; `src/groups/routes.test.ts`
