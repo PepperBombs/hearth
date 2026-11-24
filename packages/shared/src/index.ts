@@ -309,15 +309,23 @@ export const addAppRequestSchema = z.strictObject({
 export type AddAppRequest = z.infer<typeof addAppRequestSchema>;
 
 /**
- * DELETE /api/spaces/:spaceId/apps/:appId/data. Owners only, and only for an
- * app that was removed or that the server holds no app for; for one still
- * in use the answer is 409 `conflict`. `confirm` is the app's ID, typed by the person.
- * Answers 204 with no body.
+ * DELETE /api/spaces/:spaceId/apps/:appId/data: delete an app from a space
+ * for good, with everything it has there: its rows, settings, versions,
+ * everyone's access, switches and pins, and its entry; the chat's requests
+ * to delete its rows that still wait for an answer expire. It cannot be
+ * undone. Owners only (403 `forbidden` for a member, 404 for anyone not in
+ * the space or a space that never had the app). Answers 204 with no body.
+ *
+ * For an app the server holds (every app made in Hearth), `confirm` is the
+ * app's name as the person typed it, in either of its languages; spaces
+ * around it do not count. The app may be in use or removed. For an install
+ * the server holds no app for, `confirm` is its ID. Anything else answers
+ * 400 `invalid_request`: a second guard besides the dialog.
  *
  * DELETE /api/spaces/:spaceId/apps/:appId, which removes the app and keeps
  * its data, has no body. Owners only.
  */
-export const deleteAppDataRequestSchema = z.strictObject({ confirm: z.string() });
+export const deleteAppDataRequestSchema = z.strictObject({ confirm: z.string().max(200) });
 export type DeleteAppDataRequest = z.infer<typeof deleteAppDataRequestSchema>;
 
 /**
@@ -413,6 +421,15 @@ export const installedAppSchema = z.object({
   assistant: z.boolean(),
   /** The built-in app a made app was added from, when it was: the Add dialog brings a removed one back. */
   template: z.string().optional(),
+  /**
+   * For an app the server holds, removed or not, its name in both languages
+   * (a name in its maker's words is the same in both), its icon and its
+   * colour, so that the Apps page can draw a removed app, which the session
+   * no longer lists. Left out when the server holds no app of this ID.
+   */
+  name: z.object({ en: z.string(), zh: z.string() }).optional(),
+  icon: z.string().optional(),
+  color: z.string().optional(),
 });
 export type InstalledApp = z.infer<typeof installedAppSchema>;
 
@@ -524,8 +541,55 @@ export const chatRequestSchema = z.strictObject({
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 
-/** What the model did in an app, for the conversation to show. */
-export const CHAT_ACTIONS = ["app_created", "app_updated", "app_restored", "row_added", "row_updated"] as const;
+/**
+ * What the model did in an app, for the conversation to show.
+ * "delete_requested" is the one thing it asks for rather than does: rows it
+ * would delete, which go only when the person confirms (owner's decision 7).
+ */
+export const CHAT_ACTIONS = ["app_created", "app_updated", "app_restored", "row_added", "row_updated", "delete_requested"] as const;
+
+/** The most rows the model may ask to delete at once. */
+export const MAX_DELETE_ROWS = 50;
+
+/** How many of the rows asked about a request to delete shows, each in a few words. */
+export const DELETE_PREVIEW_ROWS = 5;
+
+/** How long a request to delete waits for the person: older, it expires when someone acts on it. */
+export const CONFIRMATION_HOURS = 24;
+
+/**
+ * Where a request of the model's to delete rows stands: waiting for the
+ * person, confirmed (the rows went), declined (nothing went), or expired
+ * (nothing went: it waited too long, or its app was deleted or moved).
+ */
+export const CONFIRMATION_STATUSES = ["pending", "confirmed", "declined", "expired"] as const;
+export const confirmationStatusSchema = z.enum(CONFIRMATION_STATUSES);
+export type ConfirmationStatus = z.infer<typeof confirmationStatusSchema>;
+
+/**
+ * POST /api/spaces/:spaceId/chats/:chatId/confirmations/:confirmationId: the
+ * person's answer to a request of the model's to delete rows. Only the person
+ * whose conversation it is (404 for anyone else, as for the conversation).
+ * 409 `conflict` when it was answered already.
+ *
+ * "confirm" checks again, at that moment, everything the request needed:
+ * that the space lets the assistant change things and that the person, and
+ * the assistant for them, may change the app (403 `forbidden` otherwise),
+ * and deletes the rows that are still there (those gone since are skipped).
+ * "decline" deletes nothing. A refusal leaves the request waiting. A request
+ * older than CONFIRMATION_HOURS, or whose app is no longer in the space,
+ * expires instead, whatever the answer: that is recorded, and answered
+ * with status "expired".
+ */
+export const confirmationDecisionSchema = z.strictObject({ decision: z.enum(["confirm", "decline"]) });
+export type ConfirmationDecision = z.infer<typeof confirmationDecisionSchema>;
+
+/** The answer to a decision: where the request stands now, and how many rows went. */
+export const confirmationResultSchema = z.object({
+  status: confirmationStatusSchema,
+  deleted: z.number().int().nonnegative(),
+});
+export type ConfirmationResult = z.infer<typeof confirmationResultSchema>;
 
 /** What happened when the chat ended without an answer. */
 export const CHAT_FAILURES = [
@@ -564,6 +628,24 @@ const chatActionFields = {
   previous: z.number().int().positive().optional(),
   /** For "app_restored": the earlier version it brought back. */
   restored: z.number().int().positive().optional(),
+  /**
+   * For "delete_requested": the request (its ID, for the person's answer),
+   * the collection, how many rows it names and a few words of each of the
+   * first DELETE_PREVIEW_ROWS of them, as the person sees them before
+   * deciding. The preview is the rows' content: data, never translated.
+   */
+  confirmationId: z.string().optional(),
+  collection: z.string().optional(),
+  count: z.number().int().positive().optional(),
+  preview: z.array(z.string()).optional(),
+  /**
+   * For "delete_requested", where the request stands now and how many rows
+   * went. Not kept with the entry: the server reads both afresh whenever it
+   * gives the conversation, so the card shows its present state, on every
+   * device. The event says "pending".
+   */
+  status: confirmationStatusSchema.optional(),
+  deleted: z.number().int().nonnegative().optional(),
 };
 
 /**

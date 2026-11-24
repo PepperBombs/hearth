@@ -1,7 +1,7 @@
 /**
  * The calls the shell makes about an app in a space, rather than inside it:
- * its settings, removing it or moving it to another space, and the person's
- * own switch and pin. Adding a built-in app is in ../made/api.ts, and what
+ * its settings, removing it, bringing it back, deleting it for good or
+ * moving it to another space, and the person's own switch and pin. Adding a built-in app is in ../made/api.ts, and what
  * an app made in Hearth reads and writes goes through its page's bridge
  * (../made/frame.tsx).
  *
@@ -9,6 +9,7 @@
  */
 import {
   appSettingsSchema,
+  type AddAppRequest,
   type AppPrefsPatch,
   type AppSettings,
   type AppSettingsPatch,
@@ -60,6 +61,21 @@ export async function saveAppSettings(install: Install, patch: AppSettingsPatch)
 /** DELETE /api/spaces/:spaceId/apps/:appId: removes an app from a space. Its data is kept. */
 export async function removeAppFromSpace(install: Install): Promise<void> {
   await request(address(install), { method: "DELETE" });
+}
+
+/** PUT /api/spaces/:spaceId/apps/:appId: brings a removed app back to its space, with its data. Owners only. */
+export async function bringBackApp(install: Install, body: AddAppRequest): Promise<void> {
+  await request(address(install), { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(body) });
+}
+
+/**
+ * DELETE .../data: deletes an app from its space for good, in use or
+ * removed, with its rows, settings and versions. Owners only; `confirm` is
+ * the app's name as the person typed it (its ID for an install the server
+ * holds no app for).
+ */
+export async function deleteAppForGood(install: Install, confirm: string): Promise<void> {
+  await request(address(install, "data"), { method: "DELETE", headers: JSON_HEADERS, body: JSON.stringify({ confirm }) });
 }
 
 /** POST .../move: moves an app with its data to another space. No body comes back. */

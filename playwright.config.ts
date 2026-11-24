@@ -28,10 +28,10 @@ import {
  *   test decides exactly what the server says: a member, someone not invited,
  *   a failure. This is where almost every test lives.
  *
- * - "server" runs the few tests in e2e/real-server.spec.ts and
- *   e2e/chat-history.spec.ts against the real server, built and started
- *   here with sign-in switched off (HEARTH_AUTH=dev),
- *   serving the same built web app. Three copies run: one that treats every
+ * - "server" runs the few tests in e2e/real-server.spec.ts,
+ *   e2e/chat-history.spec.ts and e2e/deleting.spec.ts against the real
+ *   server, built and started here with sign-in switched off
+ *   (HEARTH_AUTH=dev), serving the same built web app. Three copies run: one that treats every
  *   request as the owner, one as a member of the owner's family and one as a
  *   stranger. The owner's and the member's share a database file in the
  *   system's temporary folder, made afresh when the owner's copy starts, so
@@ -48,7 +48,7 @@ import {
 const reuseExistingServer = !process.env.CI;
 
 /** The tests that run against the real server. */
-const REAL_SERVER_TESTS = /(real-server|chat-history)\.spec\.ts$/;
+const REAL_SERVER_TESTS = /(real-server|chat-history|deleting)\.spec\.ts$/;
 
 export default defineConfig({
   testDir: "./e2e",

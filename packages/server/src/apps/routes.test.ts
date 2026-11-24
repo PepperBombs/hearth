@@ -63,8 +63,19 @@ const add = (who: string, spaceId: string, appId: string, body: unknown = {}) =>
   call(who, "PUT", `/api/spaces/${spaceId}/apps/${appId}`, body);
 const remove = (who: string, spaceId: string, appId: string) =>
   call(who, "DELETE", `/api/spaces/${spaceId}/apps/${appId}`);
-const deleteData = (who: string, spaceId: string, appId: string, body: unknown = { confirm: appId }) =>
+const deleteData = (who: string, spaceId: string, appId: string, body: unknown = { confirm: typedName(appId) }) =>
   call(who, "DELETE", `/api/spaces/${spaceId}/apps/${appId}/data`, body);
+
+/**
+ * What an owner types to delete an app for good: its name in English as the
+ * Apps page shows it, or the ID of an install the server holds no app for.
+ */
+function typedName(appId: string): string {
+  const made = world.db.prepare("SELECT manifest FROM made_apps WHERE app_id = ?").get(appId) as { manifest: string } | undefined;
+  if (!made) return appId;
+  const { name } = JSON.parse(made.manifest) as { name: string | { en: string } };
+  return typeof name === "string" ? name : name.en;
+}
 
 /** Who asks about which app in which space; made when the test runs, once the world exists. */
 const at = (request: () => [who: string, spaceId: string, appId: string]) => request;
@@ -543,10 +554,33 @@ describe("deleting an app's data", () => {
       count(world.db, table, spaceId, appId),
     );
 
-  it("is refused while the app is in the space", async () => {
+  it("is allowed while the app is in the space, and takes everything of it, for everyone", async () => {
     await filled();
-    await expectError(await deleteData(SAM, world.family, ours), 409, "conflict");
-    expect(left(world.family, ours)).toEqual([1, 2, 2, 1, 1, 1]);
+    expect(await seenBy(LIN)).toEqual([`${world.family}/${ours}: view`]);
+    await expectDone(await deleteData(SAM, world.family, ours));
+    expect(left(world.family, ours)).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(world.db.prepare("SELECT count(*) AS n FROM made_app_versions WHERE app_id = ?").get(ours)).toEqual({ n: 0 });
+    expect(await seenBy(LIN)).toEqual([]);
+    expect(await seenBy(KIM)).toEqual([]);
+    expect(left(world.samsSpace, OWN)).toEqual([1, 1, 1, 0, 0, 1]);
+    expect(errors).toEqual([]);
+  });
+
+  it.each([
+    ["its name in English", () => "Grocery list"],
+    ["its name in Chinese", () => "购物清单"],
+    ["its name with spaces around it", () => "  Grocery list \n"],
+  ])("takes %s as confirmation", async (_label, typed) => {
+    await filled();
+    await expectDone(await deleteData(SAM, world.family, ours, { confirm: typed() }));
+    expect(left(world.family, ours)).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+
+  it("takes the name a person's model gave an app, in its maker's words", async () => {
+    makeApp(world.db, world.family, DIARY, world.sam.id, { manifest: { ...JOURNAL, name: "Our diary" } });
+    await expectError(await deleteData(SAM, world.family, DIARY, { confirm: "Journal" }), 400, "invalid_request");
+    await expectDone(await deleteData(SAM, world.family, DIARY, { confirm: "Our diary" }));
+    expect(count(world.db, "made_apps", world.family, DIARY)).toBe(0);
   });
 
   it("deletes everything a removed app had in that space, the app itself included, and nothing else", async () => {
@@ -597,7 +631,9 @@ describe("deleting an app's data", () => {
   it("is allowed without removing first when the server holds no app for it", async () => {
     await filled();
     unreadable(world.db, ours);
-    await expectDone(await deleteData(SAM, world.family, ours));
+    // Its name cannot be read either, so its ID is what is typed.
+    await expectError(await deleteData(SAM, world.family, ours, { confirm: "Grocery list" }), 400, "invalid_request");
+    await expectDone(await deleteData(SAM, world.family, ours, { confirm: ours }));
     expect(left(world.family, ours)).toEqual([0, 0, 0, 0, 0, 0]);
     expect(left(world.samsSpace, OWN)).toEqual([1, 1, 1, 0, 0, 1]);
     // And for an install a release before the built-in apps left, which could not move.
@@ -608,14 +644,17 @@ describe("deleting an app's data", () => {
   });
 
   it.each([
-    ["another app's ID", () => ({ confirm: OWN })],
-    ["the ID in other letters", () => ({ confirm: ours.toUpperCase() })],
+    ["another app's name", () => ({ confirm: "Checklist" })],
+    ["the name in other letters", () => ({ confirm: "GROCERY LIST" })],
+    ["part of the name", () => ({ confirm: "Grocery" })],
+    ["the app's ID", () => ({ confirm: ours })],
     ["nothing typed", () => ({ confirm: "" })],
+    ["only spaces", () => ({ confirm: "   " })],
     ["no confirmation", () => ({})],
     ["a confirmation that is not text", () => ({ confirm: true })],
-    ["a property the contract does not name", () => ({ confirm: ours, force: true })],
+    ["a property the contract does not name", () => ({ confirm: "Grocery list", force: true })],
     ["no body at all", () => undefined],
-  ])("needs the app's ID typed as confirmation: refuses %s", async (_label, body) => {
+  ])("needs the app's name typed as confirmation: refuses %s", async (_label, body) => {
     await filled();
     await remove(SAM, world.family, ours);
     const response = await call(SAM, "DELETE", `/api/spaces/${world.family}/apps/${ours}/data`, body());

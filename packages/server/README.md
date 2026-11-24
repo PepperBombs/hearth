@@ -171,13 +171,13 @@ app.
 | `PATCH /api/spaces/:spaceId/members/:userId` | yes | A member's `role` or `canAddApps`. Owners only. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/members/:userId` | yes | Removes a member: an owner removing anyone, or anyone leaving. Answers `204`. |
 | `DELETE /api/spaces/:spaceId/invitations` | yes | Takes back an invitation: `{ email }`. Owners only. Answers `204`. |
-| `GET /api/spaces/:spaceId/apps` | yes | The owners' list: every app the space has (removed ones and those the server holds no app for included) with its row count, what members get, the exceptions and `assistant`, whether an assistant may use it here; everyone in the space with their address and right to add apps; the invitations. Owners only. |
+| `GET /api/spaces/:spaceId/apps` | yes | The owners' list: every app the space has (removed ones and those the server holds no app for included) with its row count, what members get, the exceptions and `assistant`, whether an assistant may use it here, and for an app the server holds its `name` in both languages, `icon` and `color`, so that a removed one can be drawn; everyone in the space with their address and right to add apps; the invitations. Owners only. |
 | `PUT /api/spaces/:spaceId/apps/:appId/access` | yes | Who can use the app: `{ memberAccess?, members?, assistant? }`, exceptions by user ID, `null` removing one; `assistant: false` leaves the app out of what an assistant may use in the space. Owners only. Answers `204`. |
 | `PUT /api/spaces/:spaceId/assistant` | yes | What an assistant may do in the space: `{ level }`, `none` (off, where every space starts), `view` (read only) or `edit` (read and change). Owners only, a personal space's owner included: `404` outside the space, `403` for a member. Answers `204`. |
 | `PUT /api/spaces/:spaceId/apps/:appId` | yes | Brings a removed app back to its space with its data; one that is there stays as it is. Takes `{ memberAccess? }`. Answers `204`. An app is added to a space when it is made, in the chat or from the catalog, below. |
 | `DELETE /api/spaces/:spaceId/apps/:appId` | yes | Removes the app from the space and keeps its data. Answers `204`. |
 | `POST /api/spaces/:spaceId/apps/:appId/move` | yes | Moves the app with its data to another space: `{ toSpaceId, memberAccess? }`. Owners of the space it is in, into a space they own or may add apps to. Answers `204`. |
-| `DELETE /api/spaces/:spaceId/apps/:appId/data` | yes | Deletes for good the data of an app that was removed or that the server holds no app for, and a made app with it. Takes `{ confirm }`, the app's ID. Owners only. Answers `204`. |
+| `DELETE /api/spaces/:spaceId/apps/:appId/data` | yes | Deletes an app from the space for good, in use or removed: its rows, settings, versions, access, switches and pins, and the made app itself, for everyone; the chat's requests to delete its rows that still wait expire. Takes `{ confirm }`: the app's name in either language, or, for an install the server holds no app for, its ID. Owners only. Answers `204`. |
 | `PATCH /api/spaces/:spaceId/apps/:appId/me` | yes | The caller's own switch and pin for the app: `{ enabled?, pinned? }`. Answers `204`. Needs view access. |
 | `GET /api/spaces/:spaceId/apps/:appId/settings` | yes | The app's settings in this space: `{ space, user }`, the values everyone shares and the caller's own, defaults filled in. Needs view access. |
 | `PATCH /api/spaces/:spaceId/apps/:appId/settings` | yes | Saves the settings named in `{ space?, user? }`; answers like the `GET`. `space` needs edit access, `user` only view. |
@@ -197,6 +197,7 @@ app.
 | `GET /api/spaces/:spaceId/chats` | yes | `{ chats }`: the caller's own conversations with their model in the space, the one used last first, each `{ id, title, createdAt, updatedAt }`. Nobody else's, in a group too. |
 | `GET /api/spaces/:spaceId/chats/:chatId` | yes | `{ chat, entries }`: one conversation of the caller's, whole, its entries in order (`ChatEntry` in `@hearth/shared`). `404` for anyone else's, or one of another space, as for one that is not there. |
 | `DELETE /api/spaces/:spaceId/chats/:chatId` | yes | Deletes one conversation of the caller's. Answers `204`. What the model made in it stays. |
+| `POST /api/spaces/:spaceId/chats/:chatId/confirmations/:confirmationId` | yes | The caller's answer to a request of their model's to delete rows: `{ decision: "confirm" \| "decline" }`. Answers `{ status, deleted }`. `404` for anyone else's request, or one of another conversation or space; `409` once it was answered. `confirm` checks again what the request needed (`403` when the space's level or the caller's access no longer allows it, and the request keeps waiting) and deletes the rows still there. Deleting the app's data or moving the app to another space expires its waiting requests at once, so answering one afterwards gets `409` like any other answered request, and reading the conversation shows it `expired`. A request older than 24 hours, or whose app left the space some other way, answers `{ status: "expired", deleted: 0 }` and deletes nothing. Either way nothing is deleted, and a client that gets `409` should read the conversation again to see the request's state. |
 | `POST /api/chat` | yes | `{ spaceId, chatId?, message }`: the caller's new message to their own model, in a conversation of theirs in the space, or in a new one without `chatId`. The server keeps the conversation and gives the model what was said before. Answered as a stream of server-sent events (`ChatEvent` in `@hearth/shared`), the first `{ type: "chat", chatId, title }` for a new conversation. Before it: `404` for a space or conversation that is not the caller's, `409` while that conversation is answering already, when it holds 500 entries, or, for a new one, when the caller has 500 conversations in the space. |
 
 Every failure has the shape `{ error: { code, message } }`. The message is
@@ -264,10 +265,13 @@ each that could not be.
   `memberAccess` as given now, and no exceptions from before. A member who
   may add apps gets `409` for an app the space has an entry for that they
   cannot see.
-- `DELETE .../apps/:appId/data` deletes the rows, the settings, the entry
-  and the made app itself, for good. Owners only (`403` for any other
-  member), `confirm` must be the app's ID (`400`), and the app must have
-  been removed or be one the server holds no app for (`409` otherwise).
+- `DELETE .../apps/:appId/data` (`deleteAppData`) deletes the rows, the
+  settings, the entry and the made app with its versions, for good, in use
+  or removed, in one immediate transaction, and expires the chat's waiting
+  requests to delete its rows. Owners only (`403` for any other member).
+  `confirm` must be the app's name in English or Chinese, spaces around it
+  aside, or for an install the server holds no app for its ID (`400`
+  otherwise): a second guard besides the Apps page's dialog.
 - `POST .../apps/:appId/move` (`moveApp`) moves the app with its data to
   the space `toSpaceId` names, in one immediate transaction. The caller
   must own the space the app is in (`403` for a member who can use it,
@@ -279,7 +283,8 @@ each that could not be.
   shares, and the own settings, switches and pins of people who are in
   both spaces go along; those of everyone else are deleted first, since
   the database refuses a row about a person in a space they are not in.
-  Access starts afresh: every exception goes, members get `memberAccess`
+  The chat's waiting requests to delete its rows expire: they were asked
+  in the space it leaves. Access starts afresh: every exception goes, members get `memberAccess`
   (`none` when left out), and a caller who is not an owner of the new
   space gets edit there, as when they add an app. Who added the app, and
   when, stays recorded.
@@ -571,7 +576,11 @@ migration 6 `made_app_versions` (every version of a made app, the newest
 `template_hash` (the built-in app a copy was added from, and which release
 of it the copy is while nobody changed it). Migration 8 adds `chats` and
 `chat_entries`: each person's conversations with their model in a space,
-theirs alone, which go when they leave it.
+theirs alone, which go when they leave it. Migration 9 adds
+`chat_confirmations`: each request of a model's to delete rows, in a
+conversation, and where it stands (`pending`, `confirmed`, `declined` or
+`expired`). It goes with its conversation and names its app by ID only,
+with no key to `space_apps`, so that it outlives the app.
 
 The server writes `space_apps`; the access route, and adding or moving an
 app as a member, write `app_access`; the rows routes and the chat write
@@ -582,7 +591,7 @@ people who are not in the new space. The routes for groups write `spaces`,
 `space_members`, `invitations` and `space_invitations`. SQL for `app_rows`
 and `app_settings` lives in `src/apps/store.ts` only; for `made_apps` and
 `made_app_versions` it is in `src/made/apps.ts` and `src/made/builtin.ts`,
-for `user_models` in `src/model/settings.ts`, and for `chats` and `chat_entries` in `src/model/chats.ts`. Nothing writes `app_jobs` any more, since the jobs
+for `user_models` in `src/model/settings.ts`, for `chats` and `chat_entries` in `src/model/chats.ts`, and for `chat_confirmations` in `src/model/confirmations.ts`. Nothing writes `app_jobs` any more, since the jobs
 of mini-apps were removed: the move of their installs to the built-in apps
 deletes the rows of each install it moves (`src/made/builtin.ts`), and the
 table stays, as every table that has shipped does.

@@ -8,11 +8,13 @@
  */
 import {
   chatRequestSchema,
+  confirmationDecisionSchema,
   modelSettingsRequestSchema,
   type ChatEntry,
   type ChatEvent,
   type ChatList,
   type ChatSummary,
+  type ConfirmationResult,
 } from "@hearth/shared";
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -23,7 +25,7 @@ import { membershipOf } from "../db/people";
 import { readBody } from "../http/body";
 import type { Env, RequireMember } from "../http/env";
 import { notFound, Refusal } from "../http/errors";
-import { runChat } from "./chat";
+import { answerDeleteRequest, runChat } from "./chat";
 import {
   MAX_ENTRIES,
   appendEntry,
@@ -34,6 +36,7 @@ import {
   historyFor,
   listChats,
   readChat,
+  readTimedChat,
   titleOf,
   type ChatScope,
 } from "./chats";
@@ -48,7 +51,8 @@ function entryOf(event: ChatEvent): ChatEntry | null {
     case "text":
       return { kind: "model", text: event.text };
     case "action": {
-      const { action, appId, appName, version, previous, restored } = event;
+      // Where a request to delete stands is not kept with it: it is read from its own table.
+      const { action, appId, appName, version, previous, restored, confirmationId, collection, count, preview } = event;
       return {
         kind: "action",
         action,
@@ -57,6 +61,10 @@ function entryOf(event: ChatEvent): ChatEntry | null {
         ...(version !== undefined ? { version } : {}),
         ...(previous !== undefined ? { previous } : {}),
         ...(restored !== undefined ? { restored } : {}),
+        ...(confirmationId !== undefined ? { confirmationId } : {}),
+        ...(collection !== undefined ? { collection } : {}),
+        ...(count !== undefined ? { count } : {}),
+        ...(preview !== undefined ? { preview } : {}),
       };
     }
     case "error":
@@ -125,6 +133,19 @@ export function registerModelRoutes(
     return c.body(null, 204);
   });
 
+  // The person's answer to a request of their model's to delete rows, in a conversation of theirs.
+  app.post("/api/spaces/:spaceId/chats/:chatId/confirmations/:confirmationId", requireMember, async (c) => {
+    const { decision } = await readBody(c, confirmationDecisionSchema);
+    const scope = scopeOf(c.get("user").id, c.req.param("spaceId"));
+    const result = answerDeleteRequest(deps, {
+      ...scope,
+      chatId: c.req.param("chatId"),
+      confirmationId: c.req.param("confirmationId"),
+      decision,
+    });
+    return c.json(result satisfies ConfirmationResult);
+  });
+
   app.post("/api/chat", requireMember, async (c) => {
     const request = await readBody(c, chatRequestSchema);
     const user = c.get("user");
@@ -151,7 +172,7 @@ export function registerModelRoutes(
     answering.add(chatId);
 
     try {
-      const history = historyFor(readChat(db, { ...scope, chatId })?.entries ?? []);
+      const history = historyFor(readTimedChat(db, { ...scope, chatId })?.entries ?? []);
       return streamSSE(c, async (stream) => {
         const stop = new AbortController();
         stream.onAbort(() => stop.abort());
@@ -172,7 +193,7 @@ export function registerModelRoutes(
         const ping = setInterval(() => void write({ type: "ping" }).catch(() => {}), PING_MS);
         try {
           if (started) await write({ type: "chat", chatId, title: started.title });
-          await runChat(deps, user, { spaceId: scope.spaceId, history }, send, stop.signal);
+          await runChat(deps, user, { spaceId: scope.spaceId, chatId, history }, send, stop.signal);
         } catch (error) {
           if (!stop.signal.aborted) {
             deps.logError(error);

@@ -11,6 +11,8 @@ import {
   chatEventSchema,
   chatRequestSchema,
   chatSchema,
+  confirmationDecisionSchema,
+  confirmationResultSchema,
   appPrefsPatchSchema,
   appSettingsPatchSchema,
   appSettingsSchema,
@@ -225,8 +227,22 @@ describe("request bodies", () => {
   });
 
   it("need the typed confirmation to delete an app's data", () => {
+    expect(accepts(deleteAppDataRequestSchema, { confirm: "Grocery list" })).toBe(true);
     expect(accepts(deleteAppDataRequestSchema, {})).toBe(false);
     expect(accepts(deleteAppDataRequestSchema, { confirm: true })).toBe(false);
+    expect(accepts(deleteAppDataRequestSchema, { confirm: "x".repeat(201) })).toBe(false);
+    expect(accepts(deleteAppDataRequestSchema, { name: "Grocery list" })).toBe(false);
+  });
+
+  it("answer a request to delete with confirm or decline, and nothing else", () => {
+    expect(confirmationDecisionSchema.parse({ decision: "confirm" })).toEqual({ decision: "confirm" });
+    expect(accepts(confirmationDecisionSchema, { decision: "decline" })).toBe(true);
+    for (const body of [{}, { decision: "delete" }, { decision: true }, { decision: "confirm", rowIds: ["row-1"] }]) {
+      expect(accepts(confirmationDecisionSchema, body), JSON.stringify(body)).toBe(false);
+    }
+    expect(confirmationResultSchema.parse({ status: "confirmed", deleted: 2 })).toEqual({ status: "confirmed", deleted: 2 });
+    expect(accepts(confirmationResultSchema, { status: "done", deleted: 2 })).toBe(false);
+    expect(accepts(confirmationResultSchema, { status: "confirmed", deleted: -1 })).toBe(false);
   });
 
   it("switch and pin with booleans only", () => {
@@ -266,6 +282,30 @@ describe("the chat", () => {
     expect(chatSchema.parse(chat)).toEqual(chat);
     expect(accepts(chatEntrySchema, { kind: "assistant", text: "Hi" })).toBe(false);
     expect(accepts(chatEntrySchema, { kind: "action", action: "app_deleted", appId: "app-1", appName: "List" })).toBe(false);
+  });
+
+  it("keeps a request to delete rows with what it names, and gives where it stands", () => {
+    const request = {
+      kind: "action",
+      action: "delete_requested",
+      appId: "app-1",
+      appName: "Ledger",
+      confirmationId: "conf-1",
+      collection: "expenses",
+      count: 7,
+      preview: ["Lunch · 35", "Coffee · 18"],
+      status: "confirmed",
+      deleted: 6,
+    };
+    expect(chatEntrySchema.parse(request)).toEqual(request);
+    expect(chatEventSchema.parse({ ...request, kind: undefined, type: "action", status: "pending", deleted: undefined })).toMatchObject({
+      type: "action",
+      action: "delete_requested",
+      status: "pending",
+    });
+    expect(accepts(chatEntrySchema, { ...request, status: "maybe" })).toBe(false);
+    expect(accepts(chatEntrySchema, { ...request, count: 0 })).toBe(false);
+    expect(accepts(chatEntrySchema, { ...request, deleted: -1 })).toBe(false);
     expect(accepts(chatEntrySchema, { kind: "failure", failure: "network", detail: "" })).toBe(false);
   });
 
@@ -290,6 +330,12 @@ describe("what the owners of a space see", () => {
 
   it("lists apps, members with their addresses, and people still to arrive", () => {
     expect(spaceAppsSchema.parse(view)).toEqual(view);
+  });
+
+  it("names, draws and counts an app the server holds, removed ones too", () => {
+    const removed = { ...view.apps[0], removedAt: "2026-01-01T00:00:00.000Z", name: { en: "Ledger", zh: "Ledger" }, icon: "wallet", color: "green" };
+    expect(spaceAppsSchema.parse({ ...view, apps: [removed] }).apps[0]).toEqual(removed);
+    expect(accepts(spaceAppsSchema, { ...view, apps: [{ ...removed, name: "Ledger" }] })).toBe(false);
   });
 
   it("refuses a negative or fractional row count and an unknown level", () => {

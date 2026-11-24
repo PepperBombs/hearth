@@ -264,7 +264,7 @@ describe("changing an app made in Hearth", () => {
       db.prepare("INSERT INTO made_apps (app_id, space_id, manifest, html, version, created_by, updated_by, created_at, updated_at) VALUES ('m-aaaaaaaaaa', ?, ?, '<p>x</p>', 3, ?, ?, ?, ?)").run(space, JSON.stringify(MANIFEST), sam.id, sam.id, at, at);
       db.prepare("INSERT INTO space_apps (space_id, app_id, created_by, created_at) VALUES (?, 'm-aaaaaaaaaa', ?, ?)").run(space, sam.id, at);
     })();
-    expect(migrate(db).map((migration) => migration.id)).toEqual([6, 7, 8]);
+    expect(migrate(db).map((migration) => migration.id)).toEqual([6, 7, 8, 9]);
     expect(db.prepare("SELECT app_id AS appId, version, html, created_by AS by FROM made_app_versions").all()).toEqual([
       { appId: "m-aaaaaaaaaa", version: 3, html: "<p>x</p>", by: sam.id },
     ]);

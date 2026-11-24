@@ -12,8 +12,11 @@ Notes for whoever changes this part, people and agents alike. They are read when
   made up (`checklist` and `feed`, `BUILT_IN_IDS`), listed by
   `GET /api/catalog` (`catalog`, all of them unless a test says otherwise)
   and added with `builtInApp`. It answers adding one or bringing it back,
-  removing, moving, switch and pin and the settings `PATCH`, and records
-  them in `appChanges`; it also keeps groups (the owners' list of each in
+  removing, moving, switch and pin and the settings `PATCH`, bringing a
+  removed app back (`PUT`) and deleting one for good (`DELETE .../data`,
+  with its name), and records them in `appChanges`. A space's owners' list
+  keeps the apps it removed, with their names, icons and colours: one drawn
+  from the session until then is kept in `groups` from the first removal; it also keeps groups (the owners' list of each in
   `groups`, the people it knows in `people`, `ownAFamily` for a ready
   family) and records their changes in `groupChanges`. The owners' list of
   a space it was given none for, a personal one included, is drawn from the
@@ -21,9 +24,15 @@ Notes for whoever changes this part, people and agents alike. They are read when
   test sets one), their conversations in each space (`chats`: listed, read
   and deleted, 404 for a space or conversation not theirs) and
   `POST /api/chat`, whose made-up model answers "Noted: " and the message,
-  keeping both and recording the request in `chatRequests`.
+  keeping both and recording the request in `chatRequests`. The person's
+  answer to a request of the model's to delete
+  (`POST .../confirmations/:id`) is recorded in `confirmationRequests` and
+  kept in that request's entry of `chats`, so a reload shows it; a test
+  writes such entries itself, and `confirmationFailure` refuses answers.
 - Removing an app keeps everyone's switches, pins and settings, and its
   data, and the end-to-end tests against the real server share one server.
+  Deleting an app for good (`DELETE .../data`) wants its name, which the
+  owners' list gives (`name.en`), not its ID.
   A test there that changes them puts them back, or works in a group of its
   own, before it removes the app. Nothing deletes a space, so a group a test
   creates stays for the tests after it: give it a name of its own and do not
@@ -51,12 +60,17 @@ Notes for whoever changes this part, people and agents alike. They are read when
   `HEARTH_SECRET` of their own that seals the keys the tests save (the same
   in every copy, so Lin's copy opens what the owner's sealed). It answers
   `POST /chat/completions` alone, with "Noted: " and the person's last
-  message, and calls no tool. A test may save any OpenAI-compatible model
+  message as the server sent it (Hearth's notes of answers to requests to
+  delete included), calling no tool; except a message whose own words are
+  "delete " and a text, to which it reads the rows of every app the system
+  prompt lists (`list_rows`), asks to delete the first row one of whose
+  fields is that text (`delete_rows`) and says "Asked before deleting "
+  and the text. A test may save any OpenAI-compatible model
   in Settings (`https://api.example.com/v1`, a made-up key): nothing reaches
   that host.
-- The tests against the real server are `real-server.spec.ts` and
-  `chat-history.spec.ts` (`REAL_SERVER_TESTS`); they share the owner's
-  preferences, model and spaces, so the "server" project runs them in one
+- The tests against the real server are `real-server.spec.ts`,
+  `chat-history.spec.ts` and `deleting.spec.ts` (`REAL_SERVER_TESTS`); they
+  share the owner's preferences, model and spaces, so the "server" project runs them in one
   worker, one file after another. A test there that changes the owner's
   model, the assistant's switch of a space or its conversations puts them
   back when it ends.

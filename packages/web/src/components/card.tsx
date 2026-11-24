@@ -1,8 +1,8 @@
-import type { HTMLAttributes, ReactNode } from "react";
+import type { ComponentProps, HTMLAttributes, ReactNode } from "react";
 import { cx } from "../lib/cx";
 
 /** A white panel with a hairline border. Rendered as a <section>; give it a heading with <CardHeader>. */
-export function Card({ className, ...rest }: HTMLAttributes<HTMLElement>) {
+export function Card({ className, ...rest }: ComponentProps<"section">) {
   return (
     <section
       className={cx(

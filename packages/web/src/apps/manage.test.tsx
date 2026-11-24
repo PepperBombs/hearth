@@ -162,11 +162,29 @@ function sessionWith(apps: AppSummary[], options: { locale?: "en" | "zh"; family
 
 type Failure = { status: number; code: string };
 
-/** An app a space removed and kept the data of, as the owners' list counts it. */
-type Removed = { id: string; template?: string; rowCount: number };
+/**
+ * An app a space removed and kept the data of, as the owners' list counts it,
+ * with what it is drawn with; `sample` is what it comes back as, and an
+ * entry without one is an install the server holds no app for.
+ */
+type Removed = { id: string; template?: string; rowCount: number; sample?: Sample };
 
 /** The app made from a built-in app that a space removed, with how many entries it holds. */
-const removedFrom = (sample: Sample, rowCount: number): Removed => ({ id: `m-${sample.id}`, template: sample.id, rowCount });
+const removedFrom = (sample: Sample, rowCount: number): Removed => ({ id: `m-${sample.id}`, template: sample.id, rowCount, sample });
+
+/** An app made in the chat, from no built-in app, that a space removed. */
+const removedMade = (sample: Sample, rowCount: number): Removed => ({ id: `m-${sample.id}`, rowCount, sample: { ...sample } });
+
+/** The sample an app the session lists was drawn from, so that removing it keeps what brings it back. */
+const sampleOf = (app: AppSummary): Sample => ({
+  id: app.id.replace(/^m-/, ""),
+  name: app.name,
+  description: app.description,
+  icon: app.icon,
+  color: app.color,
+  network: [],
+  widgetSize: app.widgetSize,
+});
 
 /**
  * Stands in for the server: the session, the built-in apps and adding one
@@ -180,6 +198,8 @@ class FakeServer {
   catalog: readonly Sample[] = BUILT_IN;
   /** Apps removed from a space whose data was kept, by space ID. */
   removed: Record<string, Removed[]> = {};
+  /** How many entries each app in use holds, by app ID (none when not given). */
+  rowCounts: Record<string, number> = {};
   /** The settings each app holds, by app ID. */
   settings: Record<string, AppSettings> = {
     "m-checklist": { space: { sections: [] }, user: { hideDone: false } },
@@ -243,10 +263,38 @@ class FakeServer {
     const match = /^\/api\/spaces\/([^/]+)\/apps\/([^/]+)(?:\/(.+))?$/.exec(path);
     const [, spaceId = "", appId = "", rest = ""] = match ?? [];
     const listed = this.session.apps.find((app) => app.spaceId === spaceId && app.id === appId);
+    const kept = (this.removed[spaceId] ?? []).find((entry) => entry.id === appId);
+    const owner = this.session.spaces.find((space) => space.id === spaceId)?.role === "owner";
+
+    // Bringing a removed app back, with its data.
+    if (rest === "" && method === "PUT" && kept) {
+      if (!owner) return json(403, { error: { code: "forbidden", message: "For owners." } });
+      if (!kept.sample) return json(404, { error: { code: "not_found", message: "No such app." } });
+      this.removed[spaceId] = (this.removed[spaceId] ?? []).filter((entry) => entry !== kept);
+      const back = made(kept.sample, spaceId, { id: kept.id, ...(kept.template ? { template: kept.template } : { template: undefined }) });
+      this.session = { ...this.session, apps: [...this.session.apps, back] };
+      this.rowCounts[kept.id] = kept.rowCount;
+      return json(204, null);
+    }
+    // Deleting an app for good, in use or removed: the name typed must be the app's, in either language.
+    if (rest === "data" && method === "DELETE" && (listed || kept)) {
+      if (!owner) return json(403, { error: { code: "forbidden", message: "For owners." } });
+      const name = listed?.name ?? kept?.sample?.name;
+      const confirm = (body as { confirm: string }).confirm.trim();
+      const matches = name ? confirm === name.en || confirm === name.zh : confirm === appId;
+      if (!matches) return json(400, { error: { code: "invalid_request", message: "Type the app's name." } });
+      this.session = { ...this.session, apps: this.session.apps.filter((app) => app !== listed) };
+      this.removed[spaceId] = (this.removed[spaceId] ?? []).filter((entry) => entry !== kept);
+      return json(204, null);
+    }
+
     if (!listed) return json(404, { error: { code: "not_found", message: "No such app." } });
     if (rest === "" && method === "DELETE") {
       this.session = { ...this.session, apps: this.session.apps.filter((app) => app !== listed) };
-      this.removed[spaceId] = [...(this.removed[spaceId] ?? []), { id: appId, template: listed.template, rowCount: 0 }];
+      this.removed[spaceId] = [
+        ...(this.removed[spaceId] ?? []),
+        { id: appId, ...(listed.template ? { template: listed.template } : {}), rowCount: this.rowCounts[appId] ?? 0, sample: sampleOf(listed) },
+      ];
       return json(204, null);
     }
     if (rest === "move" && method === "POST") {
@@ -272,19 +320,24 @@ class FakeServer {
 
   ownersList(spaceId: string): SpaceApps {
     const space = this.session.spaces.find((candidate) => candidate.id === spaceId);
-    const entry = ({ id, template, rowCount }: Removed, removedAt: string | null) => ({
+    const entry = ({ id, template, rowCount, sample }: Removed, removedAt: string | null) => ({
       id,
       ...(template === undefined ? {} : { template }),
-      hasCode: true,
+      hasCode: sample !== undefined,
       removedAt,
       rowCount,
       memberAccess: "none" as const,
       members: {},
       assistant: true,
+      ...(sample ? { name: sample.name, icon: sample.icon, color: sample.color } : {}),
     });
     return {
       apps: [
-        ...this.session.apps.filter((app) => app.spaceId === spaceId).map((app) => entry({ id: app.id, template: app.template, rowCount: 0 }, null)),
+        ...this.session.apps
+          .filter((app) => app.spaceId === spaceId)
+          .map((app) =>
+            entry({ id: app.id, ...(app.template ? { template: app.template } : {}), rowCount: this.rowCounts[app.id] ?? 0, sample: sampleOf(app) }, null),
+          ),
         ...(this.removed[spaceId] ?? []).map((removed) => entry(removed, "2026-11-01T08:00:00.000Z")),
       ],
       members: (space?.members ?? []).map((member) => ({ ...member, email: `${member.id}@example.com`, canAddApps: member.role === "owner" })),
@@ -700,15 +753,19 @@ describe("the Apps page", () => {
     expect(await within(await spaceCard("Family")).findByText("No apps in this space yet.")).toBeTruthy();
   });
 
-  it("does not promise that an app made in the chat can be added back: no screen can add it yet", async () => {
+  it("says that an app made in the chat can be brought back from Removed apps, and a built-in one also by adding it again", async () => {
     const server = new FakeServer();
-    server.session = sessionWith([made(CHECKLIST, FAMILY, { template: undefined })]);
+    server.session = sessionWith([made(CHECKLIST, FAMILY, { template: undefined }), made(FEED, FAMILY)]);
     start(server);
 
     fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Remove Checklist in Family" }));
     const remove = await dialog("Remove Checklist in Family?");
-    expect(within(remove).getByText(/an app made in the chat cannot be added back yet/)).toBeTruthy();
-    expect(within(remove).queryByText(/brings everything back/)).toBeNull();
+    expect(within(remove).getByText(/Its data is kept: an owner can bring it back from Removed apps on this page\./)).toBeTruthy();
+    expect(within(remove).queryByText(/cannot be added back/)).toBeNull();
+    fireEvent.click(within(remove).getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(within(await spaceCard("Family")).getByRole("button", { name: "Remove Feed in Family" }));
+    expect(within(await dialog("Remove Feed in Family?")).getByText(/bring it back from Removed apps on this page, or add it again/)).toBeTruthy();
   });
 
   it("speaks Chinese", async () => {
@@ -732,6 +789,282 @@ describe("the Apps page", () => {
     const full = await within(await spaceCard("个人")).findByText(/^内置应用都已经在这里了。/);
     expect(full.textContent).toBe("内置应用都已经在这里了。可以在对话里做一个新的。");
     expect(within(full).getByRole("link", { name: "对话" }).getAttribute("href")).toBe("/chat");
+  });
+});
+
+/** An app made in the chat, from no built-in app. */
+const LEDGER: Sample = {
+  id: "ledger",
+  name: { en: "Ledger", zh: "Ledger" },
+  description: { en: "What I spend each day.", zh: "What I spend each day." },
+  icon: "wallet",
+  color: "green",
+  network: [],
+  widgetSize: "wide",
+};
+
+describe("removed apps, bringing them back and deleting for good", () => {
+  /** A space's "Removed apps", once the owners' list is there. */
+  const removedList = async (space: string) => within(await spaceCard(space)).findByRole("list", { name: "Removed apps" });
+  const deleteButton = (box: HTMLElement) => within(box).getByRole("button", { name: "Delete" }) as HTMLButtonElement;
+
+  it("lists each space's removed apps for its owners, with icon, name and entries, and nothing for a member", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(CHECKLIST, FAMILY)], { familyRole: "member" });
+    server.removed[PERSONAL] = [removedMade(LEDGER, 12), removedFrom(FEED, 1), { id: "old-notes", rowCount: 0 }];
+    server.removed[FAMILY] = [removedFrom(COUNTER, 3)];
+    start(server);
+
+    const list = await removedList("Personal");
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows.map((row) => row.getAttribute("data-removed-app"))).toEqual(["m-ledger", "m-feed", "old-notes"]);
+    expect(within(rows[0]!).getByText("Ledger")).toBeTruthy();
+    expect(within(rows[0]!).getByText("12 entries")).toBeTruthy();
+    expect(rows[0]!.querySelector("svg")).toBeTruthy();
+    expect(within(rows[1]!).getByText("1 entry")).toBeTruthy();
+    expect(within(rows[0]!).getByRole("button", { name: "Bring back Ledger" })).toBeTruthy();
+    expect(within(rows[0]!).getByRole("button", { name: "Delete permanently: Ledger" })).toBeTruthy();
+    // An install the server holds no app for goes by its ID, and can only be deleted.
+    expect(within(rows[2]!).getByText("No entries")).toBeTruthy();
+    expect(within(rows[2]!).queryByRole("button", { name: /Bring back/ })).toBeNull();
+    expect(within(rows[2]!).getByRole("button", { name: "Delete permanently: old-notes" })).toBeTruthy();
+
+    // Sam is a member of Family: no list of what it removed, which is for its owners.
+    const family = await spaceCard("Family");
+    expect(within(family).queryByRole("list", { name: "Removed apps" })).toBeNull();
+    expect(server.requests).not.toContain(`GET /api/spaces/${FAMILY}/apps`);
+  });
+
+  it("shows no section where nothing was removed", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(CHECKLIST, PERSONAL)]);
+    start(server);
+    const personal = await spaceCard("Personal");
+    await waitFor(() => expect(server.requests).toContain(`GET /api/spaces/${PERSONAL}/apps`));
+    expect(within(personal).queryByText("Removed apps")).toBeNull();
+  });
+
+  it("brings an app made in the chat back to the personal space, with its data, and says so", async () => {
+    const server = new FakeServer();
+    server.removed[PERSONAL] = [removedMade(LEDGER, 12)];
+    start(server);
+
+    fireEvent.click(within(await removedList("Personal")).getByRole("button", { name: "Bring back Ledger" }));
+    const back = await dialog("Bring back Ledger?");
+    expect(within(back).getByText("It comes back with its data, 12 saved entries, and its settings.")).toBeTruthy();
+    // In a personal space there is nobody else to ask about.
+    expect(within(back).queryByRole("radio")).toBeNull();
+    fireEvent.click(within(back).getByRole("button", { name: "Bring back" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const personal = await spaceCard("Personal");
+    expect(await within(personal).findByRole("switch", { name: "Show Ledger" })).toBeTruthy();
+    expect(within(personal).queryByRole("list", { name: "Removed apps" })).toBeNull();
+    const notice = within(personal).getByRole("status");
+    expect(notice.textContent).toBe("Ledger is back.");
+    expect(document.activeElement).toBe(notice);
+    expect(server.changes).toEqual([`PUT /api/spaces/${PERSONAL}/apps/m-ledger {}`]);
+  });
+
+  it("asks who else may use an app brought back to a group, only me for now first", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([]);
+    server.removed[FAMILY] = [removedFrom(CHECKLIST, 1)];
+    start(server);
+
+    fireEvent.click(within(await removedList("Family")).getByRole("button", { name: "Bring back Checklist in Family" }));
+    const back = await dialog("Bring back Checklist in Family?");
+    expect(within(back).getByText("It comes back with its data, 1 saved entry, and its settings.")).toBeTruthy();
+    expect((within(back).getByRole("radio", { name: "Only me for now" }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(within(back).getByRole("radio", { name: "Everyone can view" }));
+    fireEvent.click(within(back).getByRole("button", { name: "Bring back" }));
+    await waitFor(() => expect(server.changes).toEqual([`PUT /api/spaces/${FAMILY}/apps/m-checklist {"memberAccess":"view"}`]));
+    expect(await within(await spaceCard("Family")).findByRole("switch", { name: "Show Checklist in Family" })).toBeTruthy();
+  });
+
+  it("shows a built-in app the space removed here too, as the Add dialog still offers it", async () => {
+    const server = new FakeServer();
+    server.removed[PERSONAL] = [removedFrom(FEED, 0)];
+    start(server);
+    expect(within(await removedList("Personal")).getByRole("button", { name: "Bring back Feed" })).toBeTruthy();
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Add an app" }));
+    expect(await within(await dialog("Add an app to your personal space")).findByText(/Removed earlier/)).toBeTruthy();
+  });
+
+  it("says when bringing back is turned down, keeps the dialog and reads the page again", async () => {
+    const server = new FakeServer();
+    server.removed[PERSONAL] = [removedMade(LEDGER, 2)];
+    start(server);
+
+    fireEvent.click(within(await removedList("Personal")).getByRole("button", { name: "Bring back Ledger" }));
+    const back = await dialog("Bring back Ledger?");
+    server.fail = { ending: `PUT /api/spaces/${PERSONAL}/apps/m-ledger`, with: { status: 409, code: "conflict" } };
+    const before = server.count(`GET /api/spaces/${PERSONAL}/apps`);
+    fireEvent.click(within(back).getByRole("button", { name: "Bring back" }));
+    expect(await within(back).findByText(/could not be brought back: it may have been brought back or deleted meanwhile/)).toBeTruthy();
+    expect(server.count(`GET /api/spaces/${PERSONAL}/apps`)).toBeGreaterThan(before);
+
+    server.fail = { ending: `PUT /api/spaces/${PERSONAL}/apps/m-ledger`, with: { status: 500, code: "internal" } };
+    fireEvent.click(within(back).getByRole("button", { name: "Bring back" }));
+    expect(await within(back).findByText("The app could not be brought back. Try again.")).toBeTruthy();
+  });
+
+  it("deletes a removed app for good only once its name is typed, and says how much goes and that it cannot be undone", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(CHECKLIST, FAMILY)]);
+    server.removed[FAMILY] = [removedMade(LEDGER, 12)];
+    start(server);
+
+    fireEvent.click(within(await removedList("Family")).getByRole("button", { name: "Delete permanently: Ledger in Family" }));
+    const box = await dialog("Delete Ledger for good?");
+    expect(
+      within(box).getByText("Its 12 entries, its settings and its versions are deleted for everyone in Family. This cannot be undone."),
+    ).toBeTruthy();
+    const typed = within(box).getByRole("textbox", { name: "Type “Ledger” to confirm" });
+    expect(deleteButton(box).disabled).toBe(true);
+    fireEvent.change(typed, { target: { value: "ledger" } });
+    expect(deleteButton(box).disabled).toBe(true);
+    fireEvent.change(typed, { target: { value: "Ledge" } });
+    expect(deleteButton(box).disabled).toBe(true);
+    // Pressing Enter in the box sends nothing while the name does not match.
+    fireEvent.submit(typed.closest("form")!);
+    expect(server.changes).toEqual([]);
+
+    fireEvent.change(typed, { target: { value: "  Ledger " } });
+    expect(deleteButton(box).disabled).toBe(false);
+    fireEvent.click(deleteButton(box));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(server.changes).toEqual([`DELETE /api/spaces/${FAMILY}/apps/m-ledger/data {"confirm":"Ledger"}`]);
+    const family = await spaceCard("Family");
+    expect(within(family).queryByRole("list", { name: "Removed apps" })).toBeNull();
+    const notice = within(family).getByRole("status");
+    expect(notice.textContent).toBe("Ledger was deleted.");
+    expect(document.activeElement).toBe(notice);
+    // The app in use is untouched.
+    expect(within(family).getByRole("switch", { name: "Show Checklist in Family" })).toBeTruthy();
+  });
+
+  it("takes the name in either of its languages", async () => {
+    const server = new FakeServer();
+    server.removed[PERSONAL] = [removedFrom(COUNTER, 1)];
+    start(server);
+    fireEvent.click(within(await removedList("Personal")).getByRole("button", { name: "Delete permanently: Counter" }));
+    const box = await dialog("Delete Counter for good?");
+    expect(within(box).getByText("Its 1 entry, its settings and its versions are deleted. This cannot be undone.")).toBeTruthy();
+    fireEvent.change(within(box).getByRole("textbox"), { target: { value: "计数器" } });
+    fireEvent.click(deleteButton(box));
+    await waitFor(() => expect(server.changes).toEqual([`DELETE /api/spaces/${PERSONAL}/apps/m-counter/data {"confirm":"计数器"}`]));
+  });
+
+  it("deletes an install the server holds no app for by its ID", async () => {
+    const server = new FakeServer();
+    server.removed[PERSONAL] = [{ id: "old-notes", rowCount: 0 }];
+    start(server);
+    fireEvent.click(within(await removedList("Personal")).getByRole("button", { name: "Delete permanently: old-notes" }));
+    const box = await dialog("Delete old-notes for good?");
+    expect(within(box).getByText("Its settings and versions are deleted. This cannot be undone.")).toBeTruthy();
+    fireEvent.change(within(box).getByRole("textbox", { name: "Type “old-notes” to confirm" }), { target: { value: "old-notes" } });
+    fireEvent.click(deleteButton(box));
+    await waitFor(() => expect(server.changes).toEqual([`DELETE /api/spaces/${PERSONAL}/apps/old-notes/data {"confirm":"old-notes"}`]));
+  });
+
+  it("deletes an app in use for good from its Remove dialog, for an owner, with how many entries go", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(CHECKLIST, PERSONAL, { template: undefined }), made(FEED, PERSONAL)]);
+    server.rowCounts["m-checklist"] = 7;
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Remove Checklist" }));
+    const remove = await dialog("Remove Checklist?");
+    fireEvent.click(within(remove).getByRole("button", { name: "Delete permanently" }));
+    const box = await dialog("Delete Checklist for good?");
+    expect(screen.queryByRole("dialog", { name: "Remove Checklist?" })).toBeNull();
+    expect(await within(box).findByText("Its 7 entries, its settings and its versions are deleted. This cannot be undone.")).toBeTruthy();
+    fireEvent.change(within(box).getByRole("textbox", { name: "Type “Checklist” to confirm" }), { target: { value: "Checklist" } });
+    fireEvent.click(deleteButton(box));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(server.changes).toEqual([`DELETE /api/spaces/${PERSONAL}/apps/m-checklist/data {"confirm":"Checklist"}`]);
+    const personal = await spaceCard("Personal");
+    expect(within(personal).queryByRole("switch", { name: "Show Checklist" })).toBeNull();
+    expect(within(personal).getByRole("switch", { name: "Show Feed" })).toBeTruthy();
+    expect(within(personal).getByRole("status").textContent).toBe("Checklist was deleted.");
+  });
+
+  it("offers deleting for good only to an owner: a member has no Remove dialog at all", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(CHECKLIST, FAMILY)], { familyRole: "member" });
+    start(server);
+    const family = await spaceCard("Family");
+    expect(within(family).queryByRole("button", { name: /Delete permanently/ })).toBeNull();
+    expect(within(family).queryByRole("button", { name: /Remove/ })).toBeNull();
+  });
+
+  it("deletes nothing until it knows how many entries go, and offers to look again", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(CHECKLIST, PERSONAL)]);
+    server.fail = { ending: `GET /api/spaces/${PERSONAL}/apps`, with: { status: 500, code: "internal" } };
+    start(server);
+
+    fireEvent.click(within(await spaceCard("Personal")).getByRole("button", { name: "Remove Checklist" }));
+    fireEvent.click(within(await dialog("Remove Checklist?")).getByRole("button", { name: "Delete permanently" }));
+    const box = await dialog("Delete Checklist for good?");
+    fireEvent.change(within(box).getByRole("textbox"), { target: { value: "Checklist" } });
+    expect(await within(box).findByText("How many entries it holds could not be read.")).toBeTruthy();
+    expect(deleteButton(box).disabled).toBe(true);
+
+    server.fail = null;
+    fireEvent.click(within(box).getByRole("button", { name: "Try again" }));
+    expect(await within(box).findByText("Its settings and versions are deleted. This cannot be undone.")).toBeTruthy();
+    expect(deleteButton(box).disabled).toBe(false);
+  });
+
+  it("says why the server turned deleting down, and keeps the dialog", async () => {
+    const server = new FakeServer();
+    server.removed[PERSONAL] = [removedMade(LEDGER, 2)];
+    start(server);
+    fireEvent.click(within(await removedList("Personal")).getByRole("button", { name: "Delete permanently: Ledger" }));
+    const box = await dialog("Delete Ledger for good?");
+    fireEvent.change(within(box).getByRole("textbox"), { target: { value: "Ledger" } });
+
+    server.fail = { ending: `/apps/m-ledger/data`, with: { status: 400, code: "invalid_request" } };
+    fireEvent.click(deleteButton(box));
+    expect(await within(box).findByText("The name typed is not the app's name. Type it as shown.")).toBeTruthy();
+    server.fail = { ending: `/apps/m-ledger/data`, with: { status: 403, code: "forbidden" } };
+    fireEvent.click(deleteButton(box));
+    expect(await within(box).findByText("Only an owner of this space can delete an app.")).toBeTruthy();
+    server.fail = { ending: `/apps/m-ledger/data`, with: { status: 500, code: "internal" } };
+    fireEvent.click(deleteButton(box));
+    expect(await within(box).findByText("The app could not be deleted. Try again.")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Delete Ledger for good?" })).toBeTruthy();
+  });
+
+  it("speaks Chinese", async () => {
+    const server = new FakeServer();
+    server.session = sessionWith([made(CHECKLIST, FAMILY)], { locale: "zh" });
+    server.removed[FAMILY] = [removedFrom(FEED, 5)];
+    start(server);
+
+    const family = await spaceCard("Family");
+    const list = await within(family).findByRole("list", { name: "已移除的应用" });
+    expect(within(family).getByText("数据仍然保留")).toBeTruthy();
+    expect(within(list).getByText("5 条数据")).toBeTruthy();
+    fireEvent.click(within(list).getByRole("button", { name: "恢复Family的动态" }));
+    const back = await dialog("恢复Family的动态？");
+    expect(within(back).getByText("它会连同数据一起回来：5 条已保存的数据，以及它的设置。")).toBeTruthy();
+    fireEvent.click(within(back).getByRole("button", { name: "取消" }));
+
+    fireEvent.click(within(list).getByRole("button", { name: "永久删除Family的动态" }));
+    const box = await dialog("要永久删除动态吗？");
+    expect(within(box).getByText("它的 5 条数据、设置和所有版本都会被删除，Family里的所有人都将失去它。此操作无法撤销。")).toBeTruthy();
+    expect(within(box).getByRole("textbox", { name: "输入“动态”以确认" })).toBeTruthy();
+    expect(within(box).getByRole("button", { name: "删除" })).toBeTruthy();
+    fireEvent.click(within(box).getByRole("button", { name: "取消" }));
+
+    fireEvent.click(within(family).getByRole("button", { name: "移除Family的清单" }));
+    const remove = await dialog("移除Family的清单？");
+    expect(within(remove).getByText(/在本页的“已移除的应用”里恢复它，或者再次添加它/)).toBeTruthy();
+    expect(within(remove).getByRole("button", { name: "永久删除" })).toBeTruthy();
   });
 });
 

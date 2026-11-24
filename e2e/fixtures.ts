@@ -14,14 +14,19 @@
  * changing and removing people, invitations, the owners' list of a group
  * and who can use each app (`groups`, `people`). The owners' list of a
  * space no test set up, a personal one included, is drawn from the
- * session. It answers for the chat too: the person's model (`model`),
- * their conversations in each space (`chats`), read, listed and deleted,
- * and a message, which its own made-up model answers with "Noted: " and
- * the message. All names and addresses are made up.
+ * session. The space's removed apps stay in it, with their names, icons
+ * and entry counts, and are brought back or deleted for good there (after
+ * the app's name is typed). It answers for the chat too: the person's model
+ * (`model`), their conversations in each space (`chats`), read, listed and
+ * deleted, a message, which its own made-up model answers with "Noted: "
+ * and the message, and the person's answer to a request of the model's to
+ * delete rows, kept in that request's entry. All names and addresses are
+ * made up.
  */
 import { expect, test as base, type FrameLocator, type Page, type Route } from "@playwright/test";
 import type { Setting } from "../packages/sdk/src/index.ts";
 import {
+  addAppRequestSchema,
   addFromCatalogRequestSchema,
   addMemberRequestSchema,
   appAccessRequestSchema,
@@ -32,7 +37,10 @@ import {
   chatListSchema,
   chatRequestSchema,
   chatSchema,
+  confirmationDecisionSchema,
+  confirmationResultSchema,
   createSpaceRequestSchema,
+  deleteAppDataRequestSchema,
   memberPatchSchema,
   modelSettingsSchema,
   moveAppRequestSchema,
@@ -47,7 +55,9 @@ import {
   type CatalogApp,
   type Chat,
   type ChatEvent,
+  type ChatEntry,
   type ChatRequest,
+  type InstalledApp,
   type ModelSettings,
   type PreferencesPatch,
   type Session,
@@ -299,6 +309,14 @@ function framePage(app: AppSummary, query: URLSearchParams): string {
 `;
 }
 
+/** What the owners' list says of an app the server holds, removed or not, so that the Apps page can draw a removed one. */
+const shownAs = (app: AppSummary): Pick<InstalledApp, "name" | "icon" | "color"> => ({ name: app.name, icon: app.icon, color: app.color });
+
+/** An entry of a conversation that is a request of the model's to delete rows, which waits for the person's answer. */
+function isDeleteRequest(entry: ChatEntry): entry is Extract<ChatEntry, { kind: "action" }> {
+  return entry.kind === "action" && entry.action === "delete_requested";
+}
+
 /** What an app's sandboxed frame shows, by the app's ID: a page draws an app once. */
 export function sandbox(page: Page, appId: string): FrameLocator {
   return page.frameLocator(`iframe[data-made-app="${appId}"]`);
@@ -359,6 +377,17 @@ export class FakeApi {
   chats: Record<string, Chat[]> = {};
   /** Every message POST /api/chat accepted, in order. */
   readonly chatRequests: ChatRequest[] = [];
+  /**
+   * Every answer to a request of the model's to delete rows
+   * (POST .../chats/:chatId/confirmations/:id), as "path body", whether or
+   * not it was taken. One that is taken is kept in the request's entry in
+   * `chats`, as the server keeps it, so a reload shows it.
+   */
+  readonly confirmationRequests: string[] = [];
+  /** Make every answer to a request to delete fail, for example `{ status: 403, code: "forbidden", message: "Sample failure" }`. The request keeps waiting. */
+  confirmationFailure: Failure | null = null;
+  /** What the session listed of each app a space removed, by "spaceId/appId": bringing it back lists it so again. */
+  private readonly removedSummaries = new Map<string, AppSummary>();
 
   get session(): Session {
     return this.current;
@@ -423,6 +452,13 @@ export class FakeApi {
       return route.fulfill({ json: this.model === null ? null : modelSettingsSchema.parse(this.model) });
     }
 
+    const forConfirmation = /^\/api\/spaces\/([^/]+)\/chats\/([^/]+)\/confirmations\/([^/]+)$/.exec(path);
+    if (forConfirmation && method === "POST") {
+      const [, spaceId = "", chatId = "", confirmationId = ""] = forConfirmation;
+      this.confirmationRequests.push(`${path} ${JSON.stringify(body ?? null)}`);
+      return answer(this.answerConfirmation(spaceId, chatId, confirmationId, body));
+    }
+
     const forChats = /^\/api\/spaces\/([^/]+)\/chats(?:\/([^/]+))?$/.exec(path);
     if (forChats) {
       const [, spaceId = "", chatId] = forChats;
@@ -453,6 +489,9 @@ export class FakeApi {
       }
       if (method !== "GET") this.appChanges.push(`${method} ${path} ${JSON.stringify(body ?? null)}`);
       if (this.appFailure) return fail(this.appFailure);
+      // A removed app is in no session: bringing it back and deleting it for good find it in the owners' list.
+      if (rest === "" && method === "PUT") return answer(this.bringBack(spaceId, appId, body) ?? {});
+      if (rest === "data" && method === "DELETE") return answer(this.deleteForGood(spaceId, appId, body) ?? {});
       const result = listed ? this.answerForApp(listed, rest, method, body) : undefined;
       return result === undefined ? fail({ status: 404, code: "not_found", message: "No such app or route" }) : answer(result);
     }
@@ -541,14 +580,16 @@ export class FakeApi {
       // Only an owner brings a removed app back: its data comes with it.
       if (!owner) return refuse(409, "conflict");
       Object.assign(removed, { removedAt: null, memberAccess, members: {}, assistant: true });
+      this.removedSummaries.delete(`${spaceId}/${removed.id}`);
       this.setSession({ ...this.current, apps: [...this.current.apps, builtInApp(template, spaceId, { id: removed.id })] });
       return { status: 200, json: { appId: removed.id, restored: true } };
     }
     const appId = this.freeAppId(template);
     // Someone who is not an owner keeps edit for themselves, as on the server.
     const members = owner ? {} : { [this.current.user.id]: "edit" as const };
-    owners?.apps.push({ id: appId, template, hasCode: true, removedAt: null, rowCount: 0, memberAccess, members, assistant: true });
-    this.setSession({ ...this.current, apps: [...this.current.apps, builtInApp(template, spaceId, { id: appId })] });
+    const added = builtInApp(template, spaceId, { id: appId });
+    owners?.apps.push({ id: appId, template, hasCode: true, removedAt: null, rowCount: 0, memberAccess, members, assistant: true, ...shownAs(added) });
+    this.setSession({ ...this.current, apps: [...this.current.apps, added] });
     return { status: 201, json: { appId, restored: false } };
   }
 
@@ -568,13 +609,14 @@ export class FakeApi {
   private answerForApp(listed: AppSummary, rest: string, method: string, body: unknown): { json?: unknown; status?: number } | Failure | undefined {
     const refuse = (status: number, code: ApiErrorCode): Failure => ({ status, code, message: "Sample failure" });
     const space = this.current.spaces.find((candidate) => candidate.id === listed.spaceId);
-    // The owners' list of a group follows: a removed app is marked so.
-    const owners = this.groups[listed.spaceId];
 
     if (rest === "" && method === "DELETE") {
       if (space?.role !== "owner") return refuse(403, "forbidden");
+      // The space keeps the app, removed, in its owners' list: one drawn from the session until now is kept from here on.
+      const kept = (this.groups[space.id] ??= this.listFromSession(space));
       this.setSession({ ...this.current, apps: this.current.apps.filter((candidate) => candidate !== listed) });
-      for (const entry of owners?.apps ?? []) if (entry.id === listed.id) entry.removedAt = "2026-11-10T08:00:00.000Z";
+      this.removedSummaries.set(`${space.id}/${listed.id}`, listed);
+      for (const entry of kept.apps) if (entry.id === listed.id) Object.assign(entry, { removedAt: "2026-11-10T08:00:00.000Z", ...shownAs(listed) });
       return {};
     }
     if (rest === "me" && method === "PATCH") {
@@ -601,6 +643,95 @@ export class FakeApi {
       return { json: this.settingsOf(listed) };
     }
     return undefined;
+  }
+
+  /**
+   * PUT /api/spaces/:spaceId/apps/:appId, as the server answers it: an owner
+   * brings a removed app back to its space, with its data; who else may use
+   * it starts afresh. One that is there stays as it is. Answers the refusal,
+   * or nothing.
+   */
+  private bringBack(spaceId: string, appId: string, body: unknown): Failure | undefined {
+    const refuse = (status: number, code: ApiErrorCode): Failure => ({ status, code, message: "Sample failure" });
+    const parsed = addAppRequestSchema.safeParse(body ?? {});
+    if (!parsed.success) return refuse(400, "invalid_request");
+    const space = this.current.spaces.find((candidate) => candidate.id === spaceId);
+    const entry = this.groups[spaceId]?.apps.find((candidate) => candidate.id === appId);
+    const listed = this.current.apps.some((candidate) => candidate.spaceId === spaceId && candidate.id === appId);
+    if (!space || (!entry && !listed) || (entry && !entry.hasCode)) return refuse(404, "not_found");
+    if (space.role !== "owner") return refuse(403, "forbidden");
+    if (listed || !entry || entry.removedAt === null) return undefined;
+    Object.assign(entry, { removedAt: null, memberAccess: parsed.data.memberAccess ?? "none", members: {} });
+    const key = `${spaceId}/${appId}`;
+    // What the session listed before, or, for a removed app a test set up, what the owners' list says of it.
+    const name = entry.name ?? { en: appId, zh: appId };
+    const summary =
+      this.removedSummaries.get(key) ??
+      (entry.template !== undefined && entry.template in BUILT_IN
+        ? builtInApp(entry.template as BuiltInId, spaceId, { id: appId })
+        : app(appId, spaceId, name.en, name.zh, "", "", entry.icon ?? "box", entry.color ?? "blue"));
+    this.removedSummaries.delete(key);
+    this.setSession({ ...this.current, apps: [...this.current.apps, summary] });
+    return undefined;
+  }
+
+  /**
+   * DELETE /api/spaces/:spaceId/apps/:appId/data, as the server answers it:
+   * an owner deletes an app from the space for good, in use or removed,
+   * once `confirm` is its name in either language (spaces around it do not
+   * count; its ID for an install the server holds no app for). Its settings
+   * go with it, and the chat's requests to delete its rows that still wait
+   * expire. Answers the refusal, or nothing.
+   */
+  private deleteForGood(spaceId: string, appId: string, body: unknown): Failure | undefined {
+    const refuse = (status: number, code: ApiErrorCode): Failure => ({ status, code, message: "Sample failure" });
+    const parsed = deleteAppDataRequestSchema.safeParse(body);
+    if (!parsed.success) return refuse(400, "invalid_request");
+    const space = this.current.spaces.find((candidate) => candidate.id === spaceId);
+    const owners = this.groups[spaceId];
+    const entry = owners?.apps.find((candidate) => candidate.id === appId);
+    const listed = this.current.apps.find((candidate) => candidate.spaceId === spaceId && candidate.id === appId);
+    if (!space || (!entry && !listed)) return refuse(404, "not_found");
+    if (space.role !== "owner") return refuse(403, "forbidden");
+    const name = listed?.name ?? entry?.name;
+    const names = name ? [name.en, name.zh] : [appId];
+    if (!names.some((candidate) => candidate.trim() === parsed.data.confirm.trim())) return refuse(400, "invalid_request");
+    if (owners) owners.apps = owners.apps.filter((candidate) => candidate.id !== appId);
+    this.removedSummaries.delete(`${spaceId}/${appId}`);
+    delete this.appSettings[appId];
+    for (const chat of this.chats[spaceId] ?? []) {
+      for (const asked of chat.entries) {
+        if (isDeleteRequest(asked) && asked.appId === appId && (asked.status ?? "pending") === "pending") Object.assign(asked, { status: "expired", deleted: 0 });
+      }
+    }
+    this.setSession({ ...this.current, apps: this.current.apps.filter((candidate) => candidate !== listed) });
+    return undefined;
+  }
+
+  /**
+   * POST .../chats/:chatId/confirmations/:id, as the server answers the
+   * person whose conversation it is: 404 for a space, conversation or
+   * request not theirs, 409 once it was answered, or the test's
+   * `confirmationFailure`. "confirm" deletes every row it names (the
+   * stand-in keeps no rows: it counts them), "decline" none. The answer is
+   * kept in the request's entry, as the server gives it when the
+   * conversation is read again.
+   */
+  private answerConfirmation(spaceId: string, chatId: string, confirmationId: string, body: unknown): { json: unknown } | Failure {
+    const refuse = (status: number, code: ApiErrorCode): Failure => ({ status, code, message: "Sample failure" });
+    const parsed = confirmationDecisionSchema.safeParse(body);
+    if (!parsed.success) return refuse(400, "invalid_request");
+    const chat = this.chatsIn(spaceId)?.find((entry) => entry.chat.id === chatId);
+    const asked = chat?.entries.find((entry) => isDeleteRequest(entry) && entry.confirmationId === confirmationId);
+    if (!asked || !isDeleteRequest(asked)) return refuse(404, "not_found");
+    if ((asked.status ?? "pending") !== "pending") return refuse(409, "conflict");
+    if (this.confirmationFailure) return this.confirmationFailure;
+    const result =
+      parsed.data.decision === "confirm"
+        ? { status: "confirmed" as const, deleted: asked.count ?? asked.preview?.length ?? 0 }
+        : { status: "declined" as const, deleted: 0 };
+    Object.assign(asked, result);
+    return { json: confirmationResultSchema.parse(result) };
   }
 
   /** An app's settings as GET .../settings answers them: every one it declares, saved or by default. */
@@ -757,6 +888,7 @@ export class FakeApi {
           members: {},
           assistant: true,
           ...(app.template === undefined ? {} : { template: app.template }),
+          ...shownAs(app),
         })),
       members: space.members.map((member) => {
         const known = member.id === me.id ? me : this.people.find((person) => person.id === member.id);
@@ -800,6 +932,7 @@ export class FakeApi {
       // What an assistant may do with it starts afresh too, as on the server.
       assistant: true,
       ...(listed.template === undefined ? {} : { template: listed.template }),
+      ...shownAs(listed),
     });
     // The mover can always use it where it went: as an owner, or by that exception.
     this.setSession({ ...this.current, apps: this.current.apps.map((app) => (app === listed ? { ...app, spaceId: to.id, access: "edit" } : app)) });
@@ -846,7 +979,17 @@ export function ownAFamily(api: FakeApi, user: Partial<Session["user"]> = {}): v
   });
   api.groups[FAMILY_SPACE] = {
     apps: [
-      { id: checklist.id, template: "checklist", hasCode: true, removedAt: null, rowCount: 3, memberAccess: "view", members: { [KIM.id]: "edit" }, assistant: true },
+      {
+        id: checklist.id,
+        template: "checklist",
+        hasCode: true,
+        removedAt: null,
+        rowCount: 3,
+        memberAccess: "view",
+        members: { [KIM.id]: "edit" },
+        assistant: true,
+        ...shownAs(checklist),
+      },
     ],
     members: [
       { ...me, role: "owner", canAddApps: false },

@@ -357,4 +357,33 @@ export const MIGRATIONS: readonly Migration[] = [
       ) STRICT;
     `,
   },
+  {
+    // What the model asks before it deletes (docs/platform.md, owner's decision 7): rows it
+    // would delete, which go only when the person confirms. Its SQL is in src/model/confirmations.ts.
+    id: 9,
+    name: "chat-confirmations",
+    sql: `
+      -- One request of the model's to delete rows of an app, in a conversation of a person's, and
+      -- where it stands. It belongs to the conversation, not to the app: it names the app by ID
+      -- only, with no key to space_apps, so that it outlives the app (expired) and stays where
+      -- it was asked when the app is moved. It goes with its conversation.
+      CREATE TABLE chat_confirmations (
+        id         TEXT PRIMARY KEY,
+        chat_id    TEXT NOT NULL,
+        space_id   TEXT NOT NULL,
+        user_id    TEXT NOT NULL,
+        app_id     TEXT NOT NULL,
+        collection TEXT NOT NULL,
+        row_ids    TEXT NOT NULL CHECK (json_valid(row_ids)),   -- a JSON list of the rows' IDs
+        status     TEXT NOT NULL CHECK (status IN ('pending', 'confirmed', 'declined', 'expired')),
+        deleted    INTEGER CHECK (deleted >= 0),                -- how many rows went, once confirmed
+        created_at TEXT NOT NULL,
+        decided_at TEXT,
+        FOREIGN KEY (chat_id, space_id, user_id) REFERENCES chats (id, space_id, user_id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE INDEX chat_confirmations_of_chat ON chat_confirmations (chat_id, space_id, user_id);
+      CREATE INDEX chat_confirmations_of_app ON chat_confirmations (space_id, app_id, status);
+    `,
+  },
 ];

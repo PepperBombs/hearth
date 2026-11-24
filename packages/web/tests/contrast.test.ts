@@ -62,6 +62,8 @@ const pairs: Array<[string, string]> = [
   ["--hearth-text", "--hearth-accent-soft"],
   ["--hearth-text-3", "--hearth-accent-soft"],
   ["--hearth-on-accent", "--hearth-accent"],
+  // The kit's danger button: delete for good.
+  ["--hearth-on-accent", "--hearth-down"],
   ["--hearth-accent", "--hearth-surface"],
   ["--hearth-accent-text", "--hearth-surface"],
   ["--hearth-accent", "--hearth-side"],

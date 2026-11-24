@@ -1,7 +1,8 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cx } from "./cx";
 
-export type ButtonVariant = "default" | "primary";
+/** "danger" is for the one button that deletes for good, after the person was asked. */
+export type ButtonVariant = "default" | "primary" | "danger";
 export type ButtonSize = "md" | "sm";
 
 const BASE =
@@ -11,6 +12,7 @@ const BASE =
 const VARIANTS: Record<ButtonVariant, string> = {
   default: "border-line bg-surface text-fg hover:bg-surface-2",
   primary: "border-accent bg-accent text-on-accent hover:opacity-[.92]",
+  danger: "border-down bg-down text-on-accent hover:opacity-[.92]",
 };
 
 /** Controls grow to a 44px touch target on phones. */

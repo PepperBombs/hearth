@@ -24,18 +24,27 @@
  *   the server, and the dialog says so under its description, new or
  *   brought back (owner's decision 14). It asks nothing more: the app ships
  *   with Hearth.
+ * - An owner sees each space's removed apps under "Removed apps", with how
+ *   many entries each holds: "Bring back" returns one with its data (asking,
+ *   in a group, who else may use it), and "Delete permanently" deletes it for
+ *   good. An app in use can be deleted for good too, from its Remove dialog.
+ *   Deleting for good asks for the app's name to be typed, says how many
+ *   entries go and that it cannot be undone; the server checks the name
+ *   again. The model in the chat never deletes an app.
  */
-import { ArrowRightLeft, ChevronRight, LayoutGrid, Pin, Plus, RefreshCw, Trash2, UserRound, Users } from "lucide-react";
+import { ArchiveRestore, ArrowRightLeft, ChevronRight, LayoutGrid, Pin, Plus, RefreshCw, Trash2, UserRound, Users } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router";
 import type { AppSummary, CatalogApp, InstalledApp, Localized, MemberAccess, Space } from "@hearth/shared";
-import { Button, Dialog, DialogBody, EmptyState, IconButton, Row, Rows, Switch, Tag } from "@hearth/sdk/web";
+import { Button, Dialog, DialogBody, EmptyState, IconButton, Input, Row, Rows, Switch, Tag } from "@hearth/sdk/web";
 import { useSpaceApps } from "../groups/queries";
 import {
   AppSettingsButton,
   useAddApp,
   useAppPrefs,
+  useBringBackApp,
   useCatalog,
+  useDeleteAppForGood,
   useFullAppName,
   useMoveApp,
   useMoveTargets,
@@ -51,13 +60,19 @@ import { failureCode } from "../session/api";
 import { useI18n } from "../session/preferences";
 import { appPath, enabledApps, pinnedFirst, useSession } from "../session/session";
 
-/** An app that was just moved, and where to: the space it went to says so. */
-type Moved = { spaceId: string; appId: string; name: Localized };
+/**
+ * What just happened to an app, said in the space it is in now: moved
+ * there, brought back, or deleted for good. The row the change was started
+ * from is gone, and its dialog with it, so the focus goes to what is said.
+ */
+type Notice = { spaceId: string; appId: string; name: Localized; kind: "moved" | "back" | "deleted" };
+
+const NOTICE_TEXT = { moved: "apps.moved", back: "apps.isBack", deleted: "apps.deleted" } as const;
 
 export function Apps() {
   const session = useSession();
   const { t } = useI18n();
-  const [moved, setMoved] = useState<Moved | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const pinned = enabledApps(session).filter((app) => app.pinned);
   const spaces = [
     ...session.spaces.filter((space) => space.kind === "personal"),
@@ -92,8 +107,8 @@ export function Apps() {
             key={space.id}
             space={space}
             apps={pinnedFirst(session.apps.filter((app) => app.spaceId === space.id))}
-            moved={moved?.spaceId === space.id ? moved : null}
-            onMoved={setMoved}
+            notice={notice?.spaceId === space.id ? notice : null}
+            onNotice={setNotice}
           />
         ))}
       </div>
@@ -129,10 +144,12 @@ function ShortcutRow({ app }: { app: AppSummary }) {
   );
 }
 
-function SpaceSection(props: { space: Space; apps: AppSummary[]; moved: Moved | null; onMoved: (moved: Moved) => void }) {
-  const { space, apps, moved, onMoved } = props;
+function SpaceSection(props: { space: Space; apps: AppSummary[]; notice: Notice | null; onNotice: (notice: Notice) => void }) {
+  const { space, apps, notice, onNotice } = props;
   const { t } = useI18n();
   const personal = space.kind === "personal";
+  // An app moved here or brought back is said to be here for as long as the space lists it.
+  const shownNotice = notice && (notice.kind === "deleted" || apps.some((app) => app.id === notice.appId)) ? notice : null;
   return (
     <Card aria-label={personal ? t("nav.personal") : space.name}>
       <CardHeader
@@ -145,22 +162,19 @@ function SpaceSection(props: { space: Space; apps: AppSummary[]; moved: Moved | 
       ) : (
         <Rows>
           {apps.map((app) => (
-            <ManagedRow key={app.id} app={app} space={space} onMoved={onMoved} />
+            <ManagedRow key={app.id} app={app} space={space} onNotice={onNotice} />
           ))}
         </Rows>
       )}
-      {moved && apps.some((app) => app.id === moved.appId) ? <MovedNotice key={moved.appId} moved={moved} /> : null}
+      {shownNotice ? <NoticeLine key={`${shownNotice.kind}/${shownNotice.appId}`} notice={shownNotice} /> : null}
+      {space.role === "owner" ? <RemovedApps space={space} onNotice={onNotice} /> : null}
       {space.canAddApps ? <AddApp space={space} /> : null}
     </Card>
   );
 }
 
-/**
- * Says, in the space an app was just moved to, that it is there now, for
- * as long as the space lists it. The row the move was started from is gone,
- * and its dialog with it, so the focus comes here.
- */
-function MovedNotice({ moved }: { moved: Moved }) {
+/** Says what just happened to an app (`Notice`), and takes the focus, whose control went with the change. */
+function NoticeLine({ notice }: { notice: Notice }) {
   const { locale, t } = useI18n();
   const ref = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
@@ -168,19 +182,20 @@ function MovedNotice({ moved }: { moved: Moved }) {
   }, []);
   return (
     <p ref={ref} role="status" tabIndex={-1} className="mt-2 rounded-ctl text-xs text-fg-2">
-      {t("apps.moved", { app: pickLocalized(moved.name, locale) })}
+      {t(NOTICE_TEXT[notice.kind], { app: pickLocalized(notice.name, locale) })}
     </p>
   );
 }
 
 /** One app in one space, with the person's own switch and pin, its settings and, for an owner, "Move" and "Remove". */
-function ManagedRow({ app, space, onMoved }: { app: AppSummary; space: Space; onMoved: (moved: Moved) => void }) {
+function ManagedRow({ app, space, onNotice }: { app: AppSummary; space: Space; onNotice: (notice: Notice) => void }) {
   const { t } = useI18n();
   const fullName = useFullAppName(app);
   const prefs = useAppPrefs(app);
   const targets = useMoveTargets(app);
   const [moving, setMoving] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const off = !app.enabled;
 
   const text = (
@@ -231,8 +246,33 @@ function ManagedRow({ app, space, onMoved }: { app: AppSummary; space: Space; on
           {prefs.isError ? t("apps.changeFailed") : t("apps.off")}
         </p>
       ) : null}
-      <MoveDialog app={app} from={space} targets={targets} open={moving} onClose={() => setMoving(false)} onMoved={onMoved} />
-      <RemoveDialog app={app} open={removing} onClose={() => setRemoving(false)} />
+      <MoveDialog
+        app={app}
+        from={space}
+        targets={targets}
+        open={moving}
+        onClose={() => setMoving(false)}
+        onMoved={(to) => onNotice({ spaceId: to, appId: app.id, name: app.name, kind: "moved" })}
+      />
+      <RemoveDialog
+        app={app}
+        open={removing}
+        onClose={() => setRemoving(false)}
+        onDeleteInstead={() => {
+          setRemoving(false);
+          setDeleting(true);
+        }}
+      />
+      {space.role === "owner" ? (
+        <DeleteForGoodDialog
+          space={space}
+          appId={app.id}
+          name={app.name}
+          open={deleting}
+          onClose={() => setDeleting(false)}
+          onDeleted={() => onNotice({ spaceId: space.id, appId: app.id, name: app.name, kind: "deleted" })}
+        />
+      ) : null}
     </Row>
   );
 }
@@ -244,7 +284,8 @@ type MoveDialogProps = {
   targets: Space[];
   open: boolean;
   onClose: () => void;
-  onMoved: (moved: Moved) => void;
+  /** Once moved, with the space it went to. */
+  onMoved: (toSpaceId: string) => void;
 };
 
 /**
@@ -282,7 +323,7 @@ function MoveForm({ app, from, targets, onClose, onMoved, title }: MoveDialogPro
       .then(
         () => {
           onClose();
-          onMoved({ spaceId: chosen.id, appId: app.id, name: app.name });
+          onMoved(chosen.id);
         },
         // The dialog shows the failure; nothing else waits for it.
         () => undefined,
@@ -363,8 +404,13 @@ function MoveForm({ app, from, targets, onClose, onMoved, title }: MoveDialogPro
   );
 }
 
-/** Asks before an owner removes an app, and says that its data is kept. */
-function RemoveDialog({ app, open, onClose }: { app: AppSummary; open: boolean; onClose: () => void }) {
+/**
+ * Asks before an owner removes an app, and says that its data is kept and
+ * that it can be brought back. Offers deleting it for good instead, in a
+ * dialog of its own.
+ */
+function RemoveDialog(props: { app: AppSummary; open: boolean; onClose: () => void; onDeleteInstead: () => void }) {
+  const { app, open, onClose, onDeleteInstead } = props;
   const { t } = useI18n();
   const fullName = useFullAppName(app);
   const remove = useRemoveApp();
@@ -382,14 +428,17 @@ function RemoveDialog({ app, open, onClose }: { app: AppSummary; open: boolean; 
     <Dialog open={open} onClose={close} label={title}>
       <DialogBody>
         <h2 className="text-md font-semibold">{title}</h2>
-        {/* A built-in app can be added again from the Add dialog, data and all; one made in the chat cannot (yet). */}
+        {/* Any removed app comes back from Removed apps; a built-in one also from the Add dialog. */}
         <p className="text-fg-2">{t(app.template ? "apps.removeBody" : "apps.removeBodyMade")}</p>
         {problem ? (
           <p role="status" className="text-xs text-down">
             {t(problem)}
           </p>
         ) : null}
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button className="mr-auto" aria-haspopup="dialog" disabled={remove.isPending} onClick={onDeleteInstead}>
+            {t("apps.deletePermanently")}
+          </Button>
           <Button onClick={close}>{t("apps.cancel")}</Button>
           <Button
             variant="primary"
@@ -401,6 +450,318 @@ function RemoveDialog({ app, open, onClose }: { app: AppSummary; open: boolean; 
         </div>
       </DialogBody>
     </Dialog>
+  );
+}
+
+/** An app's name with its space's, where apps of one name may be listed in two spaces: "Checklist in Family". */
+function nameInSpace(name: string, space: Space, t: Translate): string {
+  return space.kind === "group" ? t("dashboard.appInSpace", { app: name, space: space.name }) : name;
+}
+
+/** How many entries an app holds, in a few words. */
+function entriesText(count: number, t: Translate): string {
+  if (count === 0) return t("apps.removedEntriesNone");
+  return count === 1 ? t("apps.removedEntriesOne") : t("apps.removedEntriesMany", { count });
+}
+
+/**
+ * The apps the space removed and kept the data of, for its owners, as the
+ * owners' list gives them, with "Bring back" and "Delete permanently".
+ * Nothing is drawn while there are none. An install the server holds no app
+ * for can only be deleted, by its ID.
+ */
+function RemovedApps({ space, onNotice }: { space: Space; onNotice: (notice: Notice) => void }) {
+  const { t } = useI18n();
+  const list = useSpaceApps(space);
+  const removed = (list.data?.apps ?? []).filter((entry) => entry.removedAt !== null);
+  if (list.isError && list.data === undefined) {
+    return (
+      <div role="alert" className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+        <p className="text-xs text-down">{t("apps.removedLoadFailed")}</p>
+        <Button size="sm" onClick={() => void list.refetch()}>
+          <RefreshCw size={14} aria-hidden="true" />
+          {t("apps.retry")}
+        </Button>
+      </div>
+    );
+  }
+  if (removed.length === 0) return null;
+  return (
+    <div className="mt-3 border-t border-line pt-3" data-removed-apps="">
+      <CardHeader level={3} icon={<ArchiveRestore size={16} aria-hidden="true" />} title={t("apps.removedTitle")} aside={t("apps.removedNote")} />
+      <Rows aria-label={t("apps.removedTitle")}>
+        {removed.map((entry) => (
+          <RemovedRow key={entry.id} entry={entry} space={space} onNotice={onNotice} />
+        ))}
+      </Rows>
+    </div>
+  );
+}
+
+/** One removed app: its icon, name and how many entries it holds, with "Bring back" and "Delete permanently". */
+function RemovedRow({ entry, space, onNotice }: { entry: InstalledApp; space: Space; onNotice: (notice: Notice) => void }) {
+  const { locale, t } = useI18n();
+  const [bringing, setBringing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  // The server holds no app of this ID (an install of an app from before the built-in apps): it has only its ID.
+  const name: Localized = entry.name ?? { en: entry.id, zh: entry.id };
+  const fullName = nameInSpace(pickLocalized(name, locale), space, t);
+  return (
+    <Row className="flex-wrap" data-removed-app={entry.id}>
+      <span className="flex min-w-[12rem] flex-1 items-center gap-2.5">
+        <AppIcon icon={entry.icon ?? "box"} color={entry.color ?? ""} />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="clip font-medium">{pickLocalized(name, locale)}</span>
+          <span className="text-xs text-fg-3">{entriesText(entry.rowCount, t)}</span>
+        </span>
+      </span>
+      <span className="ml-auto flex flex-none flex-wrap items-center gap-2">
+        {entry.hasCode ? (
+          <Button size="sm" aria-label={t("apps.bringBackApp", { app: fullName })} aria-haspopup="dialog" onClick={() => setBringing(true)}>
+            <ArchiveRestore size={14} aria-hidden="true" />
+            {t("apps.bringBack")}
+          </Button>
+        ) : null}
+        <Button size="sm" aria-label={t("apps.deletePermanentlyApp", { app: fullName })} aria-haspopup="dialog" onClick={() => setDeleting(true)}>
+          <Trash2 size={14} aria-hidden="true" />
+          {t("apps.deletePermanently")}
+        </Button>
+      </span>
+      {entry.hasCode ? (
+        <BringBackDialog
+          space={space}
+          entry={entry}
+          name={name}
+          open={bringing}
+          onClose={() => setBringing(false)}
+          onBack={() => onNotice({ spaceId: space.id, appId: entry.id, name, kind: "back" })}
+        />
+      ) : null}
+      <DeleteForGoodDialog
+        space={space}
+        appId={entry.id}
+        name={entry.name ?? null}
+        open={deleting}
+        onClose={() => setDeleting(false)}
+        onDeleted={() => onNotice({ spaceId: space.id, appId: entry.id, name, kind: "deleted" })}
+      />
+    </Row>
+  );
+}
+
+type BringBackProps = {
+  space: Space;
+  entry: InstalledApp;
+  name: Localized;
+  open: boolean;
+  onClose: () => void;
+  onBack: () => void;
+};
+
+/** Asks an owner to bring a removed app back, says what comes with it, and in a group who else may use it. */
+function BringBackDialog(props: BringBackProps) {
+  const { locale, t } = useI18n();
+  const title = t("apps.bringBackTitle", { app: nameInSpace(pickLocalized(props.name, locale), props.space, t) });
+  return (
+    <Dialog open={props.open} onClose={props.onClose} label={title}>
+      <BringBackForm {...props} title={title} />
+    </Dialog>
+  );
+}
+
+/** Mounted each time the dialog opens, so that it starts from "only me for now". */
+function BringBackForm({ space, entry, onClose, onBack, title }: BringBackProps & { title: string }) {
+  const { t } = useI18n();
+  const name = useId();
+  const bring = useBringBackApp();
+  const [memberAccess, setMemberAccess] = useState<MemberAccess>("none");
+  const group = space.kind === "group";
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (bring.isPending) return;
+    // Settles once the session and the owners' list are loaded again, which have taken this row, and the dialog, away.
+    bring.mutateAsync({ install: { spaceId: space.id, appId: entry.id }, memberAccess: group ? memberAccess : undefined }).then(
+      () => {
+        onClose();
+        onBack();
+      },
+      () => undefined,
+    );
+  };
+
+  const failure = bring.error ? failureCode(bring.error) : null;
+  const refused = failure === "forbidden" || failure === "conflict" || failure === "not_found";
+  const comes =
+    entry.rowCount === 0
+      ? t("apps.bringBackNone")
+      : entry.rowCount === 1
+        ? t("apps.bringBackOne")
+        : t("apps.bringBackMany", { count: entry.rowCount });
+
+  return (
+    <form onSubmit={submit} className="flex max-h-[calc(100dvh-34px)] flex-col">
+      <DialogBody className="min-h-0 overflow-y-auto">
+        <h2 className="text-md font-semibold">{title}</h2>
+        <p className="text-fg-2">{comes}</p>
+        {group ? (
+          <fieldset className="flex min-w-0 flex-col gap-1.5">
+            <legend className="mb-1.5 text-xs font-medium text-fg-3">{t("apps.addWho")}</legend>
+            {ACCESS_CHOICES.map((choice) => (
+              <label key={choice.value} className="flex min-h-7 cursor-pointer items-center gap-2.5 max-md:min-h-11">
+                <input
+                  type="radio"
+                  name={`${name}-access`}
+                  value={choice.value}
+                  className={RADIO}
+                  checked={memberAccess === choice.value}
+                  onChange={() => setMemberAccess(choice.value)}
+                />
+                <span>{t(choice.label)}</span>
+              </label>
+            ))}
+            <p className="text-xs text-fg-3">{t("apps.addWhoHint")}</p>
+          </fieldset>
+        ) : null}
+        {failure ? (
+          <p role="status" className="text-xs text-down">
+            {t(refused ? "apps.bringBackRefused" : "apps.bringBackFailed")}
+          </p>
+        ) : null}
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>{t("apps.cancel")}</Button>
+          <Button type="submit" variant="primary" disabled={bring.isPending}>
+            {t("apps.bringBack")}
+          </Button>
+        </div>
+      </DialogBody>
+    </form>
+  );
+}
+
+type DeleteForGoodProps = {
+  space: Space;
+  appId: string;
+  /** The app's name in both languages, or null for an install the server holds no app for, which goes by its ID. */
+  name: Localized | null;
+  open: boolean;
+  onClose: () => void;
+  onDeleted: () => void;
+};
+
+/**
+ * Asks an owner before an app is deleted for good, in use or removed: says
+ * how many entries go with it, for whom, and that it cannot be undone, and
+ * wants the app's name typed. The server checks the name again.
+ */
+function DeleteForGoodDialog(props: DeleteForGoodProps) {
+  const { locale, t } = useI18n();
+  const shown = props.name ? pickLocalized(props.name, locale) : props.appId;
+  const title = t("apps.deleteTitle", { app: shown });
+  return (
+    <Dialog open={props.open} onClose={props.onClose} label={title}>
+      <DeleteForGoodForm {...props} shown={shown} title={title} />
+    </Dialog>
+  );
+}
+
+/** Mounted each time the dialog opens, so that the box starts empty. */
+function DeleteForGoodForm({ space, appId, name, onClose, onDeleted, shown, title }: DeleteForGoodProps & { shown: string; title: string }) {
+  const { t } = useI18n();
+  const boxId = useId();
+  const remove = useDeleteAppForGood();
+  const list = useSpaceApps(space);
+  const [typed, setTyped] = useState("");
+  // How many entries go: the owners' list counts them. Until it is known, nothing is deleted.
+  const count = list.data?.apps.find((entry) => entry.id === appId)?.rowCount;
+  // The name in either of its languages, as the server takes it; spaces around it do not count.
+  const names = name ? [name.en, name.zh] : [appId];
+  const matches = names.some((candidate) => candidate.trim() !== "" && candidate.trim() === typed.trim());
+  const personal = space.kind === "personal";
+
+  const body =
+    count === undefined
+      ? null
+      : personal
+        ? count === 0
+          ? t("apps.deleteBodyNone")
+          : count === 1
+            ? t("apps.deleteBodyOne")
+            : t("apps.deleteBodyMany", { count })
+        : count === 0
+          ? t("apps.deleteBodyGroupNone", { space: space.name })
+          : count === 1
+            ? t("apps.deleteBodyGroupOne", { space: space.name })
+            : t("apps.deleteBodyGroupMany", { count, space: space.name });
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!matches || count === undefined || remove.isPending) return;
+    // Settles once the session and the owners' list are loaded again, which have taken this app, and the dialog, away.
+    remove.mutateAsync({ install: { spaceId: space.id, appId }, confirm: typed.trim() }).then(
+      () => {
+        onClose();
+        onDeleted();
+      },
+      () => undefined,
+    );
+  };
+
+  const failure = remove.error ? failureCode(remove.error) : null;
+  const problem: PlainMessageKey | null =
+    failure === null
+      ? null
+      : failure === "invalid_request"
+        ? "apps.deleteMismatch"
+        : failure === "forbidden"
+          ? "apps.deleteRefused"
+          : failure === "not_found"
+            ? "apps.deleteGone"
+            : "apps.deleteFailed";
+
+  return (
+    <form onSubmit={submit} className="flex max-h-[calc(100dvh-34px)] flex-col">
+      <DialogBody className="min-h-0 overflow-y-auto">
+        <h2 className="text-md font-semibold [overflow-wrap:anywhere]">{title}</h2>
+        {body !== null ? (
+          <p className="text-fg-2">{body}</p>
+        ) : list.isError ? (
+          <div role="alert" className="flex flex-wrap items-center gap-2">
+            <p className="text-xs text-down">{t("apps.deleteCheckFailed")}</p>
+            <Button size="sm" onClick={() => void list.refetch()}>
+              <RefreshCw size={14} aria-hidden="true" />
+              {t("apps.retry")}
+            </Button>
+          </div>
+        ) : (
+          <p className="text-fg-3">{t("apps.deleteCounting")}</p>
+        )}
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={boxId} className="font-medium [overflow-wrap:anywhere]">
+            {t("apps.deleteType", { app: shown })}
+          </label>
+          <Input
+            id={boxId}
+            value={typed}
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            onChange={(event) => setTyped(event.target.value)}
+          />
+        </div>
+        {problem ? (
+          <p role="status" className="text-xs text-down">
+            {t(problem)}
+          </p>
+        ) : null}
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>{t("apps.cancel")}</Button>
+          <Button type="submit" variant="danger" disabled={!matches || count === undefined || remove.isPending}>
+            {t("apps.deleteConfirm")}
+          </Button>
+        </div>
+      </DialogBody>
+    </form>
   );
 }
 

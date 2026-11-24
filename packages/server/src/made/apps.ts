@@ -290,6 +290,57 @@ export function removeMadeRow(db: Db, registry: Registry, request: MadeRequest, 
   withCollection(db, registry, request, collection, "edit", (rows) => rows.remove(rowId));
 }
 
+/**
+ * The rows the chat's model asks to delete, read with what deleting them
+ * needs (edit access, by the assistant for the person), and the names of
+ * their collection's fields in the order the manifest gives them. Deletes
+ * nothing. A row that is not there is refused (404), naming its ID.
+ */
+export function rowsToDelete(
+  db: Db,
+  registry: Registry,
+  request: MadeRequest,
+  collection: string,
+  rowIds: readonly string[],
+): { rows: MadeRow[]; fields: readonly string[] } {
+  return withCollection(db, registry, request, collection, "edit", (rows, fields) => ({
+    rows: rowIds.map((rowId) => {
+      const row = rows.get(rowId);
+      if (!row) throw new AppError("not_found", `${collection}: There is no row with the ID ${JSON.stringify(rowId)}.`);
+      return row as MadeRow;
+    }),
+    fields,
+  }));
+}
+
+/**
+ * Deletes the rows of these IDs that are still there, through the store,
+ * with what deleting needs checked again, and says how many went. Rows
+ * gone since are skipped.
+ */
+export function deleteMadeRows(
+  db: Db,
+  registry: Registry,
+  request: MadeRequest,
+  collection: string,
+  rowIds: readonly string[],
+): number {
+  return withCollection(db, registry, request, collection, "edit", (rows) => {
+    let deleted = 0;
+    for (const rowId of new Set(rowIds)) {
+      if (rows.get(rowId) === null) continue;
+      rows.remove(rowId);
+      deleted++;
+    }
+    return deleted;
+  });
+}
+
+/** Whether a made app of this ID is in this space now, whatever its manifest says: false once it was deleted or moved. */
+export function madeAppIsIn(db: Db, appId: string, spaceId: string): boolean {
+  return db.prepare("SELECT 1 FROM made_apps WHERE app_id = ? AND space_id = ?").get(appId, spaceId) !== undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Changing an app, and going back (docs/platform.md, "Changing an app")
 // ---------------------------------------------------------------------------
