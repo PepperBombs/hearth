@@ -3,12 +3,24 @@
  * (e2e/fixtures.ts): reached from the Apps page, it lists the built-in apps
  * and what is published to the person's groups, on a computer and on a
  * phone, in both languages, unpublishes the person's own, and adds a copy
- * and opens the chat on it. The whole loop
- * against the real server is step 9's in docs/center.md.
+ * and opens the chat on it; and, on an app's page, the publish dialog and
+ * the line of a copy. The whole loop against the real server is step 9's in
+ * docs/center.md.
  */
 import type { Page } from "@playwright/test";
-import type { CenterListing } from "../packages/shared/src/index.ts";
-import { FAMILY_SPACE, LIN, PERSONAL_SPACE, PHONE, expect, expectNothingPastTheEdge, ownAFamily, test, type FakeApi } from "./fixtures.ts";
+import type { CenterListing, PublishReview } from "../packages/shared/src/index.ts";
+import {
+  FAMILY_SPACE,
+  LIN,
+  PERSONAL_SPACE,
+  PHONE,
+  builtInApp,
+  expect,
+  expectNothingPastTheEdge,
+  ownAFamily,
+  test,
+  type FakeApi,
+} from "./fixtures.ts";
 
 function listing(id: string, extra: Partial<CenterListing> = {}): CenterListing {
   return {
@@ -44,6 +56,39 @@ function familyWithListings(api: FakeApi, locale: "en" | "zh" = "en"): void {
       mine: true,
     }),
   ];
+}
+
+/** What the publish dialog reads for Sam's ledger: published to Family once, with long instructions and a page line that holds an address. */
+const REVIEW: PublishReview = {
+  app: {
+    name: { en: "Ledger", zh: "账本" },
+    description: { en: "What the family spends, by month and by person.", zh: "家里每月、每人的花销。" },
+    icon: "wallet",
+    color: "green",
+    collections: [{ name: "expenses", fields: ["amount", "date", "category", "note", "paid_by"] }],
+    settings: { currency: { type: "text", label: { en: "Currency", zh: "货币" }, scope: "space", default: "EUR" } },
+    instructions:
+      "Keep one entry per expense, with its amount in the space's currency and the person who paid. A_very_long_word_without_any_place_to_break_it_that_must_still_wrap_inside_the_dialog.",
+    pageBytes: 23_456,
+  },
+  groups: [{ id: FAMILY_SPACE, name: "Family" }],
+  listings: [{ id: "p-ledger0001", spaceId: FAMILY_SPACE, revision: 2, note: "Totals", updatedAt: "2026-11-03T10:00:00.000Z", canUnpublish: true }],
+  problems: [],
+};
+
+/** Sam owns the family and has a ledger of his own, and a copy of Lin's ledger, in his personal space. */
+function ledgerAndCopy(api: FakeApi, locale: "en" | "zh"): void {
+  ownAFamily(api, { locale });
+  const ledger = { name: REVIEW.app.name, description: REVIEW.app.description, template: undefined, settings: undefined };
+  api.setSession({
+    ...api.session,
+    apps: [
+      ...api.session.apps,
+      builtInApp("checklist", PERSONAL_SPACE, { id: "m-ledger0001", ...ledger }),
+      builtInApp("checklist", PERSONAL_SPACE, { id: "m-copy00001", ...ledger, source: { listingId: "p-other00001", by: LIN.name } }),
+    ],
+  });
+  api.publishReview = REVIEW;
 }
 
 const region = (page: Page, name: string) => page.getByRole("main").getByRole("region", { name });
@@ -100,6 +145,32 @@ test.describe("the app center", () => {
       await region(page, "In Family").getByRole("button", { name: "Add a copy of Ledger" }).click();
       await expect(dialog.getByRole("radio", { name: /Personal/ })).toBeDisabled();
       await expect(dialog.getByRole("link", { name: "Open the copy in your personal space" })).toHaveAttribute("href", `/apps/${PERSONAL_SPACE}/m-copy-1`);
+    });
+
+    test("publishes again from an app's page, and a copy's page says whose app it was, in both languages", async ({ page, api }) => {
+      for (const locale of ["en", "zh"] as const) {
+        const zh = locale === "zh";
+        ledgerAndCopy(api, locale);
+        await page.goto(`/apps/${PERSONAL_SPACE}/m-ledger0001`);
+        await page.getByRole("button", { name: zh ? "发布账本…" : "Publish Ledger…" }).click();
+        const dialog = page.getByRole("dialog", { name: zh ? "发布「账本」" : "Publish “Ledger”" });
+        await expect(dialog.getByRole("region", { name: zh ? "将要分享的内容" : "What will be shared" }).getByText(/A_very_long_word/)).toBeVisible();
+        await expectNothingPastTheEdge(page);
+        await dialog.getByRole("button", { name: zh ? "重新发布到Family" : "Publish again to Family" }).click();
+        await dialog.getByRole("textbox", { name: zh ? "修改了什么（可选）" : "What changed (optional)" }).fill("By person");
+        await dialog.getByText(zh ? "我已检查过，这里面没有隐私内容" : "I have checked that this holds nothing private").click();
+        await dialog.getByRole("button", { name: zh ? "重新发布" : "Publish again", exact: true }).click();
+        await expect(dialog.getByText(zh ? "已发布到Family，第 3 版。" : "Published to Family, revision 3.")).toBeFocused();
+        expect(api.publishes.at(-1)).toBe(`POST /api/spaces/${PERSONAL_SPACE}/apps/m-ledger0001/publish {"to":"${FAMILY_SPACE}","note":"By person"}`);
+
+        await page.goto(`/apps/${PERSONAL_SPACE}/m-copy00001`);
+        await expect(page.getByText(zh ? "这是 Lin Example 分享的应用的副本" : "A copy of an app Lin Example shared")).toBeVisible();
+        await expect(page.getByRole("link", { name: zh ? "在对话里修改" : "Change it in the chat" })).toHaveAttribute(
+          "href",
+          `/chat?space=${PERSONAL_SPACE}&app=m-copy00001`,
+        );
+        await expectNothingPastTheEdge(page);
+      }
     });
 
     test("fits the screen in both languages, with Apps lit in the tab bar", async ({ page, api }) => {

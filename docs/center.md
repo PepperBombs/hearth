@@ -285,8 +285,10 @@ The types and schemas go in `packages/shared` first.
     a 409 for a copy the person cannot see says "This space has this app
     already". After adding: "Open" and "Change it in the chat".
   - "Mine": what you published, with "Unpublish".
-- **The publish dialog,** from the app page's menu ("Publish…"), for those
-  who may publish. It reads `GET .../publish` and shows:
+- **The publish dialog,** from "Publish…" in the app page's top bar (the
+  page has no menu: it is an icon button beside the settings one), for an
+  owner of the app's space who is in a group. It reads `GET .../publish`
+  and shows:
   - exactly what will leave: the name and description, the collections
     and fields, the settings with their defaults, the instructions in
     full, the page's size;
@@ -299,9 +301,12 @@ The types and schemas go in `packages/shared` first.
     off.
   - The same place shows each listing of the app, with "Publish again"
     and "Unpublish".
-- **The app page.** A copy shows "Copy of “Ledger” · by Lin", or "Copy of
-  “Ledger”" when the viewer is not in Lin's group, or "No longer shared"
-  once the listing is gone. Its menu has "Change it in the chat".
+- **The app page.** A copy shows "A copy of an app Lin shared", or "A copy
+  of a shared app" when the viewer is not in Lin's group, or "A copy of an
+  app that is no longer shared" once the listing is gone. The session's
+  `source` names the publisher and not the listing, and a copy may be
+  renamed, so the line names who shared it, not what. Beside it, for
+  someone with edit access, "Change it in the chat".
 - **The chat link.** `/chat?space=X&app=Y` fills the message box with
   "Change “Ledger”: " (in Chinese 修改「Ledger」：), the name in the
   viewer's language, for an app of space X that the session lists, and
@@ -624,7 +629,30 @@ Each step is one pull request, with `pnpm check` green.
    "Publish again" and "Unpublish"; "Copy of … · by …" and "No longer
    shared" on a copy's page; their strings in `en.ts` and `zh.ts`. Done
    when a person can publish, publish again and unpublish from the app
-   page, in both languages.
+   page, in both languages. **Built:** `PublishButton` and its dialog in
+   `center/publish.tsx`, beside the settings button in the app page's top
+   bar, for an owner of the app's space who is in a group (the server
+   decides the rest). The dialog reads `GET .../publish` afresh each time
+   it opens and again after every publish or unpublish, whatever the
+   answer (`usePublishReview`, `usePublish` and `useUnpublish` with the
+   review's key, in `center/api.ts`). It lists where the app is published,
+   each with "Publish again", which chooses that group and goes to the
+   note, and "Unpublish" where allowed, which asks in place; then what will
+   be shared (the name and description in both languages when they
+   differ, the collections and fields, each setting with its default, the
+   instructions in full, the page's size), what is never shared, and that
+   the group sees who published it; the problems, worded from their codes
+   with what to ask the chat, the checker's detail in English; the groups,
+   the first not published to yet chosen first and a full one (`too_many`)
+   disabled; a note; and the tick. Publish stays off without the tick or
+   while any problem but `too_many` is listed, and reads "Publish again"
+   for a group it is published to. A refused publish says so and the review
+   read again shows why. Once published, a line that takes the focus names
+   the group and revision, with a link to the app center. A copy's page
+   has the line above its panel (`CopyLine` in `pages/app-page.tsx`). The
+   stand-in of `e2e/fixtures.ts` answers `GET` and `POST .../publish` from
+   `publishReview`. Tested in `center/publish.test.tsx` and, on a phone in
+   both languages, `e2e/center-page.spec.ts`.
 9. **End to end and docs.** `e2e/center.spec.ts`; a section "The app
    center" in `docs/platform.md`, replacing its line under "Not built
    yet"; one line each in `docs/notes/platform.md`, `docs/notes/server.md`

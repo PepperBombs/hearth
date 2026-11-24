@@ -34,7 +34,10 @@ Notes for whoever changes this part, people and agents alike. They are read when
   unknown, 403 without `canUnpublish`), recording the path in
   `centerChanges`. `POST .../center/:id` adds a new copy (`m-copy-1`, …)
   with the listing's `source`, recorded in `appChanges`; bringing back a
-  removed copy is left to the real server. The person's
+  removed copy is left to the real server. An app's publish dialog reads
+  `publishReview` (404 while it is null, for any app); `POST .../publish`
+  to one of its groups answers revision 1 there, or one more than its
+  listing's, and is recorded in `publishes`. The person's
   answer to a request of the model's to delete
   (`POST .../confirmations/:id`) is recorded in `confirmationRequests` and
   kept in that request's entry of `chats`, so a reload shows it; a test
