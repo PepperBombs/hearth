@@ -11,6 +11,7 @@ import { outboundFor, type Outbound } from "./apps/fetch";
 import { listAppsForUser } from "./apps/installs";
 import { registerAppRoutes } from "./apps/routes";
 import { registerAssistantRoutes } from "./assistant/routes";
+import { withPublishers } from "./center/copies";
 import { registerCenterRoutes } from "./center/routes";
 import { identifyFromConfig, type Identify } from "./auth";
 import type { Config } from "./config";
@@ -102,7 +103,7 @@ export function createApp(options: AppOptions): Hono<Env> {
     const body: Session = {
       user,
       spaces: listSpacesForUser(db, user.id),
-      apps: listAppsForUser(db, registry, user.id),
+      apps: withPublishers(db, user.id, listAppsForUser(db, registry, user.id)),
       // The same answer the routes that create a group or invite someone ask for.
       ...groupRights(config, user),
       version: config.version,

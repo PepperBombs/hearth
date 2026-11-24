@@ -145,6 +145,8 @@ export function listAppsForUser(db: Db, registry: Registry, userId: string): App
       version: app.version,
       ...(app.template ? { template: app.template } : {}),
       ...(manifest.settings ? { settings: manifest.settings } : {}),
+      // A copy of a published app; its publisher's name is added for members of its group (src/center).
+      ...(app.copy ? { source: app.copy.listingId === undefined ? {} : { listingId: app.copy.listingId } } : {}),
     });
   }
   return apps;
@@ -430,7 +432,8 @@ export function removeApp(db: Db, registry: Registry, request: AppRequest): void
  * Throws a Refusal: 404 when the app is not there for this person, or they
  * are not in the space it should go to (or it does not exist); 403 when they
  * do not own the space it is in, or may not add apps to the other; 409 when
- * the other space cannot take it.
+ * the other space cannot take it, and when the app is a copy of a published
+ * app that nobody changed and the other space is a group.
  */
 export function moveApp(
   db: Db,
@@ -448,6 +451,14 @@ export function moveApp(
     const ownsTarget = target.role === "owner";
     if (!ownsTarget && target.canAddApps !== 1) {
       throw new Refusal(403, "forbidden", "Moving an app into a space is for its owners and the members they allow to add apps.");
+    }
+    // A copy of a published app as it was shared stays where it was shared to (docs/center.md, decision 3).
+    if (target.kind === "group" && registry.get(appId)?.copy?.untouched === true) {
+      throw new Refusal(
+        409,
+        "conflict",
+        "This app is a copy of a published app that nobody changed. It is not moved into a group: add a copy there from the app center instead.",
+      );
     }
     // The space the app is in has it too, so moving it to where it is ends here.
     if (installOf(db, toSpaceId, appId)) {

@@ -241,8 +241,9 @@ The types and schemas go in `packages/shared` first.
   - A space with a copy of this listing that is not removed answers 409.
     A removed one is brought back with its data (`restored: true`).
 - **Moving a copy.** `moveApp` refuses to move an untouched copy into a
-  group (409), decision 3. It asks `src/made/apps.ts` whether the app is
-  one, so `installs.ts` reads no `made_apps` column itself.
+  group (409), decision 3. It asks the registry, which `src/made/apps.ts`
+  gives (`RegisteredApp.copy`), whether the app is one, so `installs.ts`
+  reads no `made_apps` column itself.
 - **`AppSummary` gains** one optional field, `source: { listingId?, by? }`,
   for a copy. `listingId` is missing once the listing is gone. `by` is the
   publisher's name, sent only to a viewer who is a member of the listing's
@@ -526,7 +527,25 @@ Each step is one pull request, with `pnpm check` green.
    `createMadeApp` with `origin` and the note, `AppSummary.source`, the
    rule in `moveApp`, and the tests of who sees, adding, moving,
    independence and nothing leaking. Done when the whole loop works
-   through the API in `center.test.ts`.
+   through the API in `center.test.ts`. **Built:** both routes in
+   `center/routes.ts`, their rules in `center/copies.ts` (`listCenter`,
+   `addCopy`, `withPublishers`). A copy is made by `createMadeApp` with
+   `origin` and `note`; `loadMadeApp` reads the three columns into
+   `MadeApp.origin`, and the copies of a listing in a space are
+   `copiesOf` in `made/apps.ts`. Adding checks, in this order: the
+   listing (404), the space (404), the right to add apps there (403, before
+   the 409, so that someone who may not add apps learns nothing of a copy
+   they cannot see), then one copy per space (409) or a removed one brought
+   back (200, `restored`); a new copy answers 201. Version 1's note names
+   the listing in English, "Copy of “Ledger” (revision 2)", as the other
+   notes the model reads are. The registry tells the rest of the server
+   about a copy (`RegisteredApp.copy`: its `listingId` while listed, and
+   whether it is `untouched`, hashed only for copies), so `moveApp` and the
+   session read no `made_apps` column: `listAppsForUser` gives
+   `source.listingId`, and the session adds `by` through
+   `publisherNamesFor` in `center/published.ts`, under `LISTED`. A copy
+   whose listing is gone is still untouched while its hash matches, so it
+   is still not moved into a group. Tested in `center/center.test.ts`.
 5. **The chat.** The label of a copy's instructions, and the `?app=` link
    that fills the message box. Done when `chat.test.ts` and the chat
    page's test pass.

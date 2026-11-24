@@ -1,14 +1,15 @@
 /**
  * The routes of the app center (docs/center.md): publishing an app to a
- * group, publishing it again and unpublishing it. The request and answer
- * shapes are in `@hearth/shared`.
+ * group, publishing it again and unpublishing it; the center's list, and
+ * adding a copy. The request and answer shapes are in `@hearth/shared`.
  */
-import { publishRequestSchema, type PublishResult } from "@hearth/shared";
+import { addCopyRequestSchema, publishRequestSchema, type AddCopyResult, type Center, type PublishResult } from "@hearth/shared";
 import type { Hono } from "hono";
 import type { Registry } from "../apps/registry";
 import type { Db } from "../db/database";
 import { readBody } from "../http/body";
 import type { Env, RequireMember } from "../http/env";
+import { addCopy, listCenter } from "./copies";
 import { publishApp, reviewPublish, unpublishApp } from "./publish";
 
 const PUBLISH = "/api/spaces/:spaceId/apps/:appId/publish";
@@ -29,6 +30,17 @@ export function registerCenterRoutes(app: Hono<Env>, deps: { db: Db; registry: R
     const { spaceId, appId } = c.req.param();
     const { created, ...result } = publishApp(db, registry, { userId: c.get("user").id, spaceId, appId, to, note });
     return c.json(result satisfies PublishResult, created ? 201 : 200);
+  });
+
+  // The published apps of every group the person is in.
+  app.get("/api/center", requireMember, (c) => c.json(listCenter(db, c.get("user").id) satisfies Center));
+
+  // Add a copy to a space, or bring back the one it removed.
+  app.post("/api/spaces/:spaceId/center/:id", requireMember, async (c) => {
+    const { memberAccess } = await readBody(c, addCopyRequestSchema);
+    const { spaceId, id } = c.req.param();
+    const { created, ...result } = addCopy(db, registry, { userId: c.get("user").id, spaceId, id, memberAccess });
+    return c.json(result satisfies AddCopyResult, created ? 201 : 200);
   });
 
   // Unpublish: the listing goes, and its copies stay as they are.

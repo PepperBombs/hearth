@@ -182,3 +182,20 @@ export function listingsOfAppFor(db: Db, request: { userId: string; sourceAppId:
     )
     .all(request) as AppListingRow[];
 }
+
+/**
+ * The publishers' names of these listings, by listing, for those in the
+ * person's groups alone: what the session shows beside a copy ("by Lin").
+ * A listing outside them, or gone, is missing from the answer.
+ */
+export function publisherNamesFor(db: Db, request: { userId: string; ids: readonly string[] }): Map<string, string> {
+  if (request.ids.length === 0) return new Map();
+  const rows = db
+    .prepare(
+      `SELECT id, (SELECT u.name FROM users u WHERE u.id = p.created_by) AS name
+         FROM published_apps p
+        WHERE id IN (SELECT value FROM json_each(@ids)) AND ${LISTED}`,
+    )
+    .all({ userId: request.userId, ids: JSON.stringify(request.ids) }) as { id: string; name: string }[];
+  return new Map(rows.map((row) => [row.id, row.name]));
+}

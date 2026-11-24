@@ -226,3 +226,7 @@ Notes for whoever changes this part, people and agents alike. They are read when
 - Request schemas in `packages/shared` refuse unknown properties
   (`z.strictObject`); answers such as the session do not, so that a browser
   holding an older web app survives a newer server.
+- A copy of a published app (docs/center.md) is an ordinary made app whose
+  `made_apps.origin_hash` is set; the rest of the server learns of it from
+  the registry (`RegisteredApp.copy`), never from `made_apps` itself, and
+  `moveApp` refuses to move an untouched one into a group.

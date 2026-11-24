@@ -44,9 +44,27 @@ export type MadeApp = {
   version: number;
   /** The built-in app it was added from (src/made/catalog.ts), or null for one a person's model made. */
   template: string | null;
+  /**
+   * For a copy of a published app (docs/center.md), where it came from: the
+   * listing (null once it is unpublished), and the hash and revision of the
+   * snapshot it was copied from. Null for every other app.
+   */
+  origin: MadeOrigin | null;
 };
 
-type MadeAppRow = { appId: string; spaceId: string; manifest: string; html: string; version: number; template: string | null };
+export type MadeOrigin = { listingId: string | null; hash: string; revision: number | null };
+
+type MadeAppRow = {
+  appId: string;
+  spaceId: string;
+  manifest: string;
+  html: string;
+  version: number;
+  template: string | null;
+  origin: string | null;
+  originHash: string | null;
+  originRevision: number | null;
+};
 
 /** A made app's name in a language: its maker's words, or the built-in app's in that language. */
 export function nameOf(manifest: Pick<MadeManifest, "name">, locale: "en" | "zh"): string {
@@ -58,7 +76,8 @@ function loadMadeApp(db: Db, appId: string): MadeApp | null {
   if (!MADE_ID.test(appId)) return null;
   const row = db
     .prepare(
-      `SELECT app_id AS appId, space_id AS spaceId, manifest, html, version, template
+      `SELECT app_id AS appId, space_id AS spaceId, manifest, html, version, template,
+              origin, origin_hash AS originHash, origin_revision AS originRevision
          FROM made_apps
         WHERE app_id = ?`,
     )
@@ -67,7 +86,24 @@ function loadMadeApp(db: Db, appId: string): MadeApp | null {
   // Checked when it was written; read again so that what the server hands on always fits.
   const manifest = madeManifestSchema.safeParse(JSON.parse(row.manifest));
   if (!manifest.success) return null;
-  return { appId: row.appId, spaceId: row.spaceId, manifest: manifest.data, html: row.html, version: row.version, template: row.template };
+  return {
+    appId: row.appId,
+    spaceId: row.spaceId,
+    manifest: manifest.data,
+    html: row.html,
+    version: row.version,
+    template: row.template,
+    origin: row.originHash === null ? null : { listingId: row.origin, hash: row.originHash, revision: row.originRevision },
+  };
+}
+
+/**
+ * Whether a copy of a published app is still as it was shared: its manifest
+ * and page hash to the snapshot it was copied from. Going back to version 1
+ * makes it untouched again. False for every app that is no such copy.
+ */
+function untouchedCopy(app: Pick<MadeApp, "manifest" | "html" | "origin">): boolean {
+  return app.origin !== null && templateHash(app.manifest, app.html) === app.origin.hash;
 }
 
 /**
@@ -85,6 +121,10 @@ function registered(app: MadeApp): RegisteredApp {
     made: true,
     version: app.version,
     ...(app.template === null ? {} : { template: app.template }),
+    // Hashed only for a copy of a published app, which few apps are.
+    ...(app.origin === null
+      ? {}
+      : { copy: { ...(app.origin.listingId === null ? {} : { listingId: app.origin.listingId }), untouched: untouchedCopy(app) } }),
   };
 }
 
@@ -119,6 +159,11 @@ export function assistantMayChange(db: Db, spaceId: string): boolean {
  * to the space by `addApp`, with its rules (owners, and members allowed to
  * add apps; nothing shared with the other members of a group). Throws the
  * Refusal `addApp` throws.
+ *
+ * A copy of a built-in app names its `template`; a copy of a published app
+ * (docs/center.md) its `origin`, the listing and the hash and revision of
+ * its snapshot, and leaves `template` NULL, so the built-in apps' rules
+ * never touch it. `note` is version 1's, "" when left out.
  */
 export function createMadeApp(
   db: Db,
@@ -130,6 +175,9 @@ export function createMadeApp(
     html: string;
     /** The built-in app it is a copy of (src/made/catalog.ts). */
     template?: { id: string; hash: string };
+    /** The published app it is a copy of. */
+    origin?: { id: string; hash: string; revision: number };
+    note?: string;
     memberAccess?: MemberAccess;
   },
 ): { appId: string } {
@@ -141,8 +189,9 @@ export function createMadeApp(
     while (registry.has(appId)) appId = newMadeId();
     const now = new Date().toISOString();
     db.prepare(
-      `INSERT INTO made_apps (app_id, space_id, manifest, html, version, template, template_hash, created_by, updated_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO made_apps (app_id, space_id, manifest, html, version, template, template_hash,
+                             origin, origin_hash, origin_revision, created_by, updated_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       appId,
       request.spaceId,
@@ -150,12 +199,16 @@ export function createMadeApp(
       request.html,
       request.template?.id ?? null,
       request.template?.hash ?? null,
+      request.origin?.id ?? null,
+      request.origin?.hash ?? null,
+      request.origin?.revision ?? null,
       request.userId,
       request.userId,
       now,
       now,
     );
-    writeVersion(db, { appId, version: 1, manifest: request.manifest, html: request.html, note: "", userId: request.userId, at: now });
+    const note = request.note ?? "";
+    writeVersion(db, { appId, version: 1, manifest: request.manifest, html: request.html, note, userId: request.userId, at: now });
     // The install comes second: addApp finds the app through the registry. The
     // foreign key between the two is checked when the transaction ends.
     addApp(db, registry, { userId: request.userId, spaceId: request.spaceId, appId, memberAccess: request.memberAccess ?? "none" });
@@ -369,10 +422,9 @@ export function publishableApp(db: Db, registry: Registry, request: Omit<MadeReq
     throw new Refusal(403, "forbidden", "Publishing this app is for the owners of its space.");
   }
   const row = db
-    .prepare("SELECT template_hash AS templateHash, origin_hash AS originHash FROM made_apps WHERE app_id = ? AND space_id = ?")
-    .get(app.appId, app.spaceId) as { templateHash: string | null; originHash: string | null };
-  const untouchedCopy = row.templateHash !== null || (row.originHash !== null && templateHash(app.manifest, app.html) === row.originHash);
-  return { ...app, untouchedCopy };
+    .prepare("SELECT template_hash AS templateHash FROM made_apps WHERE app_id = ? AND space_id = ?")
+    .get(app.appId, app.spaceId) as { templateHash: string | null };
+  return { ...app, untouchedCopy: row.templateHash !== null || untouchedCopy(app) };
 }
 
 // ---------------------------------------------------------------------------
@@ -639,6 +691,25 @@ export function madeFromTemplate(db: Db, spaceId: string, template: string): { a
         ORDER BY m.created_at DESC, m.app_id`,
     )
     .all(spaceId, template) as { appId: string; removed: 0 | 1 }[];
+  return rows.map((row) => ({ appId: row.appId, removed: row.removed === 1 }));
+}
+
+/**
+ * The made apps of a space copied from one published app (docs/center.md),
+ * removed ones too, newest first: one space holds one copy of it. Whoever
+ * may see each is not asked, as for `madeFromTemplate`: a copy another
+ * member added "only me for now" counts too.
+ */
+export function copiesOf(db: Db, spaceId: string, listingId: string): { appId: string; removed: boolean }[] {
+  const rows = db
+    .prepare(
+      `SELECT m.app_id AS appId, a.removed_at IS NOT NULL AS removed
+         FROM made_apps m
+         JOIN space_apps a ON a.space_id = m.space_id AND a.app_id = m.app_id
+        WHERE m.space_id = ? AND m.origin = ?
+        ORDER BY m.created_at DESC, m.app_id`,
+    )
+    .all(spaceId, listingId) as { appId: string; removed: 0 | 1 }[];
   return rows.map((row) => ({ appId: row.appId, removed: row.removed === 1 }));
 }
 
