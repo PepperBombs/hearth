@@ -1,7 +1,8 @@
 /**
  * The routes for groups and their members (docs/mini-app-contract.md,
  * section A8): create a group, rename it, add someone, change what a member
- * may do, remove a member or leave, and take back an invitation. The
+ * may do, remove a member or leave (which deletes a group that nobody else
+ * is in), and take back an invitation. The
  * request shapes are in `@hearth/shared`. Creating a group and adding
  * someone answer with a body; after the others the web app reloads what it
  * shows.
@@ -9,6 +10,7 @@
 import {
   addMemberRequestSchema,
   createSpaceRequestSchema,
+  leaveGroupRequestSchema,
   memberPatchSchema,
   spacePatchSchema,
   withdrawInvitationRequestSchema,
@@ -18,7 +20,7 @@ import {
 import type { Hono } from "hono";
 import type { Config } from "../config";
 import type { Db } from "../db/database";
-import { readBody } from "../http/body";
+import { readBody, readOptionalBody } from "../http/body";
 import type { Env, RequireMember } from "../http/env";
 import { addMember, changeMember, createGroup, removeMember, renameGroup, withdrawInvitation } from "./members";
 import { groupRights } from "./policy";
@@ -60,10 +62,12 @@ export function registerGroupRoutes(app: Hono<Env>, options: GroupRoutesOptions)
     return c.body(null, 204);
   });
 
-  // Remove a member, or leave: an owner may remove anyone, anyone may remove themselves.
-  app.delete("/api/spaces/:spaceId/members/:memberId", requireMember, (c) => {
+  // Remove a member, or leave: an owner may remove anyone, anyone may remove
+  // themselves. The only member leaving deletes the group, and names it in the body.
+  app.delete("/api/spaces/:spaceId/members/:memberId", requireMember, async (c) => {
+    const { confirm } = await readOptionalBody(c, leaveGroupRequestSchema);
     const { spaceId, memberId } = c.req.param();
-    removeMember(db, { userId: c.get("user").id, spaceId, memberId });
+    removeMember(db, { userId: c.get("user").id, spaceId, memberId, confirm });
     return c.body(null, 204);
   });
 

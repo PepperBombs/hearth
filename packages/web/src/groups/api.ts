@@ -12,6 +12,7 @@ import {
   type AddMemberRequest,
   type AddMemberResponse,
   type AppAccessRequest,
+  type LeaveGroupRequest,
   type MemberAccess,
   type MemberPatch,
   type Space,
@@ -60,9 +61,15 @@ export async function changeMember(spaceId: string, memberId: string, patch: Mem
   });
 }
 
-/** DELETE .../members/:userId: removes a member, or, for the person's own ID, leaves the group. */
-export async function removeMember(spaceId: string, memberId: string): Promise<void> {
-  await request(spaceAddress(spaceId, `members/${encodeURIComponent(memberId)}`), { method: "DELETE" });
+/**
+ * DELETE .../members/:userId: removes a member, or, for the person's own ID,
+ * leaves the group. Its only member leaving deletes the group, and must send
+ * the group's name as `confirm`; without it the server answers 409
+ * `confirm_required` and changes nothing.
+ */
+export async function removeMember(spaceId: string, memberId: string, body?: LeaveGroupRequest): Promise<void> {
+  const address = spaceAddress(spaceId, `members/${encodeURIComponent(memberId)}`);
+  await request(address, body === undefined ? { method: "DELETE" } : { method: "DELETE", headers: JSON_HEADERS, body: JSON.stringify(body) });
 }
 
 /** DELETE .../invitations: takes back the invitation of someone who has not arrived yet. */

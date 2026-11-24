@@ -68,6 +68,8 @@ class FakeServer {
   /** Answer requests whose "METHOD path" ends like this only after a while, as a slow network would. */
   slow: { ending: string; ms: number } | null = null;
   readonly changes: string[] = [];
+  /** Every GET, as its path. */
+  readonly reads: string[] = [];
 
   person(id: string): Person {
     const found = PEOPLE.find((person) => person.id === id);
@@ -116,6 +118,7 @@ class FakeServer {
             canAddApps: mine.role === "owner" || mine.canAddApps,
             assistant: "none" as const,
             members: group.members.map((member) => ({ id: member.id, name: this.person(member.id).name, role: member.role })),
+            ...(mine.role === "owner" ? { pendingInvitations: group.invitations.length } : {}),
           };
         }),
       ],
@@ -138,6 +141,7 @@ class FakeServer {
     const path = String(input);
     const method = init.method ?? "GET";
     const body = (typeof init.body === "string" ? JSON.parse(init.body) : undefined) as Record<string, unknown> | undefined;
+    if (method === "GET") this.reads.push(path);
     if (method !== "GET") this.changes.push(`${method} ${path} ${JSON.stringify(body ?? null)}`);
     const json = (status: number, value: unknown) =>
       new Response(status === 204 ? null : JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -204,6 +208,14 @@ class FakeServer {
     if (memberMatch && method === "DELETE") {
       if (!target) return refuse(404, "not_found");
       if (target.id !== this.me.id && !owner) return refuse(403, "forbidden");
+      // The only member leaving deletes the group, once they have sent its name.
+      if (target.id === this.me.id && group.members.length === 1) {
+        if (typeof body?.confirm !== "string" || body.confirm.trim() !== group.name.trim()) return refuse(409, "confirm_required");
+        this.groups = this.groups.filter((candidate) => candidate !== group);
+        return json(204, null);
+      }
+      // A name sent asks to delete the group, which is not this person's alone any more.
+      if (target.id === this.me.id && typeof body?.confirm === "string" && body.confirm.trim() !== "") return refuse(409, "conflict");
       if (target.role === "owner" && owners() === 1) return refuse(409, "conflict");
       group.members = group.members.filter((member) => member !== target);
       return json(204, null);
@@ -221,6 +233,21 @@ class FakeServer {
       return json(204, null);
     }
     return refuse(404, "not_found");
+  };
+}
+
+const SOLO = "space-book-club";
+/** A group Sam alone is in, with an app in use, a removed one and an invitation. */
+function soloGroup(): Group {
+  return {
+    id: SOLO,
+    name: "Book club",
+    members: [{ id: SAM.id, role: "owner", canAddApps: false }],
+    invitations: [{ email: "pat@example.com", role: "member", canAddApps: false }],
+    apps: [
+      { id: "checklist", memberAccess: "edit", members: {}, removedAt: null, hasCode: true },
+      { id: "journal", memberAccess: "edit", members: {}, removedAt: "2026-01-01T00:00:00.000Z", hasCode: true },
+    ],
   };
 }
 
@@ -584,6 +611,168 @@ describe("groups in Settings", () => {
     await waitFor(() => expect(within(main()).queryByRole("region", { name: "Family" })).toBeNull());
     // In no group now, and not one who creates them: the card that explains groups is back.
     expect(within(await card("Groups")).getByText(/You are not in a group yet/)).toBeTruthy();
+  });
+
+  it("lets the only person in a group leave it, deleting it once they have typed its name", async () => {
+    const server = new FakeServer();
+    server.groups.push(soloGroup());
+    start(server);
+    const solo = await card("Book club");
+
+    fireEvent.click(within(solo).getByRole("button", { name: "Leave the group" }));
+    const leave = await dialog("Leave and delete Book club?");
+    // Its two apps, the removed one too, the person's conversations and its one invitation go.
+    expect(await within(leave).findByText(/You are the only person in this group/)).toBeTruthy();
+    expect(within(leave).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "its 2 apps, with all their data",
+      "your conversations in it",
+      "its pending invitation",
+    ]);
+    expect(within(leave).getByText("This cannot be undone.")).toBeTruthy();
+    const confirm = within(leave).getByRole("button", { name: "Leave and delete" }) as HTMLButtonElement;
+    const box = within(leave).getByLabelText("Type “Book club” to confirm");
+    expect(confirm.disabled).toBe(true);
+    for (const wrong of ["Book", "book club", "Book club!"]) {
+      fireEvent.change(box, { target: { value: wrong } });
+      expect(confirm.disabled).toBe(true);
+    }
+    fireEvent.change(box, { target: { value: "  Book club " } });
+    expect(confirm.disabled).toBe(false);
+    const readsBefore = server.reads.length;
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(server.changes).toEqual([`DELETE /api/spaces/${SOLO}/members/${SAM.id} {"confirm":"Book club"}`]));
+    await waitFor(() => expect(within(main()).queryByRole("region", { name: "Book club" })).toBeNull());
+    const note = await within(await card("Groups")).findByText("Book club was deleted.");
+    await waitFor(() => expect(document.activeElement).toBe(note));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // The other group stays, and the deleted group's owners' list, which would answer 404, is not asked for again.
+    expect(await card("Family")).toBeTruthy();
+    expect(server.reads.slice(readsBefore).filter((path) => path.includes(SOLO))).toEqual([]);
+  });
+
+  it("says why the group was not deleted, and keeps the dialog open", async () => {
+    const server = new FakeServer();
+    server.groups.push(soloGroup());
+    start(server);
+    const solo = await card("Book club");
+    fireEvent.click(within(solo).getByRole("button", { name: "Leave the group" }));
+    const leave = await dialog("Leave and delete Book club?");
+    fireEvent.change(within(leave).getByLabelText("Type “Book club” to confirm"), { target: { value: "Book club" } });
+    const confirm = within(leave).getByRole("button", { name: "Leave and delete" });
+    await waitFor(() => expect((confirm as HTMLButtonElement).disabled).toBe(false));
+
+    const cases: [Failure, string][] = [
+      [{ status: 409, code: "confirm_required" }, "That is not the group's name. Type it as shown."],
+      [{ status: 409, code: "conflict" }, "Someone else is in this group now, so nothing was deleted."],
+      [{ status: 404, code: "not_found" }, "This group is no longer here."],
+      [{ status: 500, code: "internal" }, "The group could not be deleted. Try again."],
+    ];
+    for (const [failure, text] of cases) {
+      server.fail = { ending: `DELETE /api/spaces/${SOLO}/members/${SAM.id}`, with: failure };
+      fireEvent.click(confirm);
+      expect(await within(leave).findByText(text)).toBeTruthy();
+    }
+    expect(within(main()).getByRole("region", { name: "Book club" })).toBeTruthy();
+    expect(server.groups.some((group) => group.id === SOLO)).toBe(true);
+  });
+
+  it("does not say a group was deleted when someone joined it after the session was loaded", async () => {
+    const server = new FakeServer();
+    server.groups.push(soloGroup());
+    start(server);
+    const solo = await card("Book club");
+    // Lin takes up an invitation as an owner; this screen still shows Sam alone.
+    server.groups.find((group) => group.id === SOLO)?.members.push({ id: LIN.id, role: "owner", canAddApps: false });
+    fireEvent.click(within(solo).getByRole("button", { name: "Leave the group" }));
+    const stale = await dialog("Leave and delete Book club?");
+    fireEvent.change(within(stale).getByLabelText("Type “Book club” to confirm"), { target: { value: "Book club" } });
+    const confirm = within(stale).getByRole("button", { name: "Leave and delete" }) as HTMLButtonElement;
+    await waitFor(() => expect(confirm.disabled).toBe(false));
+    fireEvent.click(confirm);
+
+    // The server refuses; the session loaded again shows Lin, and the dialog becomes the plain one.
+    const leave = await dialog("Leave Book club?");
+    expect(within(leave).getByText("Someone else is in this group now, so nothing was deleted.")).toBeTruthy();
+    expect(within(leave).queryByText("A group must keep an owner. Make someone else an owner first.")).toBeNull();
+    expect(screen.queryByText("Book club was deleted.")).toBeNull();
+    expect(server.groups.some((group) => group.id === SOLO)).toBe(true);
+    expect(within(main()).getByRole("region", { name: "Book club" })).toBeTruthy();
+
+    // Leaving now is a plain leave, which keeps the group for Lin.
+    fireEvent.click(within(leave).getByRole("button", { name: "Leave" }));
+    await waitFor(() => expect(within(main()).queryByRole("region", { name: "Book club" })).toBeNull());
+    expect(server.changes).toEqual([
+      `DELETE /api/spaces/${SOLO}/members/${SAM.id} {"confirm":"Book club"}`,
+      `DELETE /api/spaces/${SOLO}/members/${SAM.id} null`,
+    ]);
+    expect(server.groups.find((group) => group.id === SOLO)?.members.map((member) => member.id)).toEqual([LIN.id]);
+    expect(screen.queryByText("Book club was deleted.")).toBeNull();
+  });
+
+  it("asks for the name without blaming a typo when everyone else left after the session was loaded", async () => {
+    const server = new FakeServer();
+    const group = soloGroup();
+    group.members.push({ id: LIN.id, role: "member", canAddApps: false });
+    server.groups.push(group);
+    start(server);
+    const shared = await card("Book club");
+    // Lin leaves from her phone; this screen still shows her.
+    group.members = group.members.filter((member) => member.id !== LIN.id);
+    fireEvent.click(within(shared).getByRole("button", { name: "Leave the group" }));
+    const plain = await dialog("Leave Book club?");
+    fireEvent.click(within(plain).getByRole("button", { name: "Leave" }));
+
+    // Refused for want of the name; the session loaded again makes it the delete dialog, with nothing typed and no error.
+    const leave = await dialog("Leave and delete Book club?");
+    expect(within(leave).getByText("Nobody else is in this group any more, so leaving it now deletes it.")).toBeTruthy();
+    expect(await within(leave).findByText("its 2 apps, with all their data")).toBeTruthy();
+    expect((within(leave).getByLabelText("Type “Book club” to confirm") as HTMLInputElement).value).toBe("");
+    expect(within(leave).queryByText("That is not the group's name. Type it as shown.")).toBeNull();
+    expect(within(leave).queryByText("You could not leave the group. Try again.")).toBeNull();
+    expect(server.groups.some((candidate) => candidate.id === SOLO)).toBe(true);
+
+    // A wrong name typed now is told as such.
+    server.fail = { ending: `DELETE /api/spaces/${SOLO}/members/${SAM.id}`, with: { status: 409, code: "confirm_required" } };
+    fireEvent.change(within(leave).getByLabelText("Type “Book club” to confirm"), { target: { value: "Book club" } });
+    const confirm = within(leave).getByRole("button", { name: "Leave and delete" }) as HTMLButtonElement;
+    await waitFor(() => expect(confirm.disabled).toBe(false));
+    fireEvent.click(confirm);
+    expect(await within(leave).findByText("That is not the group's name. Type it as shown.")).toBeTruthy();
+  });
+
+  it("deletes nothing until it knows how many apps go, and offers to try again", async () => {
+    const server = new FakeServer();
+    server.groups.push(soloGroup());
+    server.fail = { ending: `GET /api/spaces/${SOLO}/apps`, with: { status: 500, code: "internal" } };
+    start(server);
+    const solo = await card("Book club");
+    fireEvent.click(within(solo).getByRole("button", { name: "Leave the group" }));
+    const leave = await dialog("Leave and delete Book club?");
+    fireEvent.change(within(leave).getByLabelText("Type “Book club” to confirm"), { target: { value: "Book club" } });
+    const alert = await within(leave).findByRole("alert");
+    expect(within(alert).getByText("Its apps could not be counted.")).toBeTruthy();
+    expect((within(leave).getByRole("button", { name: "Leave and delete" }) as HTMLButtonElement).disabled).toBe(true);
+
+    server.fail = null;
+    fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+    expect(await within(leave).findByText("its 2 apps, with all their data")).toBeTruthy();
+    expect((within(leave).getByRole("button", { name: "Leave and delete" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("says in Chinese what goes when the only person leaves a group, leaving out what it does not have", async () => {
+    const server = new FakeServer();
+    server.locale = "zh";
+    server.groups.push({ ...soloGroup(), apps: [], invitations: [] });
+    start(server);
+    const solo = await card("Book club");
+    fireEvent.click(within(solo).getByRole("button", { name: "退出群组" }));
+    const leave = await dialog("要退出并删除Book club吗？");
+    expect(await within(leave).findByText("你是这个群组唯一的成员，退出会永久删除这个群组及其中的一切：")).toBeTruthy();
+    expect(within(leave).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["你在其中的对话"]);
+    fireEvent.change(within(leave).getByLabelText("输入“Book club”以确认"), { target: { value: "Book club" } });
+    fireEvent.click(within(leave).getByRole("button", { name: "退出并删除" }));
+    expect(await within(await card("群组")).findByText("Book club已删除。")).toBeTruthy();
   });
 
   it("speaks Chinese", async () => {

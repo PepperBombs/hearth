@@ -298,7 +298,11 @@ export type MemberPatch = z.infer<typeof memberPatchSchema>;
  *   onto the server). `confirm` must then be the group's name as the
  *   session gives it; spaces around either do not count. Without it, or
  *   with another text, the answer is 409 `confirm_required` and nothing
- *   changes. In every other case `confirm` is ignored.
+ *   changes.
+ * - Someone leaving who sends a `confirm` that is not empty, while anyone
+ *   else is in the group, is refused (409 `conflict`) and nothing changes:
+ *   they were told leaving deletes the group, and someone has joined since.
+ *   Removing someone else ignores `confirm`.
  */
 export const leaveGroupRequestSchema = z.strictObject({ confirm: z.string().max(200).optional() });
 export type LeaveGroupRequest = z.infer<typeof leaveGroupRequestSchema>;

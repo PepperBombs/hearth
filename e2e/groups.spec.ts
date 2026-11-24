@@ -6,9 +6,42 @@
  * between two people on the real server in e2e/real-server.spec.ts.
  */
 import type { Page } from "@playwright/test";
-import { FAMILY_SPACE, KIM, LIN, PHONE, builtInApp, emptySession, expect, expectNothingPastTheEdge, ownAFamily, test } from "./fixtures.ts";
+import type { Session } from "../packages/shared/src/index.ts";
+import { FAMILY_SPACE, FakeApi, KIM, LIN, PHONE, builtInApp, emptySession, expect, expectNothingPastTheEdge, ownAFamily, test } from "./fixtures.ts";
 
 const card = (page: Page, name: string) => page.getByRole("main").getByRole("region", { name });
+
+/**
+ * The family after Lin and Kim left it: Sam is its only member. It still
+ * has the checklist, a feed it removed, a conversation of Sam's and Pat's
+ * invitation.
+ */
+function aloneInTheFamily(api: FakeApi, user: Partial<Session["user"]> = {}): void {
+  ownAFamily(api, user);
+  const me = api.session.user;
+  api.setSession({
+    ...api.session,
+    spaces: api.session.spaces.map((space) => (space.id === FAMILY_SPACE ? { ...space, members: [{ id: me.id, name: me.name, role: "owner" }] } : space)),
+  });
+  const family = api.groups[FAMILY_SPACE]!;
+  family.members = family.members.filter((member) => member.id === me.id);
+  for (const app of family.apps) app.members = {};
+  const feed = builtInApp("feed", FAMILY_SPACE);
+  family.apps.push({
+    id: feed.id,
+    template: "feed",
+    hasCode: true,
+    removedAt: "2026-11-01T09:00:00.000Z",
+    rowCount: 4,
+    memberAccess: "none",
+    members: {},
+    assistant: true,
+    name: feed.name,
+    icon: feed.icon,
+    color: feed.color,
+  });
+  api.chats[FAMILY_SPACE] = [{ chat: { id: "chat-1", title: "Plans", createdAt: "2026-11-02T09:00:00.000Z", updatedAt: "2026-11-02T09:00:00.000Z" }, entries: [] }];
+}
 
 test.describe("groups in Settings", () => {
   test("the server's owner creates a group, adds someone, invites someone and gives the group an app", async ({ page, api }) => {
@@ -160,6 +193,108 @@ test.describe("groups in Settings", () => {
     await expect(page.getByRole("heading", { name: "No widgets yet" })).toBeVisible();
   });
 
+  test("the only person in a group leaves it once they have typed its name, which deletes it with everything in it", async ({ page, api }) => {
+    aloneInTheFamily(api);
+    await page.goto("/settings");
+    const family = card(page, "Family");
+    await family.getByRole("button", { name: "Leave the group" }).click();
+    const dialog = page.getByRole("dialog", { name: "Leave and delete Family?" });
+    // What goes: both apps, the removed feed too, the conversations, and Pat's invitation, for good.
+    await expect(dialog.getByRole("listitem")).toHaveText(["its 2 apps, with all their data", "your conversations in it", "its pending invitation"]);
+    await expect(dialog.getByText("This cannot be undone.")).toBeVisible();
+
+    const box = dialog.getByLabel("Type “Family” to confirm");
+    const confirm = dialog.getByRole("button", { name: "Leave and delete" });
+    await expect(confirm).toBeDisabled();
+    for (const wrong of ["Famil", "family", "Family club"]) {
+      await box.fill(wrong);
+      await expect(confirm).toBeDisabled();
+    }
+    // Cancel keeps everything, and the box starts empty when the dialog opens again.
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
+    expect(api.groupChanges).toEqual([]);
+    await family.getByRole("button", { name: "Leave the group" }).click();
+    await expect(box).toHaveValue("");
+
+    // Spaces around the name do not count.
+    await box.fill("  Family ");
+    await confirm.click();
+    await expect(dialog).toBeHidden();
+    await expect(family).toHaveCount(0);
+    await expect(card(page, "Groups").getByText("Family was deleted.")).toBeFocused();
+    await expect(page).toHaveURL(/\/settings$/);
+    expect(api.groupChanges).toEqual([`DELETE /api/spaces/${FAMILY_SPACE}/members/user-1 {"confirm":"Family"}`]);
+    expect(api.session.spaces.map((space) => space.id)).not.toContain(FAMILY_SPACE);
+    expect(api.groups[FAMILY_SPACE]).toBeUndefined();
+    expect(api.chats[FAMILY_SPACE]).toBeUndefined();
+
+    // Gone from everywhere: the sidebar, and its apps from the dashboard.
+    await expect(page.getByRole("navigation", { name: "Main" }).getByRole("region", { name: "Family" })).toHaveCount(0);
+    await page.getByRole("link", { name: "Dashboard" }).click();
+    await expect(page.getByRole("heading", { name: "No widgets yet" })).toBeVisible();
+  });
+
+  test("the stand-in, as the server, refuses the only member's leave without the group's name and keeps the group", async ({ page, api }) => {
+    aloneInTheFamily(api);
+    await page.goto("/settings");
+    const leave = (data?: unknown) =>
+      page.evaluate(
+        async ([address, body]) => {
+          const answer = await fetch(address, body === undefined ? { method: "DELETE" } : { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+          return { status: answer.status, code: answer.status === 204 ? null : ((await answer.json()) as { error: { code: string } }).error.code };
+        },
+        [`/api/spaces/${FAMILY_SPACE}/members/user-1`, data] as const,
+      );
+    expect(await leave()).toEqual({ status: 409, code: "confirm_required" });
+    expect(await leave({ confirm: "family" })).toEqual({ status: 409, code: "confirm_required" });
+    expect(await leave({ confirm: "Family", extra: true })).toEqual({ status: 400, code: "invalid_request" });
+    expect(api.session.spaces.map((space) => space.id)).toContain(FAMILY_SPACE);
+    expect(api.groups[FAMILY_SPACE]).toBeDefined();
+  });
+
+  test("an open screen that missed a change: the delete dialog of a group someone joined deletes nothing, and the leave dialog of one everyone left asks for the name", async ({
+    page,
+    api,
+  }) => {
+    aloneInTheFamily(api);
+    await page.goto("/settings");
+    const family = card(page, "Family");
+    await expect(family).toBeVisible();
+    // Lin arrives as an owner; this screen still shows Sam alone.
+    const lin = { id: LIN.id, name: LIN.name, role: "owner" as const };
+    const withMembers = (members: Session["spaces"][number]["members"]) =>
+      api.setSession({ ...api.session, spaces: api.session.spaces.map((space) => (space.id === FAMILY_SPACE ? { ...space, members } : space)) });
+    const sam = api.session.spaces.find((space) => space.id === FAMILY_SPACE)!.members[0]!;
+    withMembers([sam, lin]);
+
+    await family.getByRole("button", { name: "Leave the group" }).click();
+    let dialog = page.getByRole("dialog", { name: "Leave and delete Family?" });
+    await dialog.getByLabel("Type “Family” to confirm").fill("Family");
+    await dialog.getByRole("button", { name: "Leave and delete" }).click();
+    // Refused; the session loaded again makes it the plain dialog, which says nothing was deleted.
+    dialog = page.getByRole("dialog", { name: "Leave Family?" });
+    await expect(dialog.getByText("Someone else is in this group now, so nothing was deleted.")).toBeVisible();
+    await expect(dialog.getByText("A group must keep an owner.", { exact: false })).toHaveCount(0);
+    await expect(card(page, "Groups").getByText("Family was deleted.")).toHaveCount(0);
+    expect(api.groups[FAMILY_SPACE]).toBeDefined();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+
+    // Lin leaves again; this screen still shows her.
+    withMembers([sam]);
+    await family.getByRole("button", { name: "Leave the group" }).click();
+    await page.getByRole("dialog", { name: "Leave Family?" }).getByRole("button", { name: "Leave" }).click();
+    dialog = page.getByRole("dialog", { name: "Leave and delete Family?" });
+    await expect(dialog.getByText("Nobody else is in this group any more, so leaving it now deletes it.")).toBeVisible();
+    await expect(dialog.getByLabel("Type “Family” to confirm")).toHaveValue("");
+    await expect(dialog.getByText("That is not the group's name.", { exact: false })).toHaveCount(0);
+    expect(api.groupChanges).toEqual([
+      `DELETE /api/spaces/${FAMILY_SPACE}/members/user-1 {"confirm":"Family"}`,
+      `DELETE /api/spaces/${FAMILY_SPACE}/members/user-1 null`,
+    ]);
+    expect(api.groups[FAMILY_SPACE]).toBeDefined();
+  });
+
   test.describe("on a phone, in Chinese", () => {
     test.use(PHONE);
 
@@ -199,6 +334,32 @@ test.describe("groups in Settings", () => {
       await add.getByLabel("电子邮件地址").fill("kim@example.com");
       await add.getByRole("button", { name: "添加", exact: true }).tap();
       await expect(add.getByText("这个人已经在群组里，或已经收到邀请。")).toBeVisible();
+    });
+
+    test("the only member leaves and deletes the group: the dialog fits, its controls are large enough to tap", async ({ page, api }) => {
+      aloneInTheFamily(api, { locale: "zh" });
+      api.groups[FAMILY_SPACE]!.invitations.push({ email: "noa@example.com", role: "member", canAddApps: false });
+      await page.goto("/settings");
+      const family = card(page, "Family");
+      await family.getByRole("button", { name: "退出群组" }).tap();
+      const dialog = page.getByRole("dialog", { name: "要退出并删除Family吗？" });
+      await expect(dialog.getByRole("listitem")).toHaveText(["它的 2 个应用及其全部数据", "你在其中的对话", "它的 2 个待接受的邀请"]);
+      await expect(dialog.getByText("此操作无法撤销。")).toBeVisible();
+      await dialog.evaluate((element) => Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished)));
+      const box = (await dialog.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(390);
+      await expectNothingPastTheEdge(page);
+
+      const confirm = dialog.getByRole("button", { name: "退出并删除" });
+      for (const control of [dialog.getByLabel("输入“Family”以确认"), dialog.getByRole("button", { name: "取消" }), confirm]) {
+        expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+      }
+      await dialog.getByLabel("输入“Family”以确认").fill("Family");
+      await confirm.tap();
+      await expect(family).toHaveCount(0);
+      await expect(card(page, "群组").getByText("Family已删除。")).toBeFocused();
+      await expectNothingPastTheEdge(page);
     });
   });
 });

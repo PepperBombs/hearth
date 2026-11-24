@@ -6,6 +6,8 @@
  * 3 and 4).
  *
  * - Only the owners of a group manage it. Anyone in it may leave it.
+ * - The only member of a group may leave it too: that deletes the group with
+ *   everything in it, once they have typed its name to confirm.
  * - A group keeps at least one owner. The database refuses to remove or
  *   demote the last one (the triggers on `space_members`), and that refusal
  *   is answered with 409 `conflict`.
@@ -26,6 +28,7 @@ import type {
   SpaceRole,
 } from "@hearth/shared";
 import Database from "better-sqlite3";
+import { deleteAllData } from "../apps/store";
 import type { Db } from "../db/database";
 import { newId } from "../db/ids";
 import { addInvitation, deleteInvitation, findUserByEmail, listSpacesForUser, membershipOf } from "../db/people";
@@ -201,12 +204,21 @@ export function changeMember(db: Db, request: SpaceRequest & { memberId: string;
  * (the database cascades); the rows they wrote stay, since they belong to
  * the group.
  *
+ * When the person leaving is the only one in the group, leaving deletes the
+ * group (`deleteGroup`), and `confirm` must be the group's name, trimmed.
+ * A name sent by someone leaving a group others are in (someone joined
+ * after they were told leaving would delete it) is refused, so that a
+ * deletion they confirmed never becomes a plain leave. Removing someone
+ * else does not read `confirm`.
+ *
  * Throws a Refusal: 404 when the person asking is not in the space, or the
  * person to remove is not; 403 when a plain member removes someone else;
  * 409 for a personal space, and when it would leave the group without an
- * owner.
+ * owner; 409 `confirm_required` when leaving would delete the group and
+ * `confirm` is not its name; 409 `conflict` when the person leaving sent a
+ * name but someone else is in the group.
  */
-export function removeMember(db: Db, request: SpaceRequest & { memberId: string }): void {
+export function removeMember(db: Db, request: SpaceRequest & { memberId: string; confirm?: string }): void {
   const { userId, spaceId, memberId } = request;
   db.transaction(() => {
     const caller = membershipOf(db, userId, spaceId);
@@ -218,11 +230,68 @@ export function removeMember(db: Db, request: SpaceRequest & { memberId: string 
     if (caller.kind === "personal") {
       throw new Refusal(409, "conflict", "A personal space is for one person: nobody joins or leaves it.");
     }
+    if (leaving && aloneIn(db, spaceId)) {
+      const { name } = db.prepare("SELECT name FROM spaces WHERE id = ?").get(spaceId) as { name: string };
+      const typed = request.confirm?.trim() ?? "";
+      if (typed === "" || typed !== name.trim()) {
+        throw new Refusal(
+          409,
+          "confirm_required",
+          "Nobody else is in this group, so leaving it deletes it with everything in it. Type its name to confirm.",
+        );
+      }
+      deleteGroup(db, spaceId);
+      return;
+    }
+    // A name sent means the person was shown that leaving deletes the group. Someone has joined
+    // since (an invitation taken up, perhaps as an owner): leaving would hand them the group
+    // instead, so nothing changes and the person sees who is in it now.
+    if (leaving && (request.confirm?.trim() ?? "") !== "") {
+      throw new Refusal(
+        409,
+        "conflict",
+        "Someone else is in this group now, so it was not deleted, and you are still in it.",
+      );
+    }
     if (!leaving && !membershipOf(db, memberId, spaceId)) throw notFound();
     keepingAnOwner(() =>
       db.prepare("DELETE FROM space_members WHERE space_id = ? AND user_id = ?").run(spaceId, memberId),
     );
   }).immediate();
+}
+
+/** Whether the space has one member: the person asking, who the caller has checked is in it. */
+function aloneIn(db: Db, spaceId: string): boolean {
+  const row = db.prepare("SELECT count(*) AS n FROM space_members WHERE space_id = ?").get(spaceId) as { n: number };
+  return row.n === 1;
+}
+
+/**
+ * Deletes a group and everything in it, for good: every app's data through
+ * the store, then the apps' entries, whose cascades take access, switches,
+ * pins, jobs' status and made apps with their versions; the pending
+ * invitations, with the right onto the server of an address whose last
+ * invitation that was (as `withdrawInvitation`); then the space, whose
+ * cascades take its members, and with them their conversations and the
+ * model's requests in them. The caller holds an immediate transaction and
+ * has checked that the person asking may do this. Never for a personal space.
+ */
+function deleteGroup(db: Db, spaceId: string): void {
+  const apps = db.prepare("SELECT app_id AS appId FROM space_apps WHERE space_id = ?").all(spaceId) as { appId: string }[];
+  // The data first: the database refuses to drop an entry while its app holds any.
+  for (const { appId } of apps) deleteAllData(db, spaceId, appId);
+  db.prepare("DELETE FROM space_apps WHERE space_id = ?").run(spaceId);
+
+  const invited = db.prepare("SELECT email FROM space_invitations WHERE space_id = ?").all(spaceId) as { email: string }[];
+  db.prepare("DELETE FROM space_invitations WHERE space_id = ?").run(spaceId);
+  const elsewhere = db.prepare("SELECT 1 FROM space_invitations WHERE email = ?");
+  for (const { email } of invited) {
+    if (!elsewhere.get(email)) deleteInvitation(db, email);
+  }
+
+  // With the space gone, the triggers that keep an owner let its members go.
+  const deleted = db.prepare("DELETE FROM spaces WHERE id = ? AND kind = 'group'").run(spaceId);
+  if (deleted.changes !== 1) throw new Error("A group to delete was not there, or was not a group.");
 }
 
 /**

@@ -61,6 +61,19 @@ Notes for whoever changes this part, people and agents alike. They are read when
   triggers' `SQLITE_CONSTRAINT_TRIGGER` into 409 `conflict`. Every owner of a
   group manages it (owner's decision 3); anyone may leave; a personal space
   answers 409 to every route about members.
+- The only member leaving a group deletes it (`deleteGroup` in
+  `src/groups/members.ts`), once `confirm` is its name, trimmed and case for
+  case, else 409 `confirm_required`. In the same transaction it deletes each
+  app's rows and settings through `store.ts`, the `space_apps` entries (no
+  cascade from `spaces`), the pending invitations as `withdrawInvitation`
+  does, then the `spaces` row, whose cascades take the members and their
+  conversations. A new table with `space_id` must be emptied there: the test
+  in `routes.test.ts` finds every such table from the schema. A name sent by
+  someone leaving a group others are in is 409 `conflict`, never a plain
+  leave: an invitee who arrived as an owner would otherwise be handed the
+  group the person meant to delete.
+- The session gives `pendingInvitations` for a group to its owners alone
+  (`listSpacesForUser` in `src/db/people.ts`).
 - Exceptions in `app_access` stay when a member becomes an owner, count for
   nothing while they are one, and apply again if they are made a member
   again, so stepping someone down never widens what they had. The access

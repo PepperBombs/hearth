@@ -129,3 +129,5 @@ Also in November 2026 the owner removed the mini-apps framework that items 2 to 
 Also in November 2026 the chat began to keep its history, as the owner agreed (`docs/platform.md`, "The conversation is kept"): each person's conversations with their model, per space and seen by them alone, many in a space, with what the model did, on the server (migration 8, `src/model/chats.ts`), which now builds what the model is given from them.
 
 Also in November 2026 the owner's decision 7 was finished, as the owner agreed (`docs/platform.md`, "Deleting"): the model asks before it deletes rows (`delete_rows`, migration 9, a card with Delete and Cancel, the answer told to the model with the next message), an owner deletes an app for good only on the Apps page after typing its name, and the Apps page lists a space's removed apps to bring back or delete.
+
+Also in November 2026, as the owner asked, the only person in a group may leave it: leaving then deletes the group with everything in it, once they have typed its name (`deleteGroup` in `src/groups/members.ts`, 409 `confirm_required` without it).
